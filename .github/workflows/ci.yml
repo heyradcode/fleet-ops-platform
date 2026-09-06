@@ -1,0 +1,120 @@
+# =============================================================================
+# CI - runs on every push and pull request
+# =============================================================================
+# Fast, cheap, and it never touches AWS. The deploy workflow is separate so
+# that a green CI run is a precondition for deploying, not the same thing.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same branch. Without this a busy PR queues up
+# five identical runs and you pay for all of them.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  app:
+    name: lint, typecheck, test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # `npm ci` not `npm install`: it installs exactly the lockfile and fails
+      # if package.json and the lock have drifted. Non-negotiable in CI.
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      # The demo IS an integration test: it exercises every connector, the
+      # state machine, both APIs, the geospatial layer and the agent loop.
+      # If it exits non-zero, something real is broken.
+      - name: End-to-end smoke run
+        run: npm start
+
+  # ---------------------------------------------------------------------------
+  terraform:
+    name: terraform validate
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [dev, test, stage, prod]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.5
+
+      - name: Format check
+        run: terraform fmt -check -recursive
+        working-directory: infra/terraform
+
+      # -backend=false means no AWS credentials are needed to validate syntax
+      # and variable wiring. Validation on a PR from a fork must never have
+      # access to your cloud account.
+      - name: Init (no backend)
+        run: terraform init -backend=false
+        working-directory: infra/terraform/envs/${{ matrix.env }}
+
+      - name: Validate
+        run: terraform validate
+        working-directory: infra/terraform/envs/${{ matrix.env }}
+
+  # ---------------------------------------------------------------------------
+  security:
+    name: security scan
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      security-events: write # to upload SARIF to the Security tab
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Secret scanning needs history: a credential deleted in the latest
+          # commit is still in the repo, and still compromised.
+          fetch-depth: 0
+
+      # Static analysis of the Terraform: public S3 buckets, unencrypted
+      # volumes, wildcard IAM, missing log retention.
+      - name: Terraform static analysis
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: infra/terraform
+          format: sarif
+          output: trivy.sarif
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+
+      - name: Upload results
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy.sarif
+
+      - name: Dependency audit
+        run: npm audit --audit-level=high

@@ -1,0 +1,28 @@
+{
+  "name": "netpulse-agentic-saas-demo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A readable, runnable reference implementation of every technology in the agentic-SaaS backend JD.",
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "scripts": {
+    "start": "node src/demo.ts",
+    "demo:auth": "node src/demo.ts --only=auth",
+    "demo:ingest": "node src/demo.ts --only=ingest",
+    "demo:data": "node src/demo.ts --only=data",
+    "demo:events": "node src/demo.ts --only=events",
+    "demo:graphql": "node src/demo.ts --only=graphql",
+    "demo:rest": "node src/demo.ts --only=rest",
+    "demo:geo": "node src/demo.ts --only=geo",
+    "demo:ai": "node src/demo.ts --only=ai",
+    "test": "node --test",
+    "test:watch": "node --test --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.1",
+    "typescript": "^5.6.0"
+  }
+}

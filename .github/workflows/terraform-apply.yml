@@ -1,0 +1,158 @@
+# =============================================================================
+# Reusable: plan + apply one environment
+# =============================================================================
+# Called by deploy.yml once per environment. Keeping it reusable means the
+# promotion path is provably identical everywhere - prod runs the same code as
+# dev, so "it worked in stage" actually means something.
+
+name: terraform-apply
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+      aws-account:
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  apply:
+    name: ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+
+    # Binds to the GitHub Environment of the same name, which is where
+    # protection rules (required reviewers, wait timers, allowed branches) and
+    # environment-scoped secrets live.
+    environment:
+      name: ${{ inputs.environment }}
+
+    defaults:
+      run:
+        working-directory: infra/terraform/envs/${{ inputs.environment }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: lambda-bundle
+          path: dist/
+
+      # -----------------------------------------------------------------------
+      # OIDC: no stored AWS credentials
+      # -----------------------------------------------------------------------
+      # The IAM role's trust policy pins the audience AND the subject, e.g.
+      #   "token.actions.githubusercontent.com:sub":
+      #       "repo:acme/netpulse:environment:prod"
+      # A wildcard subject like repo:acme/*:* would let ANY branch of ANY repo
+      # in the org assume the prod deploy role. Pin it to the environment.
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ inputs.aws-account }}:role/netpulse-deploy
+          aws-region: us-east-1
+          role-session-name: gha-${{ inputs.environment }}-${{ github.run_id }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.5
+
+      # -----------------------------------------------------------------------
+      # Secrets come from Secrets Manager, not from GitHub secrets
+      # -----------------------------------------------------------------------
+      # One source of truth, rotatable without touching GitHub, and auditable
+      # in CloudTrail. `::add-mask::` tells the runner to redact the value from
+      # logs before it can be echoed by anything downstream.
+      - name: Load deploy-time secrets
+        run: |
+          secret=$(aws secretsmanager get-secret-value \
+            --secret-id netpulse/${{ inputs.environment }}/idp \
+            --query SecretString --output text)
+
+          for key in google_client_id google_client_secret; do
+            value=$(echo "$secret" | jq -r ".$key")
+            echo "::add-mask::$value"
+            echo "TF_VAR_$key=$value" >> "$GITHUB_ENV"
+          done
+
+      - run: terraform init
+
+      # -detailed-exitcode: 0 = no changes, 1 = error, 2 = changes present.
+      # This is what lets us skip a pointless apply and, in prod, notice that a
+      # "no-op" deploy is unexpectedly planning to replace the database.
+      - name: Plan
+        id: plan
+        run: |
+          terraform plan -input=false -out=tfplan -detailed-exitcode
+          echo "exitcode=$?" >> "$GITHUB_OUTPUT"
+        continue-on-error: true
+
+      - name: Show plan summary
+        run: terraform show -no-color tfplan | tail -60
+
+      # Refuse to destroy or replace anything in prod without a human having
+      # looked at it. The GitHub environment gate covers approval; this covers
+      # "the reviewer approved without reading the plan".
+      - name: Guard against destructive prod changes
+        if: inputs.environment == 'prod'
+        run: |
+          destroys=$(terraform show -json tfplan \
+            | jq '[.resource_changes[]
+                   | select(.change.actions | index("delete"))] | length')
+
+          if [ "$destroys" -gt 0 ]; then
+            echo "::error::Plan destroys or replaces $destroys resource(s) in prod."
+            terraform show -json tfplan \
+              | jq -r '.resource_changes[]
+                       | select(.change.actions | index("delete"))
+                       | .address'
+            exit 1
+          fi
+
+      - name: Apply
+        if: steps.plan.outputs.exitcode == '2'
+        run: terraform apply -input=false -auto-approve tfplan
+
+      # -----------------------------------------------------------------------
+      # Database migrations run AFTER infrastructure, as a separate step
+      # -----------------------------------------------------------------------
+      # `CREATE EXTENSION postgis` is SQL, not a Terraform resource. Schema
+      # changes belong in a migration tool so they can be reviewed, ordered and
+      # rolled back independently of the infrastructure that hosts them.
+      - name: Apply database migrations
+        run: |
+          cluster_arn=$(terraform output -raw aurora_cluster_arn 2>/dev/null || echo "")
+          if [ -z "$cluster_arn" ]; then
+            echo "no Aurora cluster output - skipping migrations"
+            exit 0
+          fi
+
+          aws rds-data execute-statement \
+            --resource-arn "$cluster_arn" \
+            --secret-arn "$(terraform output -raw aurora_secret_arn)" \
+            --database netpulse \
+            --sql "$(cat ../../../../src/data/schema.sql)"
+
+      # Sync the runbook corpus, then tell Bedrock to re-index it. Uploading
+      # without starting an ingestion job means the knowledge base silently
+      # keeps serving the previous version - a genuinely confusing bug.
+      - name: Sync knowledge base
+        run: |
+          aws s3 sync ../../../../src/data/runbooks \
+            "s3://$(terraform output -raw runbooks_bucket)/runbooks/" --delete
+
+          aws bedrock-agent start-ingestion-job \
+            --knowledge-base-id "$(terraform output -raw knowledge_base_id)" \
+            --data-source-id "$(terraform output -raw knowledge_base_data_source_id)"
+        continue-on-error: true
+
+      - name: Smoke test
+        run: |
+          endpoint=$(terraform output -raw rest_endpoint)
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$endpoint/health")
+          test "$code" = "200" || { echo "health check returned $code"; exit 1; }

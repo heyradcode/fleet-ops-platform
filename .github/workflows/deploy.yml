@@ -1,0 +1,143 @@
+# =============================================================================
+# Deploy - dev -> test -> stage -> prod
+# =============================================================================
+# The two things that make this a grown-up pipeline:
+#
+#   1. NO LONG-LIVED AWS KEYS. GitHub's OIDC provider issues a short-lived
+#      token; AWS trusts it via an IAM role whose trust policy pins the repo
+#      AND the branch/environment. There is no secret to leak or rotate.
+#
+#   2. PROMOTION, NOT REBUILD. The artefact is built ONCE and the same bytes
+#      move through every environment. If you rebuild per environment you are
+#      testing one artefact and shipping a different one.
+
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to deploy
+        type: choice
+        options: [dev, test, stage, prod]
+        default: dev
+
+# Never run two deploys to the same environment at once. cancel-in-progress is
+# deliberately FALSE here - cancelling a half-finished `terraform apply` leaves
+# state locked and reality diverged from it.
+concurrency:
+  group: deploy-${{ github.event.inputs.environment || 'pipeline' }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write # required to request the OIDC token
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  build:
+    name: build artefact
+    runs-on: ubuntu-latest
+
+    outputs:
+      artefact-sha: ${{ steps.hash.outputs.sha }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # esbuild bundles + tree-shakes each handler. Bundle size is the single
+      # biggest lever on Lambda cold-start time, so this is not cosmetic.
+      # --external:@aws-sdk/* because the SDK v3 is already in the runtime;
+      # bundling it adds megabytes and gains nothing.
+      - name: Bundle handlers
+        run: |
+          npx esbuild src/api/*.ts src/auth/*.ts src/pipeline/*.ts \
+            --bundle --platform=node --target=node22 --format=esm \
+            --external:@aws-sdk/* --minify --sourcemap \
+            --outdir=dist
+
+      - name: Hash the artefact
+        id: hash
+        run: echo "sha=$(tar -cf - dist | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lambda-bundle
+          path: dist/
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # One reusable job shape, four environments. `environment:` is what wires up
+  # GitHub's protection rules - required reviewers, wait timers, branch limits.
+  # ---------------------------------------------------------------------------
+  dev:
+    needs: build
+    uses: ./.github/workflows/terraform-apply.yml
+    with:
+      environment: dev
+      aws-account: '111122223333'
+    secrets: inherit
+
+  test:
+    needs: dev
+    uses: ./.github/workflows/terraform-apply.yml
+    with:
+      environment: test
+      aws-account: '222233334444'
+    secrets: inherit
+
+  integration-tests:
+    name: integration tests against test
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::222233334444:role/netpulse-ci
+          aws-region: us-east-1
+
+      # Hit the real deployed API with a real Cognito token. This is the step
+      # that catches IAM permission mistakes, which no amount of local testing
+      # or `terraform validate` ever will.
+      #
+      # NOT IMPLEMENTED in this demo - there is nothing deployed to test
+      # against. In a real repo this runs a suite that signs in against the
+      # test user pool and exercises the GraphQL and REST endpoints.
+      - name: Run integration suite
+        run: |
+          echo "::warning::integration suite not implemented in this reference repo"
+          echo "would sign in to $COGNITO_POOL and exercise $API_ENDPOINT"
+        env:
+          API_ENDPOINT: https://test-api.netpulse.example.com
+          COGNITO_POOL: netpulse-test-users
+
+  stage:
+    needs: integration-tests
+    uses: ./.github/workflows/terraform-apply.yml
+    with:
+      environment: stage
+      aws-account: '333344445555'
+    secrets: inherit
+
+  prod:
+    needs: stage
+    # The `prod` GitHub environment carries a required-reviewer rule, so this
+    # job pauses here until a human approves it. Manual approval is a GitHub
+    # setting, not a workflow step - do not try to fake it with an `if:`.
+    uses: ./.github/workflows/terraform-apply.yml
+    with:
+      environment: prod
+      aws-account: '444455556666'
+    secrets: inherit

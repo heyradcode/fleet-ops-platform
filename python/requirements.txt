@@ -1,0 +1,18 @@
+# The Python Lambdas' dependencies.
+#
+# boto3 IS already present in the Lambda runtime, so you normally do NOT bundle
+# it - but you should still pin it locally so your tests run against the same
+# version, and so you notice when the runtime's version moves under you.
+boto3==1.35.49
+botocore==1.35.49
+
+# Only needed if you use the Anthropic SDK instead of raw boto3 InvokeModel.
+# anthropic[bedrock]==0.40.0
+
+# Only needed on the psycopg + RDS Proxy path (see postgis_lambda.py); the
+# Aurora Data API needs no database driver at all.
+# psycopg[binary]==3.2.3
+
+# Dev only
+pytest==8.3.3
+moto[bedrock,dynamodb]==5.0.18

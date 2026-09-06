@@ -1,0 +1,222 @@
+# =============================================================================
+# NetPulse GraphQL API (AWS AppSync)
+# =============================================================================
+# AppSync-specific things to notice, because they are what separates "I have
+# used GraphQL" from "I have built on AppSync":
+#
+#   @aws_cognito_user_pools / @aws_iam / @aws_api_key
+#       Authorisation is declared IN THE SCHEMA, per type and per field. You can
+#       run several auth modes at once - Cognito for users, IAM for the ingest
+#       Lambda - and AppSync enforces it before a resolver runs.
+#
+#   @aws_auth(cognito_groups: [...])
+#       Field-level RBAC with no resolver code at all.
+#
+#   @aws_subscription(mutations: [...])
+#       Subscriptions are DERIVED from mutations. You do not publish manually:
+#       when the named mutation succeeds, AppSync pushes the result over
+#       WebSocket to every client whose filter matches. This is the single
+#       biggest reason to choose AppSync over a hand-rolled GraphQL server.
+# =============================================================================
+
+schema {
+  query: Query
+  mutation: Mutation
+  subscription: Subscription
+}
+
+# -----------------------------------------------------------------------------
+# Enums - mirror src/platform/types.ts exactly.
+# -----------------------------------------------------------------------------
+
+enum Severity { ok info warning critical }
+enum ProviderDomain { network contact_center observability }
+enum IncidentStatus { open acknowledged resolved }
+
+enum SignalKind {
+  device_health
+  wan_latency
+  packet_loss
+  queue_wait
+  abandon_rate
+  agent_occupancy
+  error_rate
+  log_volume
+}
+
+# -----------------------------------------------------------------------------
+# Types
+# -----------------------------------------------------------------------------
+
+type Location {
+  lon: Float!
+  lat: Float!
+  region: String!
+}
+
+type Site {
+  siteId: ID!
+  name: String!
+  region: String!
+  lon: Float!
+  lat: Float!
+  headcount: Int!
+
+  # A nested resolver. Fetched ONLY if the client asks for it - that is the
+  # whole point of GraphQL over REST for a dashboard with many widgets.
+  # Watch out for N+1: this runs once per Site in the parent list, so back it
+  # with a batch resolver (AppSync BatchInvoke, max 2000 items) rather than a
+  # per-item Lambda call.
+  signals(limit: Int = 20, severity: Severity): [Signal!]!
+}
+
+type Signal {
+  signalId: ID!
+  provider: String!
+  domain: ProviderDomain!
+  kind: SignalKind!
+  siteId: ID!
+  sourceRef: String!
+  value: Float!
+  unit: String!
+  severity: Severity!
+  observedAt: AWSDateTime!
+  location: Location
+  # AppSync scalar for arbitrary JSON. Convenient, but it is an escape hatch:
+  # anything in here is invisible to the client's type system.
+  attributes: AWSJSON
+}
+
+type Incident {
+  incidentId: ID!
+  title: String!
+  severity: Severity!
+  status: IncidentStatus!
+  siteIds: [ID!]!
+  openedAt: AWSDateTime!
+  aiSummary: String
+  aiCitations: [Citation!]!
+  sites: [Site!]!
+  signals: [Signal!]!
+}
+
+type Citation {
+  source: String!
+  snippet: String!
+}
+
+# Cursor-based pagination. NEVER offset-based on DynamoDB: the underlying
+# LastEvaluatedKey is a key, not a row number, and offsets cannot express it.
+type SignalConnection {
+  items: [Signal!]!
+  nextToken: String
+}
+
+# GeoJSON crosses the wire as AWSJSON. The alternative - modelling GeoJSON in
+# SDL - produces a deep union type that no client wants to write fragments for.
+type GeoLayer {
+  featureCollection: AWSJSON!
+  bbox: [Float!]!
+}
+
+type AgentAnswer {
+  answer: String!
+  citations: [Citation!]!
+  # Exposing the trace is a product decision as much as a debugging one: users
+  # trust an agent far more when they can see which tools it called.
+  trace: [AgentStep!]!
+  stoppedBecause: String!
+}
+
+type AgentStep {
+  step: Int!
+  kind: String!
+  detail: String!
+  ms: Int!
+}
+
+# -----------------------------------------------------------------------------
+# Query
+# -----------------------------------------------------------------------------
+
+type Query @aws_cognito_user_pools {
+  sites: [Site!]!
+  site(siteId: ID!): Site
+
+  # nextToken is opaque - it is the base64 of DynamoDB's LastEvaluatedKey.
+  signals(limit: Int = 25, severity: Severity, nextToken: String): SignalConnection!
+
+  incidents(status: IncidentStatus = open, limit: Int = 25): [Incident!]!
+  incident(incidentId: ID!): Incident
+
+  # Spatial query -> Aurora PostGIS ST_DWithin.
+  sitesNear(lon: Float!, lat: Float!, radiusKm: Float!): [Site!]!
+
+  # The map payload: GeoJSON FeatureCollection + bbox.
+  mapLayer: GeoLayer!
+
+  # Bedrock RAG over the runbook knowledge base. Read-only, so viewers may use it.
+  askRunbooks(question: String!): AgentAnswer!
+}
+
+# -----------------------------------------------------------------------------
+# Mutation
+# -----------------------------------------------------------------------------
+
+type Mutation @aws_cognito_user_pools {
+  # Field-level RBAC, enforced by AppSync before any resolver runs.
+  openIncident(input: OpenIncidentInput!): Incident!
+    @aws_auth(cognito_groups: ["admin", "operator"])
+
+  acknowledgeIncident(incidentId: ID!): Incident!
+    @aws_auth(cognito_groups: ["admin", "operator"])
+
+  # Invokes the AgentCore loop. Long-running, so in production this returns
+  # immediately with a jobId and the answer arrives on a subscription.
+  askAgent(question: String!): AgentAnswer!
+
+  # Called by the ingest Lambda, authenticated with IAM rather than a user
+  # pool - there is no human in that flow. Multiple auth modes on one API is
+  # an AppSync strength worth calling out.
+  publishSignal(input: PublishSignalInput!): Signal! @aws_iam
+}
+
+input OpenIncidentInput {
+  title: String!
+  severity: Severity!
+  siteIds: [ID!]!
+}
+
+input PublishSignalInput {
+  signalId: ID!
+  provider: String!
+  siteId: ID!
+  kind: SignalKind!
+  value: Float!
+  unit: String!
+  severity: Severity!
+  observedAt: AWSDateTime!
+}
+
+# -----------------------------------------------------------------------------
+# Subscription - real-time, over WebSocket, with server-side filtering
+# -----------------------------------------------------------------------------
+
+type Subscription @aws_cognito_user_pools {
+  # Fires whenever openIncident succeeds. The optional argument becomes a
+  # server-side FILTER: a client subscribing with severity: critical never
+  # receives warning events. Filtering happens in AppSync, so you are not
+  # paying to push messages the client will discard.
+  onIncidentOpened(severity: Severity): Incident
+    @aws_subscription(mutations: ["openIncident"])
+
+  onIncidentAcknowledged(incidentId: ID): Incident
+    @aws_subscription(mutations: ["acknowledgeIncident"])
+
+  # The live map feed. Filter by site so a client watching Dallas is not woken
+  # up by Chicago.
+  onSignalPublished(siteId: ID, severity: Severity): Signal
+    @aws_subscription(mutations: ["publishSignal"])
+    @aws_iam
+    @aws_cognito_user_pools
+}

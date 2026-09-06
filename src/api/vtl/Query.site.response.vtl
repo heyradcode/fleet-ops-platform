@@ -1,0 +1,19 @@
+## ===========================================================================
+## VTL response mapping template - Query.site
+## ===========================================================================
+##
+## Always surface errors. A silent $ctx.result on error returns null and the
+## client cannot tell "not found" from "your query was rejected".
+#if($ctx.error)
+  $util.error($ctx.error.message, $ctx.error.type)
+#end
+
+## Defence in depth: even though the key was built from the token, verify the
+## item we got back belongs to this tenant before returning it. Cheap, and it
+## catches a whole class of key-construction bugs.
+#set($tenantId = $ctx.identity.claims.get("custom:tenantId"))
+#if($ctx.result && $ctx.result.tenantId != $tenantId)
+  $util.unauthorized()
+#end
+
+$util.toJson($ctx.result)

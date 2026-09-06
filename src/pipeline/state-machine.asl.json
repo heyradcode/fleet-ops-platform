@@ -1,0 +1,218 @@
+{
+  "Comment": "NetPulse ingest pipeline. The deployable Amazon States Language definition matching src/pipeline/ingest-workflow.ts. Deployed by infra/terraform/modules/step-functions.",
+  "StartAt": "PrepareConnectorList",
+  "TimeoutSeconds": 900,
+  "States": {
+    "PrepareConnectorList": {
+      "Type": "Pass",
+      "Comment": "Static list of providers to poll. Kept in the definition so adding a vendor is a Terraform change with an audit trail, not a code deploy.",
+      "Result": {
+        "providers": [
+          "cisco-meraki",
+          "juniper-mist",
+          "aruba-central",
+          "genesys-cloud",
+          "five9",
+          "amazon-connect",
+          "thousandeyes",
+          "splunk"
+        ]
+      },
+      "ResultPath": "$.config",
+      "Next": "CollectFromProviders"
+    },
+
+    "CollectFromProviders": {
+      "Type": "Map",
+      "Comment": "Fan out one Lambda per vendor. MaxConcurrency 4 keeps us inside every vendor rate limit. ToleratedFailurePercentage lets the run succeed on partial data - a dead vendor must not block the other seven.",
+      "ItemsPath": "$.config.providers",
+      "MaxConcurrency": 4,
+      "ToleratedFailurePercentage": 40,
+      "ItemSelector": {
+        "provider.$": "$$.Map.Item.Value",
+        "tenantId.$": "$.tenantId",
+        "since.$": "$.since"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": { "Mode": "INLINE" },
+        "StartAt": "FetchAndArchive",
+        "States": {
+          "FetchAndArchive": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName": "${collect_function_arn}",
+              "Payload.$": "$"
+            },
+            "Retry": [
+              {
+                "Comment": "Vendor throttling and 5xx. Full jitter is applied inside the Lambda as well - Step Functions backoff alone still synchronises retries across parallel branches.",
+                "ErrorEquals": ["ProviderThrottled", "ProviderUnavailable", "States.TaskFailed"],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 4,
+                "BackoffRate": 2,
+                "JitterStrategy": "FULL"
+              },
+              {
+                "ErrorEquals": ["Lambda.ServiceException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+                "IntervalSeconds": 1,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              {
+                "Comment": "Never fail the whole run for one vendor.",
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.error",
+                "Next": "MarkProviderFailed"
+              }
+            ],
+            "OutputPath": "$.Payload",
+            "End": true
+          },
+          "MarkProviderFailed": {
+            "Type": "Pass",
+            "Parameters": {
+              "failed.$": "$.provider",
+              "reason.$": "$.error.Cause"
+            },
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.collected",
+      "Next": "NormaliseToSignals"
+    },
+
+    "NormaliseToSignals": {
+      "Type": "Task",
+      "Comment": "Vendor payloads -> canonical Signal[]. Pure function; safe to retry.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${normalise_function_arn}",
+        "Payload.$": "$"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultSelector": { "signals.$": "$.Payload.signals" },
+      "ResultPath": "$.normalised",
+      "Next": "GeoEnrich"
+    },
+
+    "GeoEnrich": {
+      "Type": "Task",
+      "Comment": "Attach coordinates from Aurora PostGIS. Best-effort: a signal without a location is still a valid signal, so failure continues rather than aborts.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${enrich_function_arn}",
+        "Payload.$": "$.normalised"
+      },
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.enrichError",
+          "Next": "AnySignals"
+        }
+      ],
+      "ResultSelector": { "signals.$": "$.Payload.signals" },
+      "ResultPath": "$.enriched",
+      "Next": "AnySignals"
+    },
+
+    "AnySignals": {
+      "Type": "Choice",
+      "Comment": "A quiet polling window is a success, not a failure.",
+      "Choices": [
+        {
+          "Variable": "$.enriched.signals[0]",
+          "IsPresent": true,
+          "Next": "DetectIncidents"
+        }
+      ],
+      "Default": "NothingToDo"
+    },
+
+    "NothingToDo": {
+      "Type": "Succeed"
+    },
+
+    "DetectIncidents": {
+      "Type": "Task",
+      "Comment": "Deterministic correlation rules. No LLM here on purpose - detection must be explainable and testable.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${detect_function_arn}",
+        "Payload.$": "$.enriched"
+      },
+      "ResultSelector": {
+        "signals.$": "$.Payload.signals",
+        "incidents.$": "$.Payload.incidents"
+      },
+      "ResultPath": "$.detected",
+      "Next": "PersistAndPublish"
+    },
+
+    "PersistAndPublish": {
+      "Type": "Task",
+      "Comment": "BatchWriteItem to DynamoDB, then PutEvents to EventBridge. Write before publish, so a subscriber that immediately queries cannot 404.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${publish_function_arn}",
+        "Payload.$": "$.detected"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "DynamoDB.ProvisionedThroughputExceededException",
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 4,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "NotifyFailure"
+        }
+      ],
+      "End": true
+    },
+
+    "NotifyFailure": {
+      "Type": "Task",
+      "Comment": "Terminal failure path. Publishes to EventBridge so alerting is a rule, not hard-wired here.",
+      "Resource": "arn:aws:states:::events:putEvents",
+      "Parameters": {
+        "Entries": [
+          {
+            "EventBusName": "${event_bus_name}",
+            "Source": "netpulse.ingest",
+            "DetailType": "IngestFailed",
+            "Detail": {
+              "executionArn.$": "$$.Execution.Id",
+              "error.$": "$.error.Cause"
+            }
+          }
+        ]
+      },
+      "Next": "FailExecution"
+    },
+
+    "FailExecution": {
+      "Type": "Fail",
+      "Error": "IngestPipelineFailed",
+      "Cause": "See the IngestFailed event and the execution history for detail."
+    }
+  }
+}

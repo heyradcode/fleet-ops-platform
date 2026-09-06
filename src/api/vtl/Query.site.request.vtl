@@ -1,0 +1,31 @@
+## ===========================================================================
+## VTL request mapping template - Query.site
+## DynamoDB data source. No Lambda: AppSync talks to DynamoDB directly.
+## ===========================================================================
+##
+## VTL (Velocity) is the older AppSync resolver language. New work should use
+## the APPSYNC_JS runtime instead (see Query.site.js next to this file), but
+## you WILL meet VTL in any AppSync codebase more than a couple of years old,
+## so being able to read it matters.
+##
+## Note where the tenant comes from: $ctx.identity.claims, i.e. the VERIFIED
+## Cognito token. Never from $ctx.args - a client can put anything in args.
+##
+#set($tenantId = $ctx.identity.claims.get("custom:tenantId"))
+
+#if($util.isNullOrEmpty($tenantId))
+  $util.unauthorized()
+#end
+
+{
+  "version": "2018-05-29",
+  "operation": "GetItem",
+  "key": {
+    ## $util.dynamodb.toDynamoDBJson handles the {"S": "..."} wrapping for you.
+    "PK": $util.dynamodb.toDynamoDBJson("TENANT#${tenantId}#SITE"),
+    "SK": $util.dynamodb.toDynamoDBJson("SITE#${ctx.args.siteId}")
+  },
+  ## Strongly consistent reads cost twice as much. Default to false unless you
+  ## genuinely cannot tolerate a read-your-own-write lag.
+  "consistentRead": false
+}
