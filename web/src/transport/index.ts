@@ -22,6 +22,7 @@
  * because there is nothing behind it to reach for.
  */
 import type { Driver, Exception, Incident, Territory } from '../../../src/platform/types.ts';
+import type { AgentResult } from '../../../src/ai/agent-core.ts';
 
 export type BoardSnapshot = {
   drivers: Driver[];
@@ -47,6 +48,20 @@ export type Transport = {
     districtId: string | undefined,
     onException: (exception: Exception) => void,
   ): () => void;
+
+  /**
+   * Ask the assistant about a driver.
+   *
+   * Returns the full trace, not just the answer, and that is a product
+   * decision as much as a debugging one: a dispatcher trusts a recommendation
+   * far more when they can see which tools produced it and which runbook it
+   * came from. An answer with no visible provenance is a thing to be sceptical
+   * of, and it should be.
+   */
+  askAgent(question: string, districtId?: string): Promise<AgentResult>;
 };
+
+export type { AgentResult };
+export type { AgentTrace } from '../../../src/ai/agent-core.ts';
 
 export type { Driver, Exception, Incident, Territory };

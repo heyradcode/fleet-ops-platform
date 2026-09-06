@@ -23,6 +23,11 @@ import { SCENARIOS } from '../../../src/data/scenarios.ts';
 import {
   normaliseAll, resolveTerritory, deriveRouteAdherence, evaluate, detectIncidents,
 } from '../../../src/pipeline/steps.ts';
+import { runAgent } from '../../../src/ai/agent-core.ts';
+import { TOOL_SPECS } from '../../../src/ai/tools.ts';
+import { knowledgeBase } from '../../../src/ai/knowledge-base.ts';
+import { putTelemetry, putDrivers } from '../../../src/platform/repository.ts';
+import { loadRunbooksFromBundle } from './runbooks.browser.ts';
 
 /**
  * Seed the platform primitives before anything reads them.
@@ -36,6 +41,11 @@ function seed(): void {
   const rng = seededRandom();
   setRandom(rng);
   setUuid(seededUuid(rng));
+  // The browser half of the runbook registry. Without it the knowledge base
+  // throws on first retrieval - deliberately loudly, because a silently empty
+  // knowledge base makes the agent answer "no runbook matched" to everything,
+  // which looks like a retrieval bug and is actually a wiring one.
+  loadRunbooksFromBundle();
 }
 
 let seeded = false;
@@ -91,6 +101,31 @@ function runScenarios(principal: Principal) {
   return { exceptions, incidents, heldBack };
 }
 
+/**
+ * The agent needs the same data the board shows, in the repository where its
+ * tools look for it. Populating it once on demand keeps the board's first
+ * paint fast - nobody waits for an embedding index to build before seeing
+ * where their trucks are.
+ */
+let agentReady: Promise<void> | undefined;
+
+function prepareAgent(): Promise<void> {
+  agentReady ??= (async () => {
+    const principal = analyst();
+    putDrivers(principal, allDrivers(principal));
+
+    for (const scenario of SCENARIOS) {
+      const collected = scenario.build(principal.tenantId).map((raw) => ({ raw }));
+      putTelemetry(principal, deriveRouteAdherence(
+        resolveTerritory(principal, normaliseAll(principal, collected)),
+      ));
+    }
+
+    await knowledgeBase.ingestRunbooks(principal.tenantId);
+  })();
+  return agentReady;
+}
+
 export const inProcessTransport: Transport = {
   async loadBoard(districtId) {
     if (!seeded) { seed(); seeded = true; }
@@ -109,6 +144,20 @@ export const inProcessTransport: Transport = {
       incidents: incidents.filter(inScope),
       heldBack: heldBack.filter(inScope),
     } satisfies BoardSnapshot;
+  },
+
+  async askAgent(question, districtId) {
+    if (!seeded) { seed(); seeded = true; }
+    await prepareAgent();
+
+    // The agent runs with the CALLER's principal, never a privileged one. A
+    // dispatcher scoped to Dallas gets an assistant scoped to Dallas, and the
+    // tools enforce that themselves rather than trusting the prompt.
+    return runAgent({
+      question,
+      principal: principalFor(districtId),
+      tools: TOOL_SPECS,
+    });
   },
 
   subscribeExceptions(districtId, onException) {

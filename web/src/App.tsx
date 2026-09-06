@@ -7,6 +7,7 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { DispatchMap } from './DispatchMap.tsx';
+import { DriverPanel } from './DriverPanel.tsx';
 import { inProcessTransport } from './transport/in-process.ts';
 import type { BoardSnapshot, Driver, Exception } from './transport/index.ts';
 
@@ -66,6 +67,9 @@ export function App() {
   const criticalCount = board?.incidents.filter((i) => i.severity === 'critical').length ?? 0;
   const heldCount = board?.heldBack.length ?? 0;
 
+  const selectedDriver = drivers.find((d) => d.driverId === selected);
+  const selectedExceptions = (board?.exceptions ?? []).filter((e) => e.driverId === selected);
+
   return (
     <div className="shell">
       <header className="statusbar">
@@ -112,7 +116,7 @@ export function App() {
         </div>
       </header>
 
-      <div className="body">
+      <div className={`body ${selectedDriver ? 'has-panel' : ''}`}>
         <aside className="roster">
           <div className="pane-head">
             <span>Roster</span>
@@ -188,6 +192,16 @@ export function App() {
             </div>
           </section>
         </main>
+
+        {selectedDriver && (
+          <DriverPanel
+            key={selectedDriver.driverId}
+            driver={selectedDriver}
+            exceptions={selectedExceptions}
+            districtId={districtId}
+            onClose={() => setSelected(undefined)}
+          />
+        )}
       </div>
     </div>
   );
