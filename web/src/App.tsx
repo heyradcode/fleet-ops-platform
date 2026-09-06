@@ -12,7 +12,7 @@
  * channel the moment the rules raise them. That asymmetry is the architecture,
  * and the board shows it rather than describing it.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { DispatchMap, type BasemapMode } from './DispatchMap.tsx';
 import { DriverPanel } from './DriverPanel.tsx';
 import { inProcessTransport } from './transport/in-process.ts';
@@ -329,9 +329,17 @@ function DriverRow({ driver, flagged, selected, onSelect }: {
   onSelect(): void;
 }) {
   const level = hosLevel(driver.hosRemainingMinutes);
+  const row = useRef<HTMLButtonElement>(null);
+
+  // The other direction: a pin clicked on the map selects a row that may be
+  // sixty entries down. Bring it into view, without yanking the list if it is
+  // already visible.
+  useEffect(() => {
+    if (selected) row.current?.scrollIntoView({ block: 'nearest' });
+  }, [selected]);
 
   return (
-    <button className="driver" aria-selected={selected} onClick={onSelect}>
+    <button ref={row} className="driver" aria-selected={selected} onClick={onSelect}>
       <span className={`status-bar status-${driver.status}`} aria-hidden="true" />
 
       <span className="driver-who">

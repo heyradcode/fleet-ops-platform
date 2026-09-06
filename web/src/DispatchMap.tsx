@@ -32,6 +32,15 @@
  *      black square - which is what "the map doesn't work" looked like. The
  *      fit now runs when readiness flips, and only when the SET of drivers
  *      changes, never on a position tick (that would fight the user's pan).
+ *
+ * SELECTION MOVES THE CAMERA, AND THEN FOLLOWS. Picking a driver eases the
+ * map to them at street zoom - at district zoom a selected pin is a
+ * five-pixel dot among sixteen, and "where is she" is the question the click
+ * was asking. At that zoom a moving truck leaves the screen in seconds, so
+ * the camera then tracks it tick by tick, the way a dispatch console tracks
+ * a unit. The first pan, scroll or zoom BY THE DISPATCHER ends the follow -
+ * the map is theirs again - and re-selecting re-arms it. Programmatic moves
+ * carry no originalEvent, which is how the two are told apart.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import maplibregl, { type Map as MapLibreMap, type StyleSpecification } from 'maplibre-gl';
@@ -39,6 +48,9 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 
 import type { Driver } from './transport/index.ts';
 import { CORRIDORS } from '../../src/data/polylines.ts';
+
+/** Street zoom: a truck, its corridor and the cross-streets around it. */
+const FOCUS_ZOOM = 12;
 
 /** No key, no registration, no quota. Vector tiles under the ODbL. */
 const BASEMAP_URL = 'https://tiles.openfreemap.org/styles/dark';
@@ -76,6 +88,9 @@ export function DispatchMap({ drivers, flagged, selectedId, onSelect, onBasemap,
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<MapLibreMap | null>(null);
   const [ready, setReady] = useState(false);
+  // Whether the camera is tracking the selected driver. A ref, not state:
+  // nothing renders differently, and a state update per tick would be noise.
+  const following = useRef(false);
 
   // Latest props, readable from callbacks created at mount. Reading props
   // directly inside `load` is bug #1 above.
@@ -128,6 +143,15 @@ export function DispatchMap({ drivers, flagged, selectedId, onSelect, onBasemap,
         }
       });
 
+      // Any camera move the DISPATCHER starts ends the follow. MapLibre's own
+      // eases carry no originalEvent, so they do not trip this.
+      const handOver = (e: { originalEvent?: unknown }) => {
+        if (e.originalEvent) following.current = false;
+      };
+      m.on('dragstart', handOver);
+      m.on('zoomstart', handOver);
+      m.on('wheel', handOver);
+
       m.on('load', () => {
         if (!m || cancelled) return;
         addFleetLayers(m, mode);
@@ -158,11 +182,19 @@ export function DispatchMap({ drivers, flagged, selectedId, onSelect, onBasemap,
     // props are read through `latest`, so they are deliberately not deps.
   }, [basemap]);
 
-  // --- Update the fleet without touching the map --------------------------
+  // --- Update the fleet, and keep the followed driver in frame -------------
   useEffect(() => {
     const m = map.current;
     if (!m || !ready) return;
     paint(m, drivers, flagged, selectedId);
+
+    if (!following.current || !selectedId) return;
+    const d = drivers.find((x) => x.driverId === selectedId);
+    if (!d) return;
+    // One ease per tick, a little shorter than the tick itself, so the pin
+    // glides rather than steps. The zoom term keeps a selection ease that is
+    // still in flight from being cut short at an intermediate zoom.
+    m.easeTo({ center: [d.lon, d.lat], zoom: Math.max(m.getZoom(), FOCUS_ZOOM), duration: 1200 });
   }, [ready, drivers, flagged, selectedId]);
 
   // --- Fit when the SET of drivers changes, or when the map becomes ready --
@@ -175,6 +207,26 @@ export function DispatchMap({ drivers, flagged, selectedId, onSelect, onBasemap,
     m.fitBounds(bounds, { padding: { top: 60, right: 60, bottom: 60, left: 60 }, maxZoom: 10, duration: 600 });
     // fleetKey, not drivers: a position tick must not yank the viewport.
   }, [ready, fleetKey]);
+
+  // --- Ease to the selected driver -----------------------------------------
+  useEffect(() => {
+    const m = map.current;
+    if (!m || !ready || !selectedId) return;
+
+    // The CURRENT position, read through the ref - the effect must not depend
+    // on `drivers`, or it would re-centre on every tick.
+    const d = latest.current.drivers.find((x) => x.driverId === selectedId);
+    if (!d) return;
+
+    // Keep a closer zoom if the dispatcher already chose one; only zoom IN.
+    // Deselecting leaves the camera where it is - they may be looking around.
+    following.current = true;
+    m.easeTo({
+      center: [d.lon, d.lat],
+      zoom: Math.max(m.getZoom(), FOCUS_ZOOM),
+      duration: 700,
+    });
+  }, [ready, selectedId]);
 
   return <div className="map" ref={container} />;
 }
