@@ -16,13 +16,19 @@
     "demo:graphql": "node src/demo.ts --only=graphql",
     "demo:rest": "node src/demo.ts --only=rest",
     "demo:geo": "node src/demo.ts --only=geo",
+    "demo:scenarios": "node src/demo.ts --only=scenarios",
     "demo:ai": "node src/demo.ts --only=ai",
     "test": "node --test",
     "test:watch": "node --test --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "web": "npm run dev --workspace @meridian/web",
+    "web:build": "npm run build --workspace @meridian/web"
   },
   "devDependencies": {
     "@types/node": "^26.4.1",
     "typescript": "^5.6.0"
-  }
+  },
+  "workspaces": [
+    "web"
+  ]
 }

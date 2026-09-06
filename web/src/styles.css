@@ -1,0 +1,532 @@
+/* ==========================================================================
+   Meridian dispatch board
+   ==========================================================================
+   Design direction: an ops console, not a dashboard.
+
+   A dispatcher watches this for a ten-hour shift. That constraint drives every
+   choice below - density over whitespace, one accent colour that only ever
+   means "look at this", and numbers set in a mono face with tabular figures so
+   a column of clocks does not jitter as digits change.
+
+   The palette is the night side of a highway: a blue-cast near-black, and
+   FHWA warning-sign amber as the single accent. Amber is the colour of every
+   hazard board and every "SLOW" sign on a motorway, which makes it the right
+   vernacular for a screen whose entire job is "here is what needs you".
+
+   Status colours stay deliberately calm - green through slate - so that amber
+   and red are the only things that ever pull the eye. A board where four
+   colours compete is a board people stop reading.
+   ========================================================================== */
+
+:root {
+  /* Ground and surfaces */
+  --ground: #0e1116;
+  --panel: #151a21;
+  --raised: #1b222b;
+  --line: #232b36;
+  --line-bright: #313b48;
+
+  /* Text */
+  --text: #c9d1d9;
+  --text-strong: #eaf0f6;
+  --dim: #6e7a8a;
+  --faint: #4a5566;
+
+  /* The one accent. Warning-sign amber - it only ever means "attention". */
+  --amber: #f0a202;
+  --amber-dim: #8a5f10;
+
+  /* Severity */
+  --critical: #e5484d;
+  --critical-dim: #7d2a2d;
+
+  /* Driver status - calm on purpose, so amber and red stay loud */
+  --driving: #3fb27f;
+  --stopped: #7e8ca0;
+  --on-break: #5c7fa8;
+  --off-duty: #3d4653;
+
+  /* Type */
+  --sign: 'Barlow Condensed', 'Arial Narrow', sans-serif;
+  --ui: 'IBM Plex Sans', system-ui, sans-serif;
+  --data: 'IBM Plex Mono', ui-monospace, monospace;
+
+  --row: 34px;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--ground);
+  color: var(--text);
+  font-family: var(--ui);
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Every number on this board is tabular. Proportional figures make a column
+   of hours-of-service clocks shift horizontally as they count down, which is
+   exactly the kind of low-grade friction that makes a tool tiring. */
+.mono, .num {
+  font-family: var(--data);
+  font-variant-numeric: tabular-nums;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 1px;
+}
+
+/* ==========================================================================
+   Shell
+   ========================================================================== */
+
+.shell {
+  display: grid;
+  grid-template-rows: 44px 1fr;
+  height: 100%;
+}
+
+.statusbar {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 16px;
+  border-right: 1px solid var(--line);
+}
+
+.brand-mark {
+  font-family: var(--sign);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-strong);
+}
+
+/* The meridian line in the wordmark: a hairline through the letterform block,
+   which is what a meridian is. Cheap, and it does one job. */
+.brand-rule {
+  width: 22px;
+  height: 1px;
+  background: var(--amber);
+}
+
+.districts {
+  display: flex;
+  align-items: stretch;
+}
+
+/* District tabs read like the mile-marker plates on a gantry: condensed caps,
+   a hairline underneath, and the active one lit amber. */
+.district {
+  font-family: var(--sign);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+  padding: 0 14px;
+  border-right: 1px solid var(--line);
+  border-bottom: 2px solid transparent;
+  transition: color 120ms, border-color 120ms;
+}
+
+.district:hover { color: var(--text); }
+
+.district[aria-pressed='true'] {
+  color: var(--text-strong);
+  border-bottom-color: var(--amber);
+  background: var(--raised);
+}
+
+.district .count {
+  font-family: var(--data);
+  font-size: 11px;
+  color: var(--faint);
+  margin-left: 6px;
+}
+
+.district[aria-pressed='true'] .count { color: var(--amber); }
+
+.statusbar-spacer { flex: 1; border-right: 1px solid var(--line); }
+
+.clock {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  border-right: 1px solid var(--line);
+  font-family: var(--data);
+  font-size: 12px;
+  color: var(--text);
+}
+
+.pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--driving);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+.tally {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 14px;
+  border-right: 1px solid var(--line);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.tally .n {
+  font-family: var(--data);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.tally.is-critical .n { color: var(--critical); }
+.tally.is-warning .n { color: var(--amber); }
+
+/* ==========================================================================
+   Body: roster | map over feed
+   ========================================================================== */
+
+.body {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  min-height: 0;
+}
+
+.roster {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+  min-height: 0;
+}
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 28px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+  flex: none;
+}
+
+.roster-list {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.driver {
+  display: grid;
+  grid-template-columns: 8px 1fr auto;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  height: var(--row);
+  padding: 0 12px 0 0;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+.driver:hover { background: var(--raised); }
+
+.driver[aria-selected='true'] {
+  background: var(--raised);
+  box-shadow: inset 2px 0 0 var(--amber);
+}
+
+.status-bar {
+  width: 3px;
+  height: 100%;
+  margin-left: 3px;
+}
+
+.status-driving { background: var(--driving); }
+.status-stopped { background: var(--stopped); }
+.status-on-break { background: var(--on-break); }
+.status-off-duty { background: var(--off-duty); }
+
+.driver-id {
+  font-family: var(--data);
+  font-size: 11px;
+  color: var(--dim);
+}
+
+.driver-name {
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.driver-flag {
+  font-family: var(--data);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  padding: 1px 4px;
+  border: 1px solid currentColor;
+  color: var(--amber);
+}
+
+.driver-flag.is-critical { color: var(--critical); }
+
+/* --------------------------------------------------------------------------
+   THE SIGNATURE ELEMENT: the hours-of-service strip
+   --------------------------------------------------------------------------
+   Every driver row carries a miniature of the ELD duty-status log - the ruled
+   grid strip that drivers and dispatchers read every single day, and the one
+   artifact of this trade nobody would think to invent.
+
+   It encodes the thing that actually ends a shift: minutes of legal drive time
+   remaining, against an 11-hour maximum, with the warning and critical marks
+   at the same thresholds the detection rules use. So the strip and the alert
+   cannot disagree - they are reading the same number.
+
+   Repeated down sixty rows it becomes the texture of the page, which is the
+   point: a dispatcher should be able to see the shape of their shift ending
+   without reading a single digit.
+   -------------------------------------------------------------------------- */
+
+.hos {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.hos-strip {
+  position: relative;
+  width: 64px;
+  height: 11px;
+  background: #0b0e12;
+  border: 1px solid var(--line-bright);
+}
+
+/* The ruled grid, as on a paper log sheet. Hour divisions, drawn in the
+   background rather than as elements - sixty rows of DOM ticks would be real
+   cost for a purely visual cue. */
+.hos-strip::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: repeating-linear-gradient(
+    to right,
+    var(--line-bright) 0 1px,
+    transparent 1px 100%
+  );
+  background-size: calc(100% / 11) 100%;
+  opacity: 0.55;
+}
+
+.hos-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  background: var(--driving);
+}
+
+.hos-fill.is-warning { background: var(--amber); }
+.hos-fill.is-critical { background: var(--critical); }
+
+.hos-clock {
+  font-family: var(--data);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+  min-width: 38px;
+  text-align: right;
+}
+
+.hos-clock.is-warning { color: var(--amber); }
+.hos-clock.is-critical { color: var(--critical); font-weight: 600; }
+
+/* ==========================================================================
+   Map
+   ========================================================================== */
+
+.stage {
+  display: grid;
+  grid-template-rows: 1fr 200px;
+  min-height: 0;
+}
+
+.map-wrap {
+  position: relative;
+  min-height: 0;
+  background: var(--ground);
+}
+
+.map {
+  position: absolute;
+  inset: 0;
+}
+
+/* No basemap, so the legend has to carry what the map means. */
+.legend {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 11px;
+  background: rgba(21, 26, 33, 0.92);
+  border: 1px solid var(--line);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.legend-row { display: flex; align-items: center; gap: 7px; }
+
+.legend-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.legend-line {
+  width: 14px;
+  height: 2px;
+  background: var(--line-bright);
+}
+
+.scale-note {
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  z-index: 2;
+  padding: 7px 10px;
+  max-width: 232px;
+  background: rgba(21, 26, 33, 0.92);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--amber);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--dim);
+}
+
+/* ==========================================================================
+   Exception feed
+   ========================================================================== */
+
+.feed {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  min-height: 0;
+}
+
+.feed-list {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.exception {
+  display: grid;
+  grid-template-columns: 62px 92px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+.exception:hover { background: var(--raised); }
+
+.exception-time {
+  font-family: var(--data);
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.exception-kind {
+  font-family: var(--sign);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-strong);
+}
+
+.exception-detail { font-size: 12px; color: var(--dim); }
+.exception-detail b { color: var(--text); font-weight: 500; }
+
+/* The distinction the whole architecture rests on, made visible: an exception
+   that fired but was NOT corroborated is shown, dimmed, rather than hidden.
+   A dispatcher who can see the noise filter working trusts the board that is
+   quiet. One that only ever shows alerts teaches people it cries wolf. */
+.exception.is-noise { opacity: 0.5; }
+
+.verdict {
+  font-family: var(--data);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+
+.verdict.is-paged { color: var(--critical); }
+.verdict.is-held { color: var(--faint); }
+
+.empty {
+  padding: 22px 14px;
+  font-size: 12px;
+  color: var(--faint);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

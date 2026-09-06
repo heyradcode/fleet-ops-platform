@@ -5,3 +5,4 @@ dist/
 *.tfstate.*
 .terraform/
 .terraform.lock.hcl
+web/dist

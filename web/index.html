@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Meridian — Dispatch</title>
+    <meta name="description" content="Real-time fleet dispatch board" />
+
+    <!--
+      Three faces, three jobs.
+
+      Barlow Condensed is the signage voice. US highway signs are set in the
+      FHWA "Highway Gothic" series - condensed, utilitarian, legible at speed -
+      and Barlow Condensed is the closest thing on the open web. It is used ONLY
+      for district names and headline counts, so it reads as signage rather than
+      as a font choice.
+
+      IBM Plex Sans and Plex Mono are a designed pair from one superfamily, so
+      their metrics agree. Plex Mono carries every number on the board: driver
+      ids, coordinates, hours-of-service clocks, telemetry values. Tabular
+      figures matter more here than they sound - a column of times that jitters
+      as digits change is genuinely harder to scan for ten hours.
+    -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
