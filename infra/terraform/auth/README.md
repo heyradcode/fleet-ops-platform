@@ -46,11 +46,13 @@ unusual, and the apply gets far enough to create the Lambda before failing on
 them - a half-built stack and two `AccessDeniedException`s:
 
 ```bash
-# Cognito. cognito-idp:*, so it covers destroy as well as apply.
-aws iam attach-user-policy --user-name YOUR_USER \n  --policy-arn arn:aws:iam::aws:policy/AmazonCognitoPowerUser
+cd infra/terraform/auth   # deploy-policy.json is referenced relatively
+
+# Cognito. Grants cognito-idp:*, so it covers destroy as well as apply.
+aws iam attach-user-policy --user-name YOUR_USER --policy-arn arn:aws:iam::aws:policy/AmazonCognitoPowerUser
 
 # Budgets is account-scoped and no managed policy grants creating one.
-aws iam put-user-policy --user-name YOUR_USER \n  --policy-name MeridianBudgets \n  --policy-document file://deploy-policy.json
+aws iam put-user-policy --user-name YOUR_USER --policy-name MeridianBudgets --policy-document file://deploy-policy.json
 ```
 
 `deploy-policy.json` sits beside this file; change the account id in it if you

@@ -196,9 +196,13 @@ issuer.
 
 The offline model in `src/aws/bedrock.ts` is scripted, not intelligent. It
 reproduces the one behaviour that matters for understanding agents: emit a
-`tool_use` block, receive a `tool_result`, repeat, then answer. The
-**embeddings are genuinely computed**, so RAG retrieval really does retrieve —
-you can watch the scores move.
+`tool_use` block, receive a `tool_result`, repeat, then answer.
+
+The embeddings are computed rather than faked, but they are a **hashed
+bag-of-words, not a semantic model** — two synonyms sharing no tokens score
+exactly zero, and a test pins that. So retrieval offline is lexical, ranked and
+tenant-filtered for real; what arrives with Titan is the vector's *meaning*,
+not the pipeline around it.
 
 ---
 

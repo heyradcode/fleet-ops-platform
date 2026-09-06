@@ -125,12 +125,22 @@ export class KnowledgeBase {
   }
 
   /**
-   * HYBRID SEARCH: semantic (embeddings) + lexical (keyword overlap).
+   * HYBRID SEARCH: a vector score fused with a lexical one.
    *
-   * Why both? Embeddings understand that "choppy calls" relates to "packet
-   * loss", but they are bad at exact tokens - a model number, an error code,
-   * "SFP". Keyword search is the opposite. Bedrock's HYBRID search type does
-   * this fusion for you; doing it by hand once makes the tradeoff concrete.
+   * Why both, once a REAL embedding model is behind embed(): dense vectors
+   * know that "off course" relates to "route deviation", and are bad at exact
+   * tokens - a vehicle id, an error code, "0.8g". Keyword search is the
+   * opposite. Bedrock's HYBRID search type fuses them for you; doing it by
+   * hand once makes the tradeoff concrete.
+   *
+   * BE HONEST ABOUT WHAT THIS SCORES OFFLINE. aws/bedrock.ts embeds by hashing
+   * each token into a bucket, so the 0.7 term is NOT semantic - it is token
+   * overlap measured through a hash, and two synonyms sharing no tokens score
+   * exactly zero. knowledge-base.test.ts pins that, because this comment used
+   * to claim the opposite and nothing contradicted it.
+   *
+   * What IS real offline: the chunking, the tenant filter, the fusion, the
+   * ranking and the top-K. Only the vector's MEANING arrives with Titan.
    */
   async retrieve(query: string, opts: { tenantId: TenantId; topK?: number }): Promise<RetrievedChunk[]> {
     const topK = opts.topK ?? 3;
@@ -141,16 +151,20 @@ export class KnowledgeBase {
       // THE TENANT FILTER. Never optional.
       .filter((c) => c.metadata.tenantId === opts.tenantId)
       .map((chunk) => {
-        const semantic = cosineSimilarity(queryVector, chunk.embedding);
+        // `vector`, not `semantic` - see the note above on what this measures
+        // while the offline embedder is in place.
+        const vector = cosineSimilarity(queryVector, chunk.embedding);
 
         const chunkTerms = new Set(tokenize(chunk.text));
         let overlap = 0;
         for (const t of queryTerms) if (chunkTerms.has(t)) overlap++;
         const lexical = queryTerms.size > 0 ? overlap / queryTerms.size : 0;
 
-        // 70/30 in favour of semantic. Tune this against a real eval set, not
-        // against a hunch - it is the single biggest quality lever in RAG.
-        return { ...chunk, score: 0.7 * semantic + 0.3 * lexical };
+        // 70/30 in favour of the vector. Tune against a real eval set, not a
+        // hunch - it is the biggest quality lever in RAG. Offline BOTH terms
+        // measure token overlap, so the ratio only begins to matter once a
+        // real embedding model is behind embed().
+        return { ...chunk, score: 0.7 * vector + 0.3 * lexical };
       })
       .sort((a, b) => b.score - a.score);
 
