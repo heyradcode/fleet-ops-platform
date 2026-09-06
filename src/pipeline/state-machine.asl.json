@@ -5,17 +5,12 @@
   "States": {
     "PrepareConnectorList": {
       "Type": "Pass",
-      "Comment": "Static list of providers to poll. Kept in the definition so adding a vendor is a Terraform change with an audit trail, not a code deploy.",
+      "Comment": "The vendors THIS carrier runs - one GPS unit, one ELD, one dashcam. Kept in the definition so onboarding a vendor is a Terraform change with an audit trail, not a code deploy. Per-tenant subsets live in DynamoDB; this is the default.",
       "Result": {
         "providers": [
-          "cisco-meraki",
-          "juniper-mist",
-          "aruba-central",
-          "genesys-cloud",
-          "five9",
-          "amazon-connect",
-          "thousandeyes",
-          "splunk"
+          "samsara",
+          "motive",
+          "lytx"
         ]
       },
       "ResultPath": "$.config",
@@ -24,7 +19,7 @@
 
     "CollectFromProviders": {
       "Type": "Map",
-      "Comment": "Fan out one Lambda per vendor. MaxConcurrency 4 keeps us inside every vendor rate limit. ToleratedFailurePercentage lets the run succeed on partial data - a dead vendor must not block the other seven.",
+      "Comment": "Fan out one Lambda per vendor. MaxConcurrency 4 keeps us inside every vendor rate limit. ToleratedFailurePercentage lets the run succeed on partial data - a dead dashcam feed must not block position data.",
       "ItemsPath": "$.config.providers",
       "MaxConcurrency": 4,
       "ToleratedFailurePercentage": 40,
@@ -82,12 +77,12 @@
         }
       },
       "ResultPath": "$.collected",
-      "Next": "NormaliseToSignals"
+      "Next": "NormaliseToTelemetry"
     },
 
-    "NormaliseToSignals": {
+    "NormaliseToTelemetry": {
       "Type": "Task",
-      "Comment": "Vendor payloads -> canonical Signal[]. Pure function; safe to retry.",
+      "Comment": "Vendor payloads -> canonical Telemetry[]. Pure function; safe to retry.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${normalise_function_arn}",
@@ -101,39 +96,39 @@
           "BackoffRate": 2
         }
       ],
-      "ResultSelector": { "signals.$": "$.Payload.signals" },
+      "ResultSelector": { "telemetry.$": "$.Payload.telemetry" },
       "ResultPath": "$.normalised",
-      "Next": "GeoEnrich"
+      "Next": "ResolveTerritory"
     },
 
-    "GeoEnrich": {
+    "ResolveTerritory": {
       "Type": "Task",
-      "Comment": "Attach coordinates from Aurora PostGIS. Best-effort: a signal without a location is still a valid signal, so failure continues rather than aborts.",
+      "Comment": "Which district and geofences does this point fall in. Best-effort: an ELD reports a clock and has no coordinates at all, so failure continues rather than aborts. The hot path does a bbox pre-filter in memory against geofences cached at module scope - a PostGIS round trip per ping is neither fast nor cheap at 11,000/sec.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
-        "FunctionName": "${enrich_function_arn}",
+        "FunctionName": "${resolve_function_arn}",
         "Payload.$": "$.normalised"
       },
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
-          "ResultPath": "$.enrichError",
-          "Next": "AnySignals"
+          "ResultPath": "$.resolveError",
+          "Next": "AnyTelemetry"
         }
       ],
-      "ResultSelector": { "signals.$": "$.Payload.signals" },
-      "ResultPath": "$.enriched",
-      "Next": "AnySignals"
+      "ResultSelector": { "telemetry.$": "$.Payload.telemetry" },
+      "ResultPath": "$.resolved",
+      "Next": "AnyTelemetry"
     },
 
-    "AnySignals": {
+    "AnyTelemetry": {
       "Type": "Choice",
       "Comment": "A quiet polling window is a success, not a failure.",
       "Choices": [
         {
-          "Variable": "$.enriched.signals[0]",
+          "Variable": "$.resolved.telemetry[0]",
           "IsPresent": true,
-          "Next": "DetectIncidents"
+          "Next": "EvaluateRules"
         }
       ],
       "Default": "NothingToDo"
@@ -143,16 +138,35 @@
       "Type": "Succeed"
     },
 
+    "EvaluateRules": {
+      "Type": "Task",
+      "Comment": "Per-driver deterministic rules -> Exception[], and fold the newest position into hot state. No LLM here on purpose: what pages a human at 4am must be identical every time and explainable to the person it woke.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${evaluate_function_arn}",
+        "Payload.$": "$.resolved"
+      },
+      "ResultSelector": {
+        "telemetry.$": "$.Payload.telemetry",
+        "drivers.$": "$.Payload.drivers",
+        "exceptions.$": "$.Payload.exceptions"
+      },
+      "ResultPath": "$.evaluated",
+      "Next": "DetectIncidents"
+    },
+
     "DetectIncidents": {
       "Type": "Task",
-      "Comment": "Deterministic correlation rules. No LLM here on purpose - detection must be explainable and testable.",
+      "Comment": "Corroborate and merge exceptions into incidents. Two independent vendors before raising, and one road closure is one incident with fourteen drivers rather than fourteen pages.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${detect_function_arn}",
-        "Payload.$": "$.enriched"
+        "Payload.$": "$.evaluated"
       },
       "ResultSelector": {
-        "signals.$": "$.Payload.signals",
+        "telemetry.$": "$.Payload.telemetry",
+        "drivers.$": "$.Payload.drivers",
+        "exceptions.$": "$.Payload.exceptions",
         "incidents.$": "$.Payload.incidents"
       },
       "ResultPath": "$.detected",
@@ -161,7 +175,7 @@
 
     "PersistAndPublish": {
       "Type": "Task",
-      "Comment": "BatchWriteItem to DynamoDB, then PutEvents to EventBridge. Write before publish, so a subscriber that immediately queries cannot 404.",
+      "Comment": "BatchWriteItem to DynamoDB, then PutEvents to EventBridge. Write before publish, so a subscriber that immediately queries cannot 404. NOTE what is published: exceptions and incidents only. Telemetry is persisted and folded into hot state but never reaches the bus - at 11,000 readings/sec it would make bus cost scale with fleet size instead of with incidents.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${publish_function_arn}",

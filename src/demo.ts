@@ -22,7 +22,8 @@ import { buildIngestWorkflow } from './pipeline/ingest-workflow.ts';
 import { incidentSpreadKm } from './pipeline/steps.ts';
 import { connectors, connectorsFor, breakers } from './integrations/registry.ts';
 import { chaos } from './integrations/fixtures.ts';
-import { rawBucket } from './aws/s3.ts';
+import { rawBucket, historyBucket } from './aws/s3.ts';
+import { telemetryStream } from './aws/kinesis.ts';
 import { mainTable } from './aws/dynamodb.ts';
 import { bus } from './aws/eventbridge.ts';
 
@@ -233,6 +234,25 @@ async function sectionIngest() {
   process.stdout.write('   example key  : ' + (rawBucket.listKeys()[0] ?? '-') + '\n');
   process.stdout.write('   breakers     : ' +
     [...breakers.entries()].map(([p, b]) => p + '=' + b.state).join(' ') + '\n');
+
+  // --- The stream, and the arithmetic that justifies it -------------------
+  const st = telemetryStream.stats;
+  note('');
+  note('Kinesis: batch from the stream, never one invocation per record');
+  process.stdout.write('   records      : ' + st.put + ' across ' +
+    telemetryStream.shardCount + ' shards, partitioned by driverId\n');
+  process.stdout.write('   invocations  : ' + st.invocations +
+    ' (one Lambda call per batch, not per record)\n');
+  process.stdout.write('   history      : ' + historyBucket.listKeys().length +
+    ' objects in s3://' + historyBucket.name + ' (the cold path)\n');
+  process.stdout.write('   parked       : ' + telemetryStream.failureDestination.length +
+    ' records, backlog ' + telemetryStream.backlog() + '\n');
+  const spread = telemetryStream.distribution(allDrivers(operator).map((d) => d.driverId));
+  process.stdout.write('   shard spread : ' +
+    [...spread.entries()].map(([sh, n]) => sh.slice(-2) + '=' + n).join(' ') + '\n');
+  note('   At 330k drivers pinging every 30s that is ~11,000 records/sec.');
+  note('   Per-record invocation means 11,000 Lambda calls/sec; batching at 500');
+  note('   makes it ~22. Same work, three orders of magnitude fewer invokes.');
 
   const incidents = openIncidents(operator);
   note('');
@@ -452,7 +472,7 @@ async function sectionRest() {
     ['GET /drivers', {}],
     ['GET /drivers/near', { query: { lon: '-96.797', lat: '32.7767', radiusKm: '400' } }],
     ['GET /drivers/near', { query: { lon: '32.7767', lat: '-96.797' } }],   // swapped on purpose
-    ['GET /signals', { query: { limit: '3' } }],
+    ['GET /telemetry', { query: { limit: '3' } }],
     ['GET /map', { query: { format: 'topojson' } }],
     ['POST /webhooks/{provider}', { path: { provider: 'genesys' }, body: { event: 'queue.alert' } }],
   ];

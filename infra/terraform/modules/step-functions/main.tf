@@ -8,7 +8,7 @@ variable "definition_path" { type = string }
 variable "event_bus_name" { type = string }
 variable "event_bus_arn" { type = string }
 variable "lambda_arns" {
-  description = "collect / normalise / enrich / detect / publish function ARNs"
+  description = "collect / normalise / resolve / evaluate / detect / publish function ARNs"
   type        = map(string)
 }
 
@@ -35,7 +35,8 @@ resource "aws_sfn_state_machine" "ingest" {
   definition = templatefile(var.definition_path, {
     collect_function_arn   = var.lambda_arns["collect"]
     normalise_function_arn = var.lambda_arns["normalise"]
-    enrich_function_arn    = var.lambda_arns["enrich"]
+    resolve_function_arn   = var.lambda_arns["resolve"]
+    evaluate_function_arn  = var.lambda_arns["evaluate"]
     detect_function_arn    = var.lambda_arns["detect"]
     publish_function_arn   = var.lambda_arns["publish"]
     event_bus_name         = var.event_bus_name

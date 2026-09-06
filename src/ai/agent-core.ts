@@ -65,7 +65,7 @@ const SYSTEM_PROMPT = [
   '- Check telemetry before explaining a cause. Do not speculate from the',
   '  question alone.',
   '- Before claiming a problem is regional, verify it with a spatial query.',
-  '- Cite the site ids and providers your conclusion rests on.',
+  '- Cite the driver ids and vendors your conclusion rests on.',
   '- Never claim to have taken an action you did not take via a tool.',
 ].join('\n');
 

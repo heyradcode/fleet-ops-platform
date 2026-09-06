@@ -49,7 +49,7 @@ import { b64urlEncode } from '../platform/crypto.ts';
 export type AppSyncEvent = {
   info: { fieldName: string; parentTypeName: 'Query' | 'Mutation' | 'Driver' | 'Incident' };
   arguments: Record<string, unknown>;
-  /** The parent object, for nested field resolvers like Site.signals. */
+  /** The parent object, for nested field resolvers like Driver.telemetry. */
   source?: Record<string, unknown>;
   identity: {
     sub: string;
@@ -129,12 +129,12 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
 
     // ---- Nested field resolvers -----------------------------------------
     /**
-     * Site.signals. This is where N+1 lives: `sites { signals { .. } }` calls
-     * it once per site. Fixes, in order of preference:
+     * Driver.telemetry. This is where N+1 lives: `drivers { telemetry { .. } }` calls
+     * it once per driver. Fixes, in order of preference:
      *   1. Make it a BatchInvoke resolver - AppSync hands the Lambda an ARRAY
      *      of events (up to 2000) and you do one Query per partition.
      *   2. Cache it - AppSync per-resolver caching, keyed on $context.source.
-     *   3. Denormalise the top few signals onto the Site item at write time.
+     *   3. Denormalise the top few readings onto the Driver item at write time.
      */
     case 'Driver.telemetry': {
       const driverId = String(event.source?.driverId);

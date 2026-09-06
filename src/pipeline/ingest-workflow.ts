@@ -9,7 +9,7 @@ import { StateMachine, type State } from '../aws/stepfunctions.ts';
 import { connectorsFor } from '../integrations/registry.ts';
 import type { Driver, Exception, Principal, Telemetry } from '../platform/types.ts';
 import {
-  collectOne, normaliseAll, resolveTerritory, foldDriverState,
+  collectOne, normaliseAll, streamAndCollect, resolveTerritory, foldDriverState,
   evaluate, detectIncidents, publish,
   type PipelineInput,
 } from './steps.ts';
@@ -41,6 +41,15 @@ export function buildIngestWorkflow(principal: Principal, since: string) {
       // Retry a transient failure twice, then give up. A normalise() bug will
       // not fix itself on retry, so the backoff is short by design.
       retry: { maxAttempts: 3, intervalMs: 50, backoffRate: 2 },
+    },
+    {
+      // The stream. In production this is not a Step Functions state at all -
+      // it is a PutRecords from the producer and an event-source mapping that
+      // invokes the consumer independently. Modelling it inline keeps the whole
+      // path visible in one execution history.
+      type: 'Task',
+      name: 'StreamAndBatch',
+      fn: (readings: Telemetry[]) => streamAndCollect(readings),
     },
     {
       type: 'Task',

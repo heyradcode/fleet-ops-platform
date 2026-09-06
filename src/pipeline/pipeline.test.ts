@@ -9,7 +9,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { detectIncidents, evaluate, incidentSpreadKm, normaliseAll, publish } from './steps.ts';
+import {
+  detectIncidents, evaluate, incidentSpreadKm, normaliseAll, publish,
+  processBatch, streamAndCollect,
+} from './steps.ts';
+import { KinesisStream } from '../aws/kinesis.ts';
+import { historyBucket } from '../aws/s3.ts';
 import { matches, EventBus } from '../aws/eventbridge.ts';
 import { subscribe, publishToSubscribers } from '../api/subscriptions.ts';
 import { runAgent } from '../ai/agent-core.ts';
@@ -335,4 +340,139 @@ test('a viewer asking the agent to act is refused by the TOOL, not by the prompt
   const attempt = result.trace.find((t) => t.detail.startsWith('openIncident'));
   assert.ok(attempt, 'the model did attempt the tool');
   assert.ok(attempt.detail.endsWith('-> error'), 'and the tool refused it');
+});
+
+// ---------------------------------------------------------------------------
+// The stream: batching, sharding, and the poison record
+// ---------------------------------------------------------------------------
+
+test('one driver always lands on the same shard, so their records stay ordered', () => {
+  const stream = new KinesisStream<Telemetry>('t', 4);
+
+  const shards = new Set(
+    Array.from({ length: 20 }, () => stream.shardFor('drv-0142')),
+  );
+  assert.equal(shards.size, 1, 'a partition key must be stable across calls');
+
+  // ...and the fleet still spreads across shards, or partitioning bought
+  // nothing. Ordering per driver, parallelism everywhere else.
+  const fleet = Array.from({ length: 200 }, (_, i) => 'drv-' + String(1000 + i));
+  assert.ok(stream.distribution(fleet).size > 1, 'the fleet must not pile onto one shard');
+});
+
+test('the consumer is invoked once per BATCH, not once per record', async () => {
+  const stream = new KinesisStream<Telemetry>('t', 1);
+  stream.putRecords(
+    Array.from({ length: 500 }, (_, i) => ({
+      partitionKey: 'drv-0142',
+      data: reading({ telemetryId: 't' + i }),
+    })),
+  );
+
+  let invocations = 0;
+  let seen = 0;
+  await stream.consume(
+    (batch) => { invocations++; seen += batch.records.length; return { failedIds: [] }; },
+    (r) => String((r.data as Telemetry).telemetryId),
+    { batchSize: 100 },
+  );
+
+  assert.equal(seen, 500);
+  // 500 records, 5 invocations. This ratio is the whole cost argument: at
+  // 11,000 readings/sec, per-record invocation is not a viable shape.
+  assert.equal(invocations, 5);
+});
+
+test('reported failures are retried alone; the good records are NOT reprocessed', async () => {
+  // ReportBatchItemFailures. The handler knows which record was bad and says so,
+  // so the service retries only that one. The other 63 were already accepted -
+  // reprocessing them would double-count every good reading in the batch.
+  const stream = new KinesisStream<Telemetry>('t', 1);
+  stream.putRecords(Array.from({ length: 64 }, (_, i) => ({
+    partitionKey: 'drv-0142',
+    data: reading({ telemetryId: 't' + i, value: i === 37 ? NaN : 0.62 }),
+  })));
+
+  const seen: string[] = [];
+  await stream.consume(
+    (batch) => {
+      const failedIds: string[] = [];
+      for (const r of batch.records) {
+        const t = r.data as Telemetry;
+        seen.push(String(t.telemetryId));
+        if (!Number.isFinite(t.value)) failedIds.push(String(t.telemetryId));
+      }
+      return { failedIds };
+    },
+    (r) => String((r.data as Telemetry).telemetryId),
+    { batchSize: 64, maxRetryAttempts: 2 },
+  );
+
+  // 64 on the first pass, then t37 alone on the retry. The other 63 are seen
+  // exactly once.
+  assert.equal(seen.filter((id) => id === 't0').length, 1);
+  assert.equal(seen.filter((id) => id === 't37').length, 2);
+  assert.equal(stream.failureDestination.length, 1);
+});
+
+test('a THROWING handler is bisected to isolate the poison record', async () => {
+  // BisectBatchOnFunctionError. The handler blew up, so the service has no idea
+  // which record caused it and must binary-search. Without this the whole batch
+  // fails forever and the shard stops advancing - the classic Kinesis outage,
+  // visible only as a rising iterator-age metric hours later.
+  const stream = new KinesisStream<Telemetry>('t', 1);
+  stream.putRecords(Array.from({ length: 64 }, (_, i) => ({
+    partitionKey: 'drv-0142',
+    data: reading({ telemetryId: 't' + i, value: i === 37 ? NaN : 0.62 }),
+  })));
+
+  const landed = new Set<string>();
+  await stream.consume(
+    (batch) => {
+      for (const r of batch.records) {
+        if (!Number.isFinite((r.data as Telemetry).value)) {
+          throw new Error('unparseable record somewhere in this batch');
+        }
+      }
+      for (const r of batch.records) landed.add(String((r.data as Telemetry).telemetryId));
+      return { failedIds: [] };
+    },
+    (r) => String((r.data as Telemetry).telemetryId),
+    { batchSize: 64, bisectOnError: true, maxRetryAttempts: 2 },
+  );
+
+  assert.equal(landed.size, 63, '63 good records must still land');
+  assert.ok(!landed.has('t37'));
+  assert.equal(stream.failureDestination.length, 1);
+  assert.ok(stream.stats.bisections > 0, 'the batch should have been split');
+  // log2(64) is 6, so isolating one record costs a handful of extra
+  // invocations - cheap next to a stalled shard.
+  assert.ok(stream.stats.invocations < 20, 'bisection should be logarithmic, not linear');
+});
+
+test('processBatch quarantines malformed records instead of throwing', () => {
+  const { result, readings } = processBatch({
+    shardId: 'shard-000000',
+    records: [
+      { partitionKey: 'drv-0142', data: reading({ telemetryId: 'good' }) },
+      { partitionKey: 'drv-0142', data: reading({ telemetryId: 'bad', value: NaN }) },
+    ],
+  });
+
+  assert.equal(readings.length, 1);
+  assert.equal(readings[0].telemetryId, 'good');
+  assert.equal(result.failedIds.length, 1);
+});
+
+test('history is appended for every reading, not just the interesting ones', async () => {
+  const before = historyBucket.listKeys().length;
+
+  await streamAndCollect(
+    Array.from({ length: 30 }, (_, i) => reading({ telemetryId: 'h' + i, severity: 'ok' })),
+    { batchSize: 10 },
+  );
+
+  // Position history is an analytics and safety-review asset; filtering it down
+  // to exceptions would throw away the record of everything that went right.
+  assert.ok(historyBucket.listKeys().length > before);
 });

@@ -20,7 +20,8 @@ import type {
 } from '../platform/types.ts';
 import { connectorsFor, breakers, safeConcurrency } from '../integrations/registry.ts';
 import { withRetry, type Connector } from '../integrations/connector.ts';
-import { archiveRaw } from '../aws/s3.ts';
+import { archiveRaw, appendHistory } from '../aws/s3.ts';
+import { telemetryStream, type Batch, type BatchResult } from '../aws/kinesis.ts';
 import { bus } from '../aws/eventbridge.ts';
 import { putTelemetry, putDrivers, putExceptions, putIncident } from '../platform/repository.ts';
 import { allDrivers, districtContaining, locationOf } from '../geo/driver-repository.ts';
@@ -119,6 +120,92 @@ export function normaliseAll(
     }
   }
   return readings;
+}
+
+// ---------------------------------------------------------------------------
+// 2b. STREAM - batch, never one invocation per record
+// ---------------------------------------------------------------------------
+
+/**
+ * Put normalised readings on the stream, partitioned by driver.
+ *
+ * Partitioning by driverId is the decision that matters: it gives ordering
+ * where ordering is meaningful (one driver's pings must not overtake each
+ * other) and parallelism everywhere else. Partitioning by district instead
+ * would concentrate a large district's thousands of drivers onto one shard -
+ * the classic hot-partition mistake.
+ */
+export function enqueue(readings: Telemetry[]): void {
+  telemetryStream.putRecords(
+    readings.map((r) => ({ partitionKey: r.driverId, data: r })),
+  );
+}
+
+/**
+ * The batched consumer. ONE invocation, MANY records.
+ *
+ * This is the shape an event-source mapping delivers, and writing the handler
+ * to take an array rather than a record is what makes the arithmetic work: at
+ * 11,000 readings/sec, a batch size of 500 is ~22 invocations/sec instead of
+ * 11,000.
+ *
+ * It reports per-record failures (ReportBatchItemFailures) rather than throwing.
+ * Throwing fails the whole batch, and a batch that always fails is a shard that
+ * never advances - the silent backlog that shows up as a rising iterator-age
+ * metric hours later.
+ */
+export function processBatch(
+  batch: Batch<Telemetry>,
+): { result: BatchResult; readings: Telemetry[] } {
+  const good: Telemetry[] = [];
+  const failedIds: string[] = [];
+
+  for (const record of batch.records) {
+    const reading = record.data;
+    // A record that cannot be understood is isolated, not fatal. In production
+    // the parse happens here too, and this is where a malformed payload from a
+    // vendor's bad deploy gets quarantined instead of stopping the fleet.
+    if (!reading || typeof reading.driverId !== 'string' || !Number.isFinite(reading.value)) {
+      failedIds.push(record.partitionKey + ':' + String(reading?.telemetryId));
+      continue;
+    }
+    good.push(reading);
+  }
+
+  // The cold path. Append every reading to history regardless of whether it
+  // becomes an exception - history is the analytics and safety-review asset.
+  appendHistory(good);
+
+  return { result: { failedIds }, readings: good };
+}
+
+/**
+ * Enqueue, then drain the stream through the batched consumer.
+ *
+ * In production these are two separate systems - a producer Lambda writes to
+ * Kinesis, an event-source mapping invokes a consumer Lambda - and nothing
+ * calls them in sequence like this. Doing so here is what makes the whole path
+ * observable in one run: how many records, how many invocations, how many
+ * bisections, and what ended up in the failure destination.
+ */
+export async function streamAndCollect(
+  readings: Telemetry[],
+  options?: { batchSize?: number },
+): Promise<Telemetry[]> {
+  enqueue(readings);
+
+  const collected: Telemetry[] = [];
+  await telemetryStream.consume(
+    (batch) => {
+      const { result, readings: good } = processBatch(batch as Batch<Telemetry>);
+      collected.push(...good);
+      return result;
+    },
+    (record) => record.partitionKey + ':' + String((record.data as Telemetry)?.telemetryId),
+    { batchSize: options?.batchSize ?? 500 },
+  );
+
+  return collected;
 }
 
 // ---------------------------------------------------------------------------

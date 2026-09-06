@@ -252,7 +252,8 @@ module "lambda_pipeline" {
   for_each = {
     collect   = { memory = 512, timeout = 120 }
     normalise = { memory = 512, timeout = 60 }
-    enrich    = { memory = 512, timeout = 60 }
+    resolve   = { memory = 512, timeout = 60 }
+    evaluate  = { memory = 1024, timeout = 60 }
     detect    = { memory = 1024, timeout = 60 }
     publish   = { memory = 512, timeout = 60 }
   }

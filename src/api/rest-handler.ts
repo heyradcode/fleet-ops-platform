@@ -31,7 +31,7 @@ import { random } from '../platform/random.ts';
 
 export type ApiGatewayEvent = {
   version: '2.0';
-  routeKey: string;               // e.g. "GET /sites"
+  routeKey: string;               // e.g. "GET /drivers"
   rawPath: string;
   headers: Record<string, string>;
   queryStringParameters?: Record<string, string>;
@@ -64,15 +64,15 @@ export async function handler(event: ApiGatewayEvent): Promise<ApiGatewayResult>
         // health check hits, and it must not depend on Cognito being up.
         return json(200, { status: 'ok', ts: new Date().toISOString() });
 
-      case 'GET /sites':
+      case 'GET /drivers':
         return json(200, { items: allDrivers(principal) });
 
-      case 'GET /sites/{driverId}': {
-        const site = getDriver(principal, String(event.pathParameters?.driverId));
-        return site ? json(200, site) : json(404, { message: 'site not found' });
+      case 'GET /drivers/{driverId}': {
+        const driver = getDriver(principal, String(event.pathParameters?.driverId));
+        return driver ? json(200, driver) : json(404, { message: 'driver not found' });
       }
 
-      case 'GET /sites/near': {
+      case 'GET /drivers/near': {
         // Validate at the edge. In a REST API you would attach a JSON Schema
         // request validator so API Gateway rejects this before your Lambda is
         // ever invoked - cheaper, and one less code path to test.
@@ -90,7 +90,7 @@ export async function handler(event: ApiGatewayEvent): Promise<ApiGatewayResult>
         return json(200, { items: driversWithinRadius(principal, { lon, lat }, radiusKm) });
       }
 
-      case 'GET /signals': {
+      case 'GET /telemetry': {
         const limit = Math.min(Number(query.limit ?? 25), 100);
         return json(200, { items: recentTelemetry(principal, limit) });
       }
