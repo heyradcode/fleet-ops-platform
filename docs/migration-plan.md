@@ -48,6 +48,9 @@ affects; this table is the index.
 | 7 | **Fixtures modelled from published API references** | Individual developers cannot get Samsara / Motive / Lytx sandbox access. The current header says "capture one true response per vendor" — that instruction cannot be followed and implies it was | 4 |
 | 8 | **GPS traces follow hand-drawn polylines** | 3–4 per district, interpolated along. Removes the "drivers crossing rivers" tell anyone with fleet experience spots instantly | 4 |
 | 9 | **Frontend steps 1–2 in scope, step 3 optional** | Board is the portfolio screenshot; the agent-trace panel is the differentiator. Time controls are droppable polish | 9 |
+| 10 | **Tests move with their phase, not at the end** | The 43 existing tests import `Signal`, `Incident`, `detectIncidents`. Phase 1 breaks all of them on contact. A test suite that is red from Phase 1 to Phase 11 is not a safety net — it is decoration | all |
+| 11 | **The demo tenant uses 3 vendors, not 8** | A carrier runs one GPS unit, one ELD and one dashcam per truck — Samsara + Motive + Lytx is realistic; all eight is not. Other tenants use different subsets, which is what makes per-tenant connector config a real code path rather than a claim | 2, 4 |
+| 12 | **Add `src/aws/kinesis.ts`** | Phase 3's entire batching argument has nothing to point at: `src/aws/` stands in for DynamoDB, S3, EventBridge, Step Functions and Bedrock, but there is no stream. Without it, "batch from the stream" is a comment, not code | 3 |
 
 ### Decision 4, in full — injected platform primitives
 
@@ -55,8 +58,9 @@ Three problems share one solution:
 
 ```
 src/platform/
-├── clock.ts            now()              → Node: Date  │ Browser: Date
-│                                            demos + tests: fixed epoch
+├── clock.ts            now(), setTo(),    → Node: Date  │ Browser: Date
+│                       advance()            demos + tests: fixed epoch
+│                                            trace replay + UI: advanced
 ├── crypto.ts           sha256(), uuid()   → Node: node:crypto
 │                                            Browser: bundled sync sha256
 │                                                    + crypto.randomUUID()
@@ -86,6 +90,11 @@ What this buys:
 Lands in **Phase 1**, while `types.ts` is being rewritten anyway. Retrofitting it
 at Phase 11 means touching every file a second time.
 
+`clock.ts` must be **advanceable, not merely fixed** — `now()`, `setTo(t)` and
+`advance(ms)`. A constant epoch serves the tests; the replayable telemetry trace
+and the frontend's time controls both need to drive the clock forward. Building
+it as a constant means rewriting it in Phase 9.
+
 ---
 
 ## The domain spine
@@ -104,7 +113,7 @@ AFTER
                    │             │             │
                    │             │             └── corroborated + merged
                    │             └── one driver, rules-detected
-                   └── 8 telematics vendors → one canonical shape
+                   └── 8 vendor adapters, 3 per tenant → one canonical shape
 ```
 
 The only genuine addition is splitting `Incident` into two levels: a per-driver
@@ -174,7 +183,7 @@ a key-value overwrite plus a batched rules pass is routine.
 src/
 ├── platform/
 │   ├── types.ts              ██████████  rewritten — the keystone   (Phase 1)
-│   ├── clock.ts              ██████████  NEW — injected now()       (Phase 1)
+│   ├── clock.ts              ██████████  NEW — advanceable now()    (Phase 1)
 │   ├── crypto.ts             ██████████  NEW — sync sha256 + uuid
 │   ├── runbook-loader.ts     ██████████  NEW — absorbs node:fs
 │   ├── tenancy.ts            ███░░░░░░░  + scope alongside tenantId
@@ -184,13 +193,20 @@ src/
 │   ├── contact-center/       ████████░░  → eld-hos/
 │   ├── observability/        ████████░░  → video-safety/
 │   ├── connector.ts          ░░░░░░░░░░  untouched — retry + breaker generic
+│   ├── registry.ts           ████░░░░░░  connectorsFor(principal)   (Phase 2)
 │   └── fixtures.ts           ██████████  rendered from scenarios    (Phase 4)
+├── aws/
+│   ├── kinesis.ts            ██████████  NEW — shards, batch,       (Phase 3)
+│   │                                     poison-record bisect
+│   └── (dynamodb, s3, eventbridge, stepfunctions, bedrock)  ██░░░░░░░░
 ├── pipeline/
-│   └── steps.ts              ███████░░░  +200-250 new lines         (Phase 3)
+│   └── steps.ts              ████████░░  +250-350 new lines         (Phase 3)
 ├── data/
 │   ├── generate.ts           ██████████  NEW — seeded generator     (Phase 4)
-│   ├── scenarios.ts          ██████████  NEW — five scripted situations
+│   ├── scenarios.ts          ██████████  NEW — six scripted situations
+│   ├── polylines.ts          ██████████  NEW — 3-4 roads per district
 │   ├── sites.ts              ██████████  → districts.ts + drivers.ts
+│   ├── schema.sql            ███████░░░  tables AND their RLS policies (Phase 5)
 │   └── runbooks/             ██████████  four new runbooks          (Phase 8)
 ├── geo/
 │   ├── spatial.ts            ░░░░░░░░░░  untouched — domain-neutral (Phase 5)
@@ -200,6 +216,7 @@ src/
 ├── api/
 │   ├── schema.graphql        ██████░░░░  renamed types              (Phase 6)
 │   ├── appsync-resolvers.ts  █████░░░░░
+│   ├── vtl/                  ███████░░░  3 files — NOT type-checked
 │   └── subscriptions.ts      ░░░░░░░░░░  untouched — filter engine already right
 ├── auth/                     ███░░░░░░░  + Principal.scope          (Phase 7)
 ├── ai/
@@ -258,8 +275,9 @@ function accepts a bare district id"* true rather than asserted.
 Per Decision 4 — cheap now, expensive later, because both `types.ts` and every
 call site are already open:
 
-- [ ] `src/platform/clock.ts` — `now()`; fixed epoch for demos and tests.
-      Replaces 20 `new Date()` / `Date.now()` calls
+- [ ] `src/platform/clock.ts` — `now()`, `setTo()`, `advance()`. Fixed epoch for
+      demos and tests, advanced for trace replay. Replaces 20 `new Date()` /
+      `Date.now()` calls
 - [ ] `src/platform/crypto.ts` — `sha256()` (sync, ~40 lines in the browser
       build) and `uuid()`. Absorbs `platform/ids.ts`, `aws/s3.ts`,
       `aws/bedrock.ts`, `auth/cognito-jwt-verifier.ts`
@@ -292,6 +310,35 @@ Straight substitution, keeping the 3/3/2 shape:
 Each connector's `normalise()` is rewritten to emit `Telemetry`. The retry,
 circuit-breaker and registry scaffolding is untouched.
 
+### Interlock with Phase 4
+
+These two phases depend on each other and will deadlock if taken literally:
+Phase 2 rewrites `normalise()` to consume vendor payloads, and Phase 4 generates
+those payloads. Break the cycle by splitting the work:
+
+- **Phase 2 owns the vendor payload *types*** plus **one hand-written sample per
+  vendor** — enough to write and test `normalise()` in isolation.
+- **Phase 4 replaces the samples with the generator**, emitting the same types.
+
+The eight samples are throwaway; write them fast and do not polish them.
+
+### Per-tenant vendor subsets (Decision 11)
+
+Today one tenant pulls from all eight connectors. For a carrier that is not
+plausible — a truck carries one GPS unit, one ELD and one dashcam. Model it
+properly:
+
+| Tenant | Vendors | Why |
+|---|---|---|
+| `acme-freight` (the demo tenant) | Samsara, Motive, Lytx | GPS + ELD + video — the realistic three-device fleet, and exactly the corroboration the detection rule needs |
+| `northstar-logistics` | Geotab, Omnitracs, Netradyne | A different stack entirely, which is the point |
+| `pinnacle-transport` | Verizon Connect, Platform Science | Two vendors — proves the rule degrades gracefully |
+
+`registry.ts` gains `connectorsFor(principal)` rather than exporting a flat
+list. That turns per-tenant vendor configuration from an assertion into a code
+path, and it makes the cross-vendor corroboration story defensible: three
+independent devices on one truck genuinely can disagree.
+
 ---
 
 ## Phase 3 — Pipeline and the scale mechanisms
@@ -309,31 +356,84 @@ NOW
    S3 raw                                            └──▶ IncidentOpened
 
 AFTER
-   collect ──▶ normalise ──┬──▶ putCurrentPosition  overwrite, 1/driver  [NEW]
-      │                    ├──▶ appendHistory       S3, cold path        [NEW]
-      ▼                    │
-   S3 raw                  └──▶ evaluate ──▶ detect ──▶ publish
-                                    │                      │
-                              bbox ─▶ exact,               └──▶ ExceptionRaised  ◀── exceptions only
-                              in-process, cached [NEW]          IncidentOpened
+   collect ──▶ normalise ──▶ [ src/aws/kinesis.ts ] ──▶ processBatch(records[])
+      │                        shards by driverId          │           [NEW]
+      ▼                                                    │
+   S3 raw                          ┌─────────────────┬─────┴──────────┐
+                                   ▼                 ▼                ▼
+                          putCurrentPosition   appendHistory      evaluate
+                          overwrite, 1/driver  S3, cold path          │
+                                [NEW]              [NEW]        resolveTerritory
+                                                                 + geofence
+                                                                bbox ─▶ exact
+                                                                    [NEW]
+                                                                      │
+                                                                      ▼
+                                                                  Exception[]
+                                                                      │
+                                                                   detect
+                                                            corroborate + merge
+                                                                      │
+                                                                      ▼
+                                                                  Incident[]
+                                                                      │
+                                                                   publish
+                                                                      │
+                                        ExceptionRaised ◀─────────────┤
+                                        IncidentOpened  ◀─────────────┘
+                                        (nothing else reaches the bus)
 ```
 
-1. **Hot/cold split** (§1) — `putCurrentPosition()` overwrites one item per
+1. **A stream stand-in** (Decision 12) — `src/aws/kinesis.ts`, alongside the
+   existing DynamoDB / S3 / EventBridge / Step Functions / Bedrock fakes. It
+   needs shards keyed by `driverId`, batch delivery with a size and a window,
+   and — the part that makes it worth writing — **poison-record bisect**, so
+   `BisectBatchOnFunctionError` is demonstrated rather than described. Without
+   this file, every batching claim in the repo is a comment.
+2. **Hot/cold split** (§1) — `putCurrentPosition()` overwrites one item per
    driver; history appends to the S3 stand-in.
-2. **Batched processing** (§2) — `processBatch(records[])` instead of
-   per-record, with the poison-record comment naming
-   `BisectBatchOnFunctionError`.
-3. **In-process geofencing** (§4) — wire the existing `bboxAround` /
-   `pointInPolygon` from `spatial.ts` into the hot path as a two-phase check,
-   module-scope cached. *This code already exists and is already tested; it just
-   is not on the ingest path yet.*
-4. **Only exceptions publish** — delete the `SignalsNormalized` fan-out.
+3. **Batched processing** (§2) — `processBatch(records[])`, never per-record.
+4. **`enrich` becomes `resolveTerritory`** — it does not disappear. Vendors send
+   `[lon, lat]`; the platform resolves which district and which geofences that
+   point falls in. Same step, same position in the pipeline, different join.
+5. **In-process geofencing** (§4) — wire the existing `bboxAround` /
+   `pointInPolygon` from `spatial.ts` into `resolveTerritory` as a two-phase
+   check, module-scope cached. *This code already exists and is already tested;
+   it just is not on the ingest path yet.*
+6. **Only exceptions publish** — delete the `SignalsNormalized` fan-out.
 
-`detectIncidents` keeps its two-independent-sources rule verbatim — it already
-implements §6 exactly, with sites swapped for drivers and the 150km merge
-becoming route-corridor proximity.
+### Where `Exception` and `Incident` are produced
 
-**~200–250 net new lines.**
+The two-level split from the domain spine maps onto two existing steps, which
+is why it costs almost nothing:
+
+| Step | Emits | Rule |
+|---|---|---|
+| `evaluate` | `Exception[]` | Deterministic per-driver rules over one batch: geofence breach, harsh braking, route deviation, idle, HOS risk, panic |
+| `detect` | `Incident[]` | Corroboration and merge across drivers — the thing that pages a human |
+
+### The merge radius is a bug if copied over
+
+`detectIncidents` currently merges sites within **150km**. Sites are cities, so
+that is right. Drivers are not: a district is ~50km across, so a 150km radius
+merges *every exception in the district into one incident, always*. The
+`road-closure` scenario would become indistinguishable from background noise,
+and the merge would stop being evidence of anything.
+
+Replace distance-only merging with **corridor identity plus a tight radius**:
+
+```
+merge two exceptions when
+    same route corridor           (the semantic join — drivers on one road)
+    AND within ~3km               (a road closure is a point, not a region)
+    AND within a 15-minute window (stale exceptions are not the same event)
+```
+
+The time window is new and necessary — sites do not move, drivers do, so two
+drivers passing the same point an hour apart are two events, not one.
+
+**~250–350 net new lines**, up from the earlier estimate: the Kinesis stand-in
+and the corridor-merge rule are both real code.
 
 ---
 
@@ -376,7 +476,7 @@ audience you built it for.
 
 ### Scenarios — the part that matters
 
-Five scripted situations, each of which exists to prove one architectural claim.
+Six scripted situations, each of which exists to prove one architectural claim.
 This is what turns fixture data into an argument:
 
 | Scenario | Proves |
@@ -385,9 +485,10 @@ This is what turns fixture data into an argument:
 | `gps-drift` — one driver deviates, nothing corroborates | The two-independent-sources rule: this is **not** an exception |
 | `harsh-braking` — telematics and dashcam agree | Cross-vendor corroboration raising a safety exception |
 | `hos-risk` — driver approaching hours-of-service limit | The agent + the Step Functions reassignment saga |
-| `panic` — driver panic button | "Real-time" means two different things; this path bypasses batching |
+| `panic` — driver panic button | "Real-time" means two different things; this path bypasses the batch window entirely — which is only demonstrable because Decision 12 adds a real stream stand-in |
+| `poison-record` — one unparseable vendor payload mid-batch | `BisectBatchOnFunctionError`: the batch splits, 3,599 records land, one goes to the failure destination. The classic Kinesis outage, shown not to happen |
 
-`gps-drift` is the most valuable of the five, because it demonstrates the system
+`gps-drift` is the most valuable of the six, because it demonstrates the system
 **declining** to alert. Anyone can show a dashboard lighting up; showing the
 noise filter working is the harder and more convincing thing.
 
@@ -438,6 +539,20 @@ shape"* — which is both accurate and still demonstrates the skill that matters
 - `mapbox.ts` — mostly unchanged; its style-spec output is consumed verbatim by
   the frontend in Phase 9
 
+**Carry the row-level security policies across.** `schema.sql` already enables
+RLS on `sites`, `service_regions` and `incidents` with a `tenant_isolation`
+policy reading a session variable. That is one of the four layers in the
+defence-in-depth claim, and renaming tables without renaming their policies
+would silently drop it — the tables would still exist, the isolation would not.
+New tables (`drivers`, `territories`, `geofences`, `route_corridors`) each need
+the policy attached.
+
+Districts add a second dimension: tenant isolation is the hard boundary, but a
+dispatcher scoped to DAL should not read PHX either. Extend the policy to read
+both `app.tenant_id` and `app.scope`, or state explicitly that scope is enforced
+at the application layer and RLS covers tenancy only. Either is defensible;
+leaving it ambiguous is not.
+
 ---
 
 ## Phase 6 — API
@@ -456,6 +571,18 @@ server-side matching, and `demo.ts` already proves the unmatched watcher is
 never woken. That demo moment gets considerably stronger when the filter is a
 district rather than a severity, and stronger again when Phase 9 puts it on
 screen.
+
+Do not miss `src/api/vtl/` — three files named for the old domain:
+
+| File | Becomes |
+|---|---|
+| `Query.site.request.vtl` | `Query.driver.request.vtl` |
+| `Query.site.response.vtl` | `Query.driver.response.vtl` |
+| `Query.signals.js` | `Query.telemetry.js` |
+
+These are VTL and APPSYNC_JS resolver code — **not type-checked, not executed by
+the test suite, and not covered by the `NetPulse` grep**. They are the single
+easiest thing in this migration to leave behind broken.
 
 ---
 
@@ -614,21 +741,40 @@ Independent of Phases 1–9; can run at any point after Phase 0.
 
 ---
 
-## Phase 11 — Tests
+## Phase 11 — Scenario tests
 
-40 tests. The four behaviours they pin — idempotent ingest, cross-tenant
-denial, the lon/lat swap, an agent refused a write tool — all survive the
-rename with new nouns.
+**The 43 existing tests are not this phase's work** (Decision 10). They are
+distributed across the phases that break them:
 
-Add three:
+| Test file | Tests | Repaired in |
+|---|---|---|
+| `platform/tenancy.test.ts` | 9 | Phase 1 — `Principal` gains `scope` |
+| `integrations/connector.test.ts` | 9 | Phase 2 — with the hand-written samples |
+| `pipeline/pipeline.test.ts` | 13 | Phase 3 — the largest repair |
+| `geo/spatial.test.ts` | 9 | Phase 5 — likely untouched; `spatial.ts` does not change |
 
-- **Telemetry does not reach the event bus; only exceptions do.** The
-  architecture's load-bearing claim; it should fail loudly if broken.
+Every one of them imports `Signal`, `Incident` or `detectIncidents`, so Phase 1
+breaks all 43 on contact. Leaving them broken until Phase 11 would mean running
+Phases 2–10 with no test signal at all — the exact stretch of work where a
+silent rename mistake is most likely and least visible.
+
+The four behaviours they pin — idempotent ingest, cross-tenant denial, the
+lon/lat swap, an agent refused a write tool — all survive with new nouns.
+
+### What this phase actually adds
+
+Five assertions that only exist once Phase 4's scenarios do:
+
+- **Telemetry does not reach the event bus.** Run all 3,600 records; assert the
+  bus received zero `Telemetry*` events. The architecture's load-bearing claim,
+  and the one most likely to be broken by a well-meaning later edit.
 - **`gps-drift` raises nothing.** The noise filter, pinned.
-- **`road-closure` raises exactly one incident** with 14 affected drivers.
-
-The scenarios from Phase 4 make these assertions trivial to write, which is a
-large part of why scenarios are worth building.
+- **`road-closure` raises exactly one incident** with 14 affected drivers — and
+  fails if the merge radius regresses to something that swallows the district.
+- **`poison-record` loses exactly one record.** 3,599 land, one reaches the
+  failure destination, the shard does not stall.
+- **`panic` bypasses the batch window.** Latency asserted against the clock,
+  which is only possible because Decision 4 made it injectable.
 
 ---
 
@@ -673,28 +819,76 @@ point forward.
 
 ---
 
+## Housekeeping — small files, easy to forget
+
+None of these are hard; all of them are invisible to `tsc` and to the test
+suite, which is exactly why they get left behind.
+
+| File | What changes | Phase |
+|---|---|---|
+| `.env.example` | Seven vendor keys (`MERAKI_API_KEY`, `MIST_API_TOKEN`, `ARUBA_CENTRAL_TOKEN`, `GENESYS_*`, `THOUSANDEYES_BEARER`, `SPLUNK_HEC_TOKEN`) → the new vendor set. Drop `MAPBOX_ACCESS_TOKEN` or mark it optional — Decision 5 means nothing needs it. Add `KINESIS_STREAM_NAME` | 0, 2 |
+| `package.json` | `name`, `description`, the eight `demo:*` scripts, plus `web` / `web:build` in Phase 9 | 0, 9 |
+| `src/api/vtl/` | Three resolver files named for the old domain | 6 |
+| `src/data/schema.sql` | RLS policies, not just table names | 5 |
+| `.github/workflows/` | Job names, plus a `web` build job | 10 |
+| `infra/terraform/` | Tags and resource names — string literals throughout | 10 |
+
+---
+
+## `demo.ts` — the eight sections, respecified
+
+703 lines, touched last, and the point where every rename converges. Fixing the
+target now keeps it a rewrite rather than an exploration:
+
+| `--only=` | Now | Becomes |
+|---|---|---|
+| `auth` | Cognito federation, custom claims, tenant isolation | Same, plus `scope` in the token and a dispatcher who cannot read another district |
+| `ingest` | Fan out to 8 vendors, normalise, correlate | Fan out to the tenant's 3 vendors, stream, batch, `resolveTerritory`, evaluate, detect |
+| `data` | DynamoDB Query vs Scan | Same, plus the hot/cold split: 60 driver items overwritten vs history appended |
+| `events` | EventBridge content routing | Same, plus the proof that 3,600 telemetry records produced zero bus events |
+| `graphql` | AppSync resolvers, RBAC, subscriptions | Same, with the district filter as the subscription example |
+| `rest` | API Gateway, validation, webhooks | Same |
+| `geo` | PostGIS, GeoJSON, TopoJSON, MapBox | Territory containment, geofence bbox→exact, nearest-available-driver |
+| `ai` | RAG over runbooks, agent tool loop | Same loop, fleet tools, and the refused `reassignDriver` call |
+
+Two sections earn new material rather than a rename: `events` gains the
+zero-telemetry-events proof, and `ingest` gains the batching and poison-record
+demonstration. The other six are substitution.
+
+---
+
 ## Execution notes
 
 **Ordering:** types → leaves → `demo.ts` last. `demo.ts` is 703 lines
 orchestrating all eight sections; touching it early means rewriting it twice.
 
-**Safety net:** run `npm run typecheck` after every phase. With a rename this
-wide, the compiler is what catches the misses. `npm test` after phases 3, 6
-and 8.
+**Safety net.** `npm run typecheck` after every phase — with a rename this wide,
+the compiler catches most of it. But two whole classes of error are invisible to
+it, and both need a deliberate pass:
+
+- **String literals.** Event sources (`'netpulse.ingest'`), DynamoDB key
+  prefixes, GraphQL field names, Terraform tags. Grep, do not trust `tsc`.
+- **Non-TypeScript files.** VTL and APPSYNC_JS resolvers, SQL, HCL, YAML.
+  Nothing checks these at all.
+
+**`npm test` must pass at the end of every phase**, which is only possible
+because Decision 10 repairs each test file inside the phase that breaks it.
 
 ```
-        ┌─▶ 2 ──▶ 3 ──▶ 4 ─┐
-        │                  │
-        ├─▶ 5 ─────────────┤
-   0 ──▶ 1 ─┤                  ├──▶ demo.ts ──▶ 9 ──▶ 11 ──▶ 12
-        ├─▶ 6 ─────────────┤       (backend)   (web)
-        │                  │
-        ├─▶ 7 ─────────────┤
-        │                  │
-        └─▶ 8 ─────────────┘
+   0 ──▶ 1 ──┬──▶ 2 ──▶ 3 ──▶ 4 ──┐
+             │                     │
+             ├──▶ 5 ───────────────┤
+             ├──▶ 6 ───────────────┼──▶ demo.ts ──▶ 9 ──▶ 11 ──▶ 12
+             ├──▶ 7 ───────────────┤    (backend)   (web)
+             └──▶ 8 ───────────────┘
 
    10 ──── independent, any point after 0
 ```
 
-Phase 4 (mock data) gates Phase 9 (frontend) in practice — a board with nothing
-moving on it is not worth building twice.
+Two real sequencing constraints, both learned the hard way by reading the code:
+
+- **Phase 4 gates Phase 9.** A board with nothing moving on it is not worth
+  building twice.
+- **Phase 2 and Phase 4 interlock.** Phase 2 writes the vendor payload types and
+  one throwaway sample each; Phase 4 replaces the samples with the generator.
+  Taken in strict sequence they deadlock.
