@@ -168,6 +168,11 @@ export const inProcessTransport: Transport = {
   },
 
   subscribeExceptions(districtId, onException) {
+    // Seed here too. This path used to rely on loadBoard() having run first,
+    // which is true today and is not a guarantee - an effect-order change, or
+    // a component that subscribes without loading, would break it silently.
+    if (!seeded) { seed(); seeded = true; }
+
     // The offline stand-in for the AppSync WebSocket. The real one is a
     // filtered subscription; the filter is applied HERE for the same reason
     // AppSync applies it server-side - a Phoenix dispatcher should never

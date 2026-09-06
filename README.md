@@ -8,7 +8,7 @@ It runs on your machine with **no AWS account and no network**:
 
 ```bash
 npm start        # the backend, narrated, in your terminal
-npm run web      # the dispatch board, at localhost:5173
+npm run web      # the dispatch board, at localhost:5180
 ```
 
 <sub>Node 22+ for the backend — it is TypeScript and Node runs it directly via

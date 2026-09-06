@@ -112,7 +112,35 @@ export function sha256Bytes(bytes: Uint8Array): Uint8Array {
  */
 export type UuidFn = () => string;
 
-const cryptoUuid: UuidFn = () => globalThis.crypto.randomUUID();
+/**
+ * A real random UUID, with a fallback that matters more than it looks.
+ *
+ * `crypto.randomUUID()` is only available in a SECURE CONTEXT: https, or
+ * localhost. Serve the same page over plain http on a LAN address - which is
+ * what happens behind a VPN that intercepts loopback, or when you open the
+ * board from a phone on the same network - and it is simply `undefined`. The
+ * page then dies on the first id it needs, with a TypeError that says nothing
+ * about the actual cause.
+ *
+ * `crypto.getRandomValues` carries no such restriction, so the fallback is a
+ * hand-assembled v4: same randomness source, same shape, no secure-context
+ * requirement.
+ */
+const cryptoUuid: UuidFn = () => {
+  const c = globalThis.crypto;
+  if (typeof c?.randomUUID === 'function') return c.randomUUID();
+
+  const bytes = new Uint8Array(16);
+  c.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;   // version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;   // variant 10xx
+
+  const hex = [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return [
+    hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16),
+    hex.slice(16, 20), hex.slice(20),
+  ].join('-');
+};
 let currentUuid: UuidFn = cryptoUuid;
 
 export function setUuid(fn: UuidFn): void { currentUuid = fn; }
