@@ -208,3 +208,51 @@ test('the whole module graph loads with no Node globals at all', async () => {
     (globalThis as { Buffer?: unknown }).Buffer = realBuffer;
   }
 });
+
+// ---------------------------------------------------------------------------
+// Position replay
+// ---------------------------------------------------------------------------
+
+test('position replay moves in-scope drivers and never anyone else', async () => {
+  await signInAs(DISPATCHER);
+
+  const ticks: Array<{ ids: string[]; at: string }> = [];
+  const stop = inProcessTransport.subscribePositions('dal', (t) => {
+    ticks.push({ ids: [...t.positions.keys()], at: t.at });
+  });
+
+  // The first tick is emitted synchronously, so the fleet is placed before
+  // the interval ever fires - a board must not open on an empty map.
+  assert.ok(ticks.length >= 1, 'the first tick must be immediate');
+  // One more interval, with margin.
+  await new Promise((r) => setTimeout(r, 1700));
+  stop();
+
+  assert.ok(ticks.length >= 2, 'the interval must keep ticking');
+
+  const dal = await inProcessTransport.loadBoard('dal');
+  const allowed = new Set(dal.drivers.map((d) => d.driverId));
+  for (const t of ticks) {
+    // Every position belongs to a driver the caller could have loaded. The
+    // tick is the SAME boundary as the board, not a second, looser one.
+    assert.ok(t.ids.every((id) => allowed.has(id)));
+    assert.ok(t.ids.length > 0);
+  }
+
+  // Time advances. The header clock follows this, so it must not stand still.
+  assert.notEqual(ticks[0].at, ticks[1].at);
+});
+
+test('a Dallas dispatcher subscribing to Phoenix positions receives nothing', async () => {
+  await signInAs(DISPATCHER);
+
+  const seen: number[] = [];
+  const stop = inProcessTransport.subscribePositions('phx', (t) => seen.push(t.positions.size));
+  stop();
+
+  // The district is a view; the token is the boundary. Same rule as loadBoard,
+  // and it has to hold on this channel too or the map would leak what the
+  // roster refuses.
+  assert.ok(seen.length >= 1);
+  assert.ok(seen.every((n) => n === 0));
+});

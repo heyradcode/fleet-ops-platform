@@ -4,16 +4,23 @@
  * One screen, three panes: who is out there (roster), where they are (map),
  * and what needs a decision (feed). A dispatcher watches this for a shift, so
  * the layout does not move and nothing animates that does not carry meaning.
+ *
+ * The one thing that DOES move is the fleet. Positions replay from the seeded
+ * thirty-minute trace on a coarse tick - the same cadence a real client polls
+ * at, because pushing 11,000 readings/sec of pin movement would be useless to
+ * a human and ruinous to pay for. Exceptions, by contrast, arrive on the push
+ * channel the moment the rules raise them. That asymmetry is the architecture,
+ * and the board shows it rather than describing it.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { DispatchMap } from './DispatchMap.tsx';
+import { DispatchMap, type BasemapMode } from './DispatchMap.tsx';
 import { DriverPanel } from './DriverPanel.tsx';
 import { inProcessTransport } from './transport/in-process.ts';
 import { SignIn } from './SignIn.tsx';
 import { useRestoredSession } from './auth/useSession.ts';
 import { localAuth } from './auth/local.ts';
 import type { Session } from './auth/index.ts';
-import type { BoardSnapshot, Driver, Exception } from './transport/index.ts';
+import type { BoardSnapshot, Driver, Exception, PositionTick } from './transport/index.ts';
 
 /** 11 hours is the US federal daily driving limit. The strip is scaled to it. */
 const HOS_MAX_MINUTES = 660;
@@ -31,16 +38,12 @@ const DISTRICTS = [
 
 /**
  * The shell. Sign-in gates everything, so there is no render path that reads
- * fleet data without a verified token behind it.
+ * fleet data without a verified token behind it. The transport learns about
+ * the session inside useRestoredSession, synchronously, BEFORE React does -
+ * see that file for why the order matters.
  */
 export function App() {
   const [session, setSession] = useRestoredSession();
-
-  // Install the session before the board mounts, not inside it - the transport
-  // throws without one, deliberately.
-  useEffect(() => {
-    inProcessTransport.setSession(session?.principal ?? null);
-  }, [session]);
 
   if (!session) return <SignIn onSignedIn={setSession} />;
 
@@ -65,17 +68,28 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
   const [board, setBoard] = useState<BoardSnapshot | null>(null);
   const [selected, setSelected] = useState<string | undefined>();
   const [live, setLive] = useState<Exception[]>([]);
+  const [tick, setTick] = useState<PositionTick | null>(null);
+  const [basemap, setBasemap] = useState<BasemapMode | undefined>();
+  const [basemapActual, setBasemapActual] = useState<BasemapMode>('canvas');
 
+  // --- Snapshot ------------------------------------------------------------
   useEffect(() => {
     let stale = false;
     setLive([]);
+    setTick(null);
     inProcessTransport.loadBoard(districtId).then((snapshot) => {
       if (!stale) setBoard(snapshot);
     });
     return () => { stale = true; };
   }, [districtId]);
 
-  // The live channel. Exceptions only - positions are not pushed.
+  // --- Positions: polled cadence, replayed from the trace ------------------
+  useEffect(
+    () => inProcessTransport.subscribePositions(districtId, setTick),
+    [districtId],
+  );
+
+  // --- Exceptions: the push channel. Only these are pushed, never positions.
   useEffect(() => {
     return inProcessTransport.subscribeExceptions(districtId, (exception) => {
       setLive((prev) => (prev.some((e) => e.exceptionId === exception.exceptionId)
@@ -84,20 +98,39 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
     });
   }, [districtId]);
 
+  // The fleet as it is NOW: the snapshot's roster, with each driver moved to
+  // wherever the latest tick put them. The snapshot is the source of truth for
+  // who exists; the tick is only ever a position.
+  const drivers = useMemo<Driver[]>(() => {
+    const base = board?.drivers ?? [];
+    if (!tick) return base;
+    return base.map((d) => {
+      const p = tick.positions.get(d.driverId);
+      return p ? { ...d, lon: p.lon, lat: p.lat, status: p.status } : d;
+    });
+  }, [board, tick]);
+
   const flagged = useMemo(() => {
     const ids = new Set<string>();
     for (const i of board?.incidents ?? []) for (const d of i.driverIds) ids.add(d);
     return ids;
   }, [board]);
 
-  const drivers = board?.drivers ?? [];
-  const paged = board?.incidents.flatMap((i) => i.exceptionIds) ?? [];
-  const pagedSet = useMemo(() => new Set(paged), [board]);
+  const pagedSet = useMemo(
+    () => new Set(board?.incidents.flatMap((i) => i.exceptionIds) ?? []),
+    [board],
+  );
 
+  // The feed: what the rules raised in the snapshot, plus whatever has arrived
+  // live since. Live arrivals are marked, so the push channel is visible as a
+  // thing that happens rather than a count in a corner.
+  const liveIds = useMemo(() => new Set(live.map((e) => e.exceptionId)), [live]);
   const feed = useMemo(() => {
-    const all = [...(board?.exceptions ?? [])];
-    return all.sort((a, b) => Date.parse(b.raisedAt) - Date.parse(a.raisedAt));
-  }, [board]);
+    const byId = new Map<string, Exception>();
+    for (const e of board?.exceptions ?? []) byId.set(e.exceptionId, e);
+    for (const e of live) byId.set(e.exceptionId, e);
+    return [...byId.values()].sort((a, b) => Date.parse(b.raisedAt) - Date.parse(a.raisedAt));
+  }, [board, live]);
 
   // Which tabs this token permits. Tenant scope sees all of them; a district
   // dispatcher sees exactly one, so the row becomes a label rather than a
@@ -111,7 +144,9 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
   const heldCount = board?.heldBack.length ?? 0;
 
   const selectedDriver = drivers.find((d) => d.driverId === selected);
-  const selectedExceptions = (board?.exceptions ?? []).filter((e) => e.driverId === selected);
+  const selectedExceptions = feed.filter((e) => e.driverId === selected);
+
+  const moving = drivers.filter((d) => d.status === 'driving').length;
 
   return (
     <div className="shell">
@@ -155,9 +190,17 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
         <div className="tally is-warning">
           <span className="n">{heldCount}</span> held
         </div>
-        <div className="clock">
+
+        {/* The clock follows the replay, so what the board shows and what time
+            it claims to be cannot disagree. */}
+        <div className="clock" title="Replaying the seeded trace">
           <span className="pulse" aria-hidden="true" />
-          <span>14:30:00Z</span>
+          <span>{tick ? tick.at.slice(11, 19) + 'Z' : '--:--:--'}</span>
+          {tick && (
+            <span className="replay" aria-label="Replay progress">
+              <span className="replay-fill" style={{ width: `${((tick.index + 1) / tick.total) * 100}%` }} />
+            </span>
+          )}
         </div>
 
         <div className="whoami">
@@ -171,7 +214,9 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
         <aside className="roster">
           <div className="pane-head">
             <span>Roster</span>
-            <span className="mono">{drivers.length}</span>
+            <span className="mono">
+              <span className="roster-moving">{moving}</span> / {drivers.length}
+            </span>
           </div>
           <div className="roster-list">
             {drivers.map((d) => (
@@ -183,9 +228,10 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
                 onSelect={() => setSelected(d.driverId)}
               />
             ))}
-            {drivers.length === 0 && (
+            {drivers.length === 0 && board && (
               <p className="empty">No drivers on shift in this district.</p>
             )}
+            {!board && <p className="empty">Loading the roster…</p>}
           </div>
         </aside>
 
@@ -196,6 +242,8 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
               flagged={flagged}
               selectedId={selected}
               onSelect={setSelected}
+              basemap={basemap}
+              onBasemap={setBasemapActual}
             />
 
             <div className="legend">
@@ -214,19 +262,41 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
               <div className="legend-row">
                 <span className="legend-line" /> route corridor
               </div>
+              <div className="legend-row">
+                <span className="legend-halo" /> exception
+              </div>
+
+              {/* The basemap is a network resource and this board runs offline,
+                  so the fallback is a first-class mode rather than a failure. */}
+              <button
+                className="legend-toggle"
+                onClick={() => setBasemap(basemapActual === 'streets' ? 'canvas' : 'streets')}
+                title={basemapActual === 'streets'
+                  ? 'Streets from OpenFreeMap. Switch to the plain canvas.'
+                  : 'Plain canvas. Switch to streets (needs network).'}
+              >
+                <span className={`legend-mode is-${basemapActual}`} />
+                {basemapActual === 'streets' ? 'streets' : 'canvas'}
+              </button>
             </div>
 
             <p className="scale-note">
-              {drivers.length} drivers, {live.length > 0 ? live.length : 'no'} live
-              {live.length === 1 ? ' exception' : ' exceptions'}. Positions refresh on a
-              poll; only exceptions are pushed.
+              <b>{drivers.length}</b> drivers, <b>{moving}</b> moving.{' '}
+              {live.length > 0
+                ? <><b>{live.length}</b> live {live.length === 1 ? 'exception' : 'exceptions'} pushed.</>
+                : 'Nothing pushed yet.'}
+              <br />
+              <span className="scale-sub">Positions poll every tick. Only exceptions are pushed.</span>
             </p>
           </div>
 
           <section className="feed">
             <div className="pane-head">
               <span>Exceptions</span>
-              <span className="mono">{feed.length}</span>
+              <span className="mono">
+                {live.length > 0 && <span className="feed-live">{live.length} live</span>}
+                {feed.length}
+              </span>
             </div>
             <div className="feed-list">
               {feed.map((e) => (
@@ -234,10 +304,11 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
                   key={e.exceptionId}
                   exception={e}
                   paged={pagedSet.has(e.exceptionId)}
+                  live={liveIds.has(e.exceptionId)}
                   onSelect={() => setSelected(e.driverId)}
                 />
               ))}
-              {feed.length === 0 && (
+              {feed.length === 0 && board && (
                 <p className="empty">Nothing raised in this district. Quiet is the goal.</p>
               )}
             </div>
@@ -272,8 +343,8 @@ function DriverRow({ driver, flagged, selected, onSelect }: {
     <button className="driver" aria-selected={selected} onClick={onSelect}>
       <span className={`status-bar status-${driver.status}`} aria-hidden="true" />
 
-      <span style={{ minWidth: 0 }}>
-        <span className="driver-id">{driver.driverId.replace('drv-', '')}</span>{' '}
+      <span className="driver-who">
+        <span className="driver-id">{driver.driverId.replace('drv-', '')}</span>
         <span className="driver-name">{driver.name}</span>
       </span>
 
@@ -315,13 +386,17 @@ function HoursOfServiceStrip({ minutes, level }: {
   );
 }
 
-function ExceptionRow({ exception, paged, onSelect }: {
+function ExceptionRow({ exception, paged, live, onSelect }: {
   exception: Exception;
   paged: boolean;
+  live: boolean;
   onSelect(): void;
 }) {
   return (
-    <button className={`exception ${paged ? '' : 'is-noise'}`} onClick={onSelect}>
+    <button
+      className={`exception ${paged ? '' : 'is-noise'} ${live ? 'is-live' : ''}`}
+      onClick={onSelect}
+    >
       <span className="exception-time">{exception.raisedAt.slice(11, 19)}</span>
       <span className="exception-kind">{exception.kind.replace(/-/g, ' ')}</span>
       <span className="exception-detail">

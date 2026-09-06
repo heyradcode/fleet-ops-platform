@@ -222,9 +222,12 @@ button {
    Body: roster | map over feed
    ========================================================================== */
 
+/* The map is the product; the panes serve it. 300px is the narrowest the
+   roster stays readable at - id, name, EXC flag, HOS strip, clock - and every
+   pixel past that is taken from the thing a dispatcher is actually watching. */
 .body {
   display: grid;
-  grid-template-columns: 340px 1fr;
+  grid-template-columns: 300px 1fr;
   min-height: 0;
 }
 
@@ -539,7 +542,7 @@ button {
    the trace stays as dense as the roster because it is a log, not prose.
    ========================================================================== */
 
-.body.has-panel { grid-template-columns: 340px 1fr 330px; }
+.body.has-panel { grid-template-columns: 300px 1fr 320px; }
 
 .panel {
   display: flex;
@@ -738,8 +741,15 @@ button {
 }
 
 @media (max-width: 1180px) {
-  .body.has-panel { grid-template-columns: 300px 1fr; }
+  .body.has-panel { grid-template-columns: 280px 1fr; }
   .panel { display: none; }
+}
+
+@media (max-width: 880px) {
+  .body, .body.has-panel { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
+  .roster { border-right: 0; border-top: 1px solid var(--line); max-height: 38vh; order: 2; }
+  .stage { grid-template-rows: 1fr 160px; }
+  .whoami, .tally { display: none; }
 }
 
 /* ==========================================================================
@@ -958,3 +968,129 @@ select.field-input { cursor: pointer; }
 }
 
 .signout:hover { color: var(--text-strong); }
+
+/* ==========================================================================
+   Review pass: replay, live feed, basemap chrome
+   ========================================================================== */
+
+/* Roster rows: id and name stacked tight, so the row survives at 300px. */
+.driver-who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.15;
+}
+
+.roster-moving { color: var(--driving); }
+
+/* The replay progress, inside the clock. A hairline, not a bar: it should be
+   read as "where in the shift we are", not as a loading indicator. */
+.replay {
+  position: relative;
+  width: 44px;
+  height: 2px;
+  background: var(--line-bright);
+  margin-left: 4px;
+}
+
+.replay-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--amber);
+  transition: width 400ms linear;
+}
+
+/* --- Map chrome ----------------------------------------------------------- */
+
+/* A soft vignette pins the map into the console instead of letting the
+   basemap's brightness compete with the chrome around it. */
+.map-wrap::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  box-shadow: inset 0 0 60px 8px rgba(14, 17, 22, 0.55);
+}
+
+.legend-halo {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: rgba(229, 72, 77, 0.28);
+  box-shadow: 0 0 0 2px rgba(229, 72, 77, 0.28);
+}
+
+.legend-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 4px;
+  padding-top: 7px;
+  border-top: 1px solid var(--line);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+  text-align: left;
+}
+
+.legend-toggle:hover { color: var(--text-strong); }
+
+.legend-mode {
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--dim);
+}
+
+.legend-mode.is-streets { background: var(--on-break); border-color: var(--on-break); }
+.legend-mode.is-canvas { background: transparent; }
+
+.scale-note b { color: var(--text-strong); font-weight: 600; }
+.scale-sub { color: var(--faint); font-size: 10px; }
+
+/* MapLibre's default controls are white boxes. Bring them into the palette. */
+.maplibregl-ctrl-group {
+  background: var(--panel) !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+.maplibregl-ctrl-group button {
+  background-color: var(--panel) !important;
+  border-color: var(--line) !important;
+}
+
+.maplibregl-ctrl-group button + button { border-top: 1px solid var(--line) !important; }
+
+.maplibregl-ctrl-zoom-in .maplibregl-ctrl-icon,
+.maplibregl-ctrl-zoom-out .maplibregl-ctrl-icon {
+  filter: invert(0.75);
+}
+
+.maplibregl-ctrl-attrib {
+  background: rgba(21, 26, 33, 0.85) !important;
+  color: var(--faint) !important;
+  font-family: var(--ui) !important;
+  font-size: 10px !important;
+}
+
+.maplibregl-ctrl-attrib a { color: var(--dim) !important; }
+.maplibregl-ctrl-attrib-button { filter: invert(0.7); }
+
+/* --- Live arrivals in the feed ------------------------------------------- */
+
+.feed-live {
+  color: var(--amber);
+  margin-right: 8px;
+}
+
+/* A row that arrived on the push channel flashes amber once, then settles.
+   Once - a feed that keeps blinking is a feed people learn to ignore. */
+.exception.is-live { animation: arrive 1.6s ease-out 1; }
+
+@keyframes arrive {
+  0% { background: rgba(240, 162, 2, 0.22); box-shadow: inset 2px 0 0 var(--amber); }
+  100% { background: transparent; box-shadow: inset 2px 0 0 transparent; }
+}

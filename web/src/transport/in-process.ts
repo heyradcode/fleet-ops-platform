@@ -10,8 +10,9 @@
  * what the RULES decided, not a hand-written list of things that look like
  * alerts. If the corroboration rule changes, this board changes with it.
  */
-import type { BoardSnapshot, Transport } from './index.ts';
-import type { Exception, Principal } from '../../../src/platform/types.ts';
+import type { BoardSnapshot, PositionTick, Transport } from './index.ts';
+import type { Driver, Exception, Principal } from '../../../src/platform/types.ts';
+import { generateTrace } from '../../../src/data/generate.ts';
 
 import { setClock, fixedClock } from '../../../src/platform/clock.ts';
 import { setRandom, seededRandom } from '../../../src/platform/random.ts';
@@ -189,6 +190,51 @@ export const inProcessTransport: Transport = {
       principal: caller(),
       tools: TOOL_SPECS,
     });
+  },
+
+  subscribePositions(districtId, onTick) {
+    if (!seeded) { seed(); seeded = true; }
+
+    const principal = caller();
+    // The same boundary as loadBoard: the token decides which drivers exist,
+    // and the district is a view on top of that. A tick never carries a
+    // position the caller could not have loaded.
+    const visible = new Set(
+      withinScope(principal, allDrivers(principal))
+        .filter((d) => !districtId || d.districtId === districtId)
+        .map((d) => d.driverId),
+    );
+
+    // The seeded trace: 60 ticks at 30s, every driver, positions interpolated
+    // along real corridors. Generated once per subscription - ~3,600 records.
+    const trace = generateTrace({ tenantId: principal.tenantId, ticks: 60 });
+
+    let i = 0;
+    let cancelled = false;
+
+    const emit = () => {
+      if (cancelled) return;
+      const tick = trace[i % trace.length];
+      const positions: PositionTick['positions'] = new Map();
+      for (const r of tick.readings) {
+        if (!visible.has(r.driverId) || !r.location) continue;
+        positions.set(r.driverId, {
+          lon: r.location.lon,
+          lat: r.location.lat,
+          status: r.attributes.status as Driver['status'],
+        });
+      }
+      onTick({ at: tick.at, index: i % trace.length, total: trace.length, positions });
+      i++;
+    };
+
+    // First tick immediately, so the fleet is placed before the interval
+    // fires; then one every 1.5s. Thirty simulated minutes in ninety real
+    // seconds: fast enough to see movement, slow enough to read.
+    emit();
+    const timer = setInterval(emit, 1500);
+
+    return () => { cancelled = true; clearInterval(timer); };
   },
 
   subscribeExceptions(districtId, onException) {

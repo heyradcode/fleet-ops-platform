@@ -35,7 +35,29 @@ export type BoardSnapshot = {
   heldBack: Exception[];
 };
 
+/** One tick of position replay: where every in-scope driver is at that instant. */
+export type PositionTick = {
+  at: string;
+  index: number;
+  total: number;
+  positions: Map<string, { lon: number; lat: number; status: Driver['status'] }>;
+};
+
 export type Transport = {
+  /**
+   * Position replay.
+   *
+   * NOT a subscription in the AppSync sense, and the distinction is the
+   * architecture: positions are never pushed. A real client polls them on a
+   * coarse tick, because 11,000 readings/sec of pin movement is not information
+   * a human can use. This replays the seeded 30-minute trace on that cadence,
+   * which is what makes the board a product rather than a screenshot.
+   */
+  subscribePositions(
+    districtId: string | undefined,
+    onTick: (tick: PositionTick) => void,
+  ): () => void;
+
   /**
    * Install the signed-in session.
    *
