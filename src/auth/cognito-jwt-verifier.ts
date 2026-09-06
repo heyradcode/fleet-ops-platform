@@ -39,10 +39,11 @@
  */
 import { b64urlDecode, b64urlDecodeText, b64urlEncode, hmacSha256, timingSafeEqual } from '../platform/crypto.ts';
 import type { Principal, TenantId } from '../platform/types.ts';
+import { env } from '../platform/env.ts';
 
 const DEMO_SECRET = 'demo-only-not-a-real-signing-key';
-const ISSUER = process.env.COGNITO_ISSUER ?? 'https://cognito-idp.us-east-1.amazonaws.com/us-east-1_ABC123DEF';
-const CLIENT_ID = process.env.COGNITO_APP_CLIENT_ID ?? '1h57kf5cpq17m0eml12EXAMPLE';
+const ISSUER = env('COGNITO_ISSUER', 'https://cognito-idp.us-east-1.amazonaws.com/us-east-1_ABC123DEF');
+const CLIENT_ID = env('COGNITO_APP_CLIENT_ID', '1h57kf5cpq17m0eml12EXAMPLE');
 
 /** The claims Cognito puts in an access token, plus our custom ones. */
 export type CognitoClaims = {

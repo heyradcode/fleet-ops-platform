@@ -34,11 +34,12 @@
  */
 import { sha256 } from '../platform/crypto.ts';
 import { log } from '../platform/logger.ts';
+import { env } from '../platform/env.ts';
 
 export const MODELS = {
   /** Bedrock IDs are prefixed. The bare `claude-opus-5` is the first-party ID. */
-  text: process.env.BEDROCK_TEXT_MODEL_ID ?? 'anthropic.claude-opus-5',
-  embed: process.env.BEDROCK_EMBED_MODEL_ID ?? 'amazon.titan-embed-text-v2:0',
+  text: env('BEDROCK_TEXT_MODEL_ID', 'anthropic.claude-opus-5'),
+  embed: env('BEDROCK_EMBED_MODEL_ID', 'amazon.titan-embed-text-v2:0'),
 };
 
 /** Anthropic Messages API tool spec - identical shape on Bedrock. */

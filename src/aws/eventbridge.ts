@@ -23,6 +23,7 @@
  */
 import { log } from '../platform/logger.ts';
 import { nowIso } from '../platform/clock.ts';
+import { env } from '../platform/env.ts';
 
 export type EventEnvelope<T = unknown> = {
   source: string;          // e.g. 'meridian.ingest'
@@ -109,4 +110,4 @@ function matchDetail(pattern: Record<string, unknown>, detail: Record<string, un
   });
 }
 
-export const bus = new EventBus(process.env.EVENT_BUS_NAME ?? 'meridian-dev-bus');
+export const bus = new EventBus(env('EVENT_BUS_NAME', 'meridian-dev-bus'));

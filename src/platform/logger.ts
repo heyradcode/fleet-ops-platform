@@ -1,3 +1,4 @@
+import { envFlag, envIs } from './env.ts';
 /**
  * Structured logging. On Lambda, one JSON line per event -> CloudWatch Logs ->
  * queryable with CloudWatch Logs Insights. Never console.log a bare string in
@@ -17,7 +18,7 @@ let correlationId = 'local';
 export function setCorrelationId(id: string) { correlationId = id; }
 
 function emit(level: Level, msg: string, fields: Record<string, unknown> = {}) {
-  if (process.env.LOG_FORMAT === 'json') {
+  if (envIs('LOG_FORMAT', 'json')) {
     process.stdout.write(JSON.stringify({ level, msg, correlationId, ...fields }) + '\n');
   } else {
     const extra = Object.keys(fields).length
@@ -34,7 +35,7 @@ function fmt(v: unknown): string {
 }
 
 export const log = {
-  debug: (m: string, f?: Record<string, unknown>) => { if (process.env.DEBUG) emit('debug', m, f); },
+  debug: (m: string, f?: Record<string, unknown>) => { if (envFlag('DEBUG')) emit('debug', m, f); },
   info: (m: string, f?: Record<string, unknown>) => emit('info', m, f),
   warn: (m: string, f?: Record<string, unknown>) => emit('warn', m, f),
   error: (m: string, f?: Record<string, unknown>) => emit('error', m, f),

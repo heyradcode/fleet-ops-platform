@@ -34,6 +34,7 @@
  */
 import type { Principal } from '../platform/types.ts';
 import { log } from '../platform/logger.ts';
+import { env } from '../platform/env.ts';
 
 export type Item = Record<string, unknown> & { PK: string; SK: string; GSI1PK?: string; GSI1SK?: string };
 
@@ -114,7 +115,7 @@ export class DynamoTable {
   size(): number { return [...this.#items.values()].reduce((n, p) => n + p.size, 0); }
 }
 
-export const mainTable = new DynamoTable(process.env.TABLE_NAME ?? 'meridian-dev-main');
+export const mainTable = new DynamoTable(env('TABLE_NAME', 'meridian-dev-main'));
 
 /** Key builders live next to the table so the layout is documented in one place. */
 export const keys = {

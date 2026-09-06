@@ -47,6 +47,7 @@
  */
 import { log } from '../platform/logger.ts';
 import { sha256 } from '../platform/crypto.ts';
+import { env } from '../platform/env.ts';
 
 export type StreamRecord<T> = {
   /** What Kinesis orders and shards on. Here: the driver id. */
@@ -241,5 +242,5 @@ export class KinesisStream<T> {
 }
 
 export const telemetryStream = new KinesisStream<unknown>(
-  process.env.KINESIS_STREAM_NAME ?? 'meridian-dev-telemetry',
+  env('KINESIS_STREAM_NAME', 'meridian-dev-telemetry'),
 );

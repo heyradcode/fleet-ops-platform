@@ -81,6 +81,21 @@ jobs:
           fi
           echo "No node: builtins outside the Node adapter and tests."
 
+          # `process` is not defined in a browser - not undefined, UNBOUND, so
+          # reading process.env throws a ReferenceError. Every one of these
+          # reads happens at module scope, so the failure is a blank page
+          # rather than a broken feature.
+          #
+          # This check exists because the node:-import check above did NOT
+          # catch it: that one looks for imports, and this is a bare global.
+          # Configuration goes through src/platform/env.ts.
+          if grep -rnE "^[^*]*[^a-zA-Z.]process\.env" src/ --include="*.ts"              | grep -v '.test.ts' | grep -v 'platform/env.ts' | grep -q .; then
+            echo "process.env read outside platform/env.ts - this is a blank page in the browser:"
+            grep -rnE "^[^*]*[^a-zA-Z.]process\.env" src/ --include="*.ts"               | grep -v '.test.ts' | grep -v 'platform/env.ts'
+            exit 1
+          fi
+          echo "No bare process.env outside platform/env.ts."
+
   # ---------------------------------------------------------------------------
   web:
     name: dispatch board

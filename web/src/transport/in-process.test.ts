@@ -101,3 +101,40 @@ test('a board loaded twice is identical', async () => {
   assert.deepEqual(a.drivers, b.drivers);
   assert.deepEqual(a.exceptions.map((e) => e.kind), b.exceptions.map((e) => e.kind));
 });
+
+// ---------------------------------------------------------------------------
+// The browser contract
+// ---------------------------------------------------------------------------
+
+test('the whole module graph loads with no Node globals at all', async () => {
+  // THE TEST THAT WOULD HAVE CAUGHT THE BLANK PAGE.
+  //
+  // `process` is not defined in a browser - not undefined, UNBOUND - so
+  // `process.env.FOO` throws a ReferenceError rather than returning undefined.
+  // Every read of it here happened at module scope, so the bundle threw while
+  // evaluating and React never rendered: a blank page and one console error
+  // pointing at a line that looks completely ordinary.
+  //
+  // Neither `tsc`, nor the 89 tests, nor `vite build` caught it. A bundler
+  // resolves imports; it does not execute module bodies. The only thing that
+  // finds this class of bug is running the graph without the globals Node
+  // happens to provide, which is what this does.
+  const realProcess = globalThis.process;
+  const realBuffer = (globalThis as { Buffer?: unknown }).Buffer;
+
+  delete (globalThis as { process?: unknown }).process;
+  delete (globalThis as { Buffer?: unknown }).Buffer;
+
+  try {
+    // A fresh module graph, so module-scope initialisers actually re-run.
+    const url = './in-process.ts?browser-contract=' + Date.now();
+    const { inProcessTransport } = await import(url) as typeof import('./in-process.ts');
+    const board = await inProcessTransport.loadBoard('dal');
+
+    assert.ok(board.drivers.length > 0);
+    assert.ok(board.exceptions.length > 0);
+  } finally {
+    globalThis.process = realProcess;
+    (globalThis as { Buffer?: unknown }).Buffer = realBuffer;
+  }
+});

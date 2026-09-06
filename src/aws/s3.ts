@@ -15,6 +15,7 @@
 import { uuid } from '../platform/crypto.ts';
 import { log } from '../platform/logger.ts';
 import type { RawRecord, Telemetry } from '../platform/types.ts';
+import { env } from '../platform/env.ts';
 
 export class S3Bucket {
   readonly name: string;
@@ -42,7 +43,7 @@ export class S3Bucket {
   }
 }
 
-export const rawBucket = new S3Bucket(process.env.RAW_BUCKET ?? 'meridian-dev-raw');
+export const rawBucket = new S3Bucket(env('RAW_BUCKET', 'meridian-dev-raw'));
 
 export function archiveRaw(record: RawRecord): string {
   const d = new Date(record.fetchedAt);
@@ -86,7 +87,7 @@ export function archiveRaw(record: RawRecord): string {
  * one object per record would cost more in PUT requests than in storage, and
  * Athena would spend its time opening files rather than reading them.
  */
-export const historyBucket = new S3Bucket(process.env.HISTORY_BUCKET ?? 'meridian-dev-history');
+export const historyBucket = new S3Bucket(env('HISTORY_BUCKET', 'meridian-dev-history'));
 
 export function appendHistory(readings: Telemetry[]): string | undefined {
   if (readings.length === 0) return undefined;

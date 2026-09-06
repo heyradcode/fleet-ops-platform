@@ -33,6 +33,7 @@ import { cosineSimilarity, embed, tokenize } from '../aws/bedrock.ts';
 import { getRunbooks } from '../platform/runbook-loader.ts';
 import type { TenantId } from '../platform/types.ts';
 import { log } from '../platform/logger.ts';
+import { env } from '../platform/env.ts';
 
 export type Chunk = {
   id: string;
@@ -105,7 +106,7 @@ export class KnowledgeBase {
   readonly id: string;
   #chunks: Chunk[] = [];
 
-  constructor(id = process.env.BEDROCK_KNOWLEDGE_BASE_ID ?? 'KB-local') {
+  constructor(id = env('BEDROCK_KNOWLEDGE_BASE_ID', 'KB-local')) {
     this.id = id;
   }
 
