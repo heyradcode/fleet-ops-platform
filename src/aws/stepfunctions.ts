@@ -17,7 +17,7 @@
  * src/pipeline/state-machine.asl.json, which mirrors this executor state
  * for state. This class exists so the pipeline runs in your terminal.
  */
-import { log } from '../platform/logger.ts';
+import { log, out } from '../platform/logger.ts';
 
 export type TaskFn<I, O> = (input: I) => Promise<O> | O;
 export type RetryPolicy = { maxAttempts: number; intervalMs: number; backoffRate: number };
@@ -104,7 +104,7 @@ export class StateMachine {
       const bar = '#'.repeat(Math.min(20, Math.ceil(h.ms / 5)));
       const line = '   \x1b[90m' + h.type.padEnd(6) + '\x1b[0m ' + h.state.padEnd(24) +
         ' \x1b[32m' + bar + '\x1b[0m \x1b[90m' + h.ms + 'ms ' + (h.note ?? '') + '\x1b[0m\n';
-      process.stdout.write(line);
+      out(line);
     }
   }
 }

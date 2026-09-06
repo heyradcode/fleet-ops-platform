@@ -32,11 +32,18 @@ import { setRunbooks, type RunbookDoc } from '../../../src/platform/runbook-load
  * transport stays testable.
  */
 function bundledFiles(): Record<string, string> {
-  return import.meta.glob('../../../src/data/runbooks/*.md', {
-    query: '?raw',
-    import: 'default',
-    eager: true,
-  }) as Record<string, string>;
+  try {
+    return import.meta.glob('../../../src/data/runbooks/*.md', {
+      query: '?raw',
+      import: 'default',
+      eager: true,
+    }) as Record<string, string>;
+  } catch {
+    // Not a Vite build - `import.meta.glob` is not a function under plain
+    // Node. That is the test runner, which fills the registry from disk
+    // itself; returning nothing here leaves what it loaded in place.
+    return {};
+  }
 }
 
 export function loadRunbooksFromBundle(): RunbookDoc[] {
@@ -46,6 +53,9 @@ export function loadRunbooksFromBundle(): RunbookDoc[] {
     // from position, so an unstable order would mean unstable citations.
     .sort((a, b) => a.source.localeCompare(b.source));
 
-  setRunbooks(docs);
+  // An empty bundle must not clobber a registry something else filled. If
+  // nothing filled it, the knowledge base still throws loudly on first use -
+  // that behaviour is deliberate and unchanged.
+  if (docs.length > 0) setRunbooks(docs);
   return docs;
 }

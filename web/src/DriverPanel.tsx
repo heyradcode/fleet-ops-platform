@@ -16,16 +16,18 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { inProcessTransport } from './transport/in-process.ts';
-import { formatHours, hosLevel } from './format.ts';
+import { formatHours, hosLevel, witness } from './format.ts';
 import type { AgentResult, AgentTrace, Driver, Exception } from './transport/index.ts';
 
 type Props = {
   driver: Driver;
   exceptions: Exception[];
+  /** Exception ids that made it into an incident - the rule's verdict. */
+  paged: Set<string>;
   onClose(): void;
 };
 
-export function DriverPanel({ driver, exceptions, onClose }: Props) {
+export function DriverPanel({ driver, exceptions, paged, onClose }: Props) {
   const [asking, setAsking] = useState(false);
   const [result, setResult] = useState<AgentResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -89,9 +91,8 @@ export function DriverPanel({ driver, exceptions, onClose }: Props) {
               <div key={e.exceptionId} className="panel-exception">
                 <span className="exception-kind">{e.kind.replace(/-/g, ' ')}</span>
                 <span className="panel-witness">
-                  {e.providers.length === 1
-                    ? `${e.providers[0]} only — not corroborated`
-                    : `${e.providers.join(' + ')} agree`}
+                  {witness(e, paged.has(e.exceptionId))}
+                  {paged.has(e.exceptionId) ? '' : ' — not corroborated'}
                 </span>
               </div>
             ))}

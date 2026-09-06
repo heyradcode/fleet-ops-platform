@@ -17,14 +17,40 @@ const RESET = '\x1b[0m';
 let correlationId = 'local';
 export function setCorrelationId(id: string) { correlationId = id; }
 
+/**
+ * Where a line goes.
+ *
+ * Lambda and the terminal have a stdout. A browser tab does not - and there
+ * `process` is not undefined but UNBOUND, so the first line the agent logged
+ * threw "process is not defined" straight into the driver panel. The module
+ * graph loaded fine; the failure waited for the first log call, which is why
+ * the browser-contract test now asks the agent a question rather than only
+ * importing it.
+ *
+ * In a browser, errors and warnings keep their level. Narration goes to
+ * console.debug, which DevTools hides by default: a dispatch board's console
+ * is not the place for the backend's running commentary. Looked up per call,
+ * not at import, so a graph loaded under Node and later run without `process`
+ * (the contract test does exactly that) takes the right branch.
+ */
+export function out(line: string, level: Level | 'note' = 'note'): void {
+  const stdout = (globalThis as { process?: { stdout?: { write(s: string): void } } }).process?.stdout;
+  if (stdout) { stdout.write(line); return; }
+
+  const plain = line.replace(/\x1b\[[0-9;]*m/g, '').trimEnd();
+  if (level === 'error') console.error(plain);
+  else if (level === 'warn') console.warn(plain);
+  else console.debug(plain);
+}
+
 function emit(level: Level, msg: string, fields: Record<string, unknown> = {}) {
   if (envIs('LOG_FORMAT', 'json')) {
-    process.stdout.write(JSON.stringify({ level, msg, correlationId, ...fields }) + '\n');
+    out(JSON.stringify({ level, msg, correlationId, ...fields }) + '\n', level);
   } else {
     const extra = Object.keys(fields).length
       ? ' ' + Object.entries(fields).map(([k, v]) => `${k}=${fmt(v)}`).join(' ')
       : '';
-    process.stdout.write(`${COLORS[level]}${level.padEnd(5)}${RESET} ${msg}${'\x1b[90m'}${extra}${RESET}\n`);
+    out(`${COLORS[level]}${level.padEnd(5)}${RESET} ${msg}${'\x1b[90m'}${extra}${RESET}\n`, level);
   }
 }
 
@@ -45,8 +71,8 @@ export const log = {
 export function section(n: string, title: string) {
   const prefix = n ? `${n}. ` : '';
   const line = '─'.repeat(Math.max(0, 72 - title.length - prefix.length - 1));
-  process.stdout.write(`\n\x1b[1m\x1b[35m${prefix}${title}\x1b[0m \x1b[90m${line}\x1b[0m\n`);
+  out(`\n\x1b[1m\x1b[35m${prefix}${title}\x1b[0m \x1b[90m${line}\x1b[0m\n`);
 }
 export function note(text: string) {
-  process.stdout.write(`\x1b[90m   ${text}\x1b[0m\n`);
+  out(`\x1b[90m   ${text}\x1b[0m\n`);
 }

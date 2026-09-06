@@ -103,7 +103,11 @@ real belongs in this repo.
   `process.env.FOO` throws. Every read of it was at module scope, so the board
   was a blank page. Configuration goes through `platform/env.ts`. This is the
   bug that motivated the browser-contract test, which loads the whole graph
-  with `process` and `Buffer` deleted.
+  with `process` and `Buffer` deleted. It happened a second time with
+  `process.stdout` in the logger - the graph loaded, the board rendered, and
+  the assistant failed on its first log line. Output goes through `out()` in
+  `platform/logger.ts`; the contract test now asks the agent a question, and
+  CI greps for any `process.` member, not just `.env`.
 - **Shared thresholds live in one place.** `HOS_THRESHOLD_MINUTES` in
   `integrations/connector.ts` drives the detection rule, the reassignment
   guard AND the board's hours-of-service strip. It used to be typed three

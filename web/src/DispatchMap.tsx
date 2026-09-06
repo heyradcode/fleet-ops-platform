@@ -119,6 +119,15 @@ export function DispatchMap({ drivers, flagged, selectedId, onSelect, onBasemap,
 
       m.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left');
 
+      // The basemap style names a few sprite icons its sheet does not carry,
+      // and MapLibre warns about each one per tile. A 1px transparent image
+      // satisfies the lookup; nothing of ours is drawn from a sprite.
+      m.on('styleimagemissing', (e) => {
+        if (m && !m.hasImage(e.id)) {
+          m.addImage(e.id, { width: 1, height: 1, data: new Uint8Array(4) });
+        }
+      });
+
       m.on('load', () => {
         if (!m || cancelled) return;
         addFleetLayers(m, mode);

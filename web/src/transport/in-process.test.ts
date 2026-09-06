@@ -185,6 +185,11 @@ test('the whole module graph loads with no Node globals at all', async () => {
   const realProcess = globalThis.process;
   const realBuffer = (globalThis as { Buffer?: unknown }).Buffer;
 
+  // The runbooks come off disk here, since there is no Vite bundle. Loaded
+  // BEFORE the globals go, because reading files needs Node.
+  const { loadRunbooksFromDisk } = await import('../../../src/platform/runbook-loader.node.ts');
+  loadRunbooksFromDisk();
+
   delete (globalThis as { process?: unknown }).process;
   delete (globalThis as { Buffer?: unknown }).Buffer;
 
@@ -203,6 +208,17 @@ test('the whole module graph loads with no Node globals at all', async () => {
 
     assert.ok(board.drivers.length > 0);
     assert.ok(board.exceptions.length > 0);
+
+    // THE SECOND TIME. Loading the graph proved nothing about what it does
+    // when it RUNS: the agent's first log line reached process.stdout and the
+    // driver panel showed "process is not defined" under a working map. So
+    // exercise the deepest path - tools, retrieval, the model loop - with the
+    // globals still gone.
+    const result = await transport.inProcessTransport.askAgent(
+      'drv-1000 is off their planned route. Is this real, and what should I do?',
+    );
+    assert.ok(result.answer.length > 0);
+    assert.ok(result.trace.some((t) => t.kind === 'tool'));
   } finally {
     globalThis.process = realProcess;
     (globalThis as { Buffer?: unknown }).Buffer = realBuffer;

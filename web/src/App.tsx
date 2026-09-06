@@ -19,7 +19,7 @@ import { inProcessTransport } from './transport/in-process.ts';
 import { SignIn } from './SignIn.tsx';
 import { useRestoredSession } from './auth/useSession.ts';
 import { auth } from './auth/provider.ts';
-import { HOS_MAX_MINUTES, formatHours, hosLevel, type HosLevel } from './format.ts';
+import { HOS_MAX_MINUTES, formatHours, hosLevel, witness, type HosLevel } from './format.ts';
 import { DISTRICTS } from '../../src/data/districts.ts';
 import type { Session } from './auth/index.ts';
 import type { BoardSnapshot, Driver, Exception, PositionTick } from './transport/index.ts';
@@ -311,6 +311,7 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
             key={selectedDriver.driverId}
             driver={selectedDriver}
             exceptions={selectedExceptions}
+            paged={pagedSet}
             onClose={() => setSelected(undefined)}
           />
         )}
@@ -389,9 +390,7 @@ function ExceptionRow({ exception, paged, live, onSelect }: {
       <span className="exception-detail">
         <b>{exception.driverId.replace('drv-', '')}</b>
         {' · '}
-        {exception.providers.length === 1
-          ? `${exception.providers[0]} only`
-          : `${exception.providers.join(' + ')} agree`}
+        {witness(exception, paged)}
       </span>
       <span className={`verdict ${paged ? 'is-paged' : 'is-held'}`}>
         {paged ? 'PAGED' : 'HELD'}
