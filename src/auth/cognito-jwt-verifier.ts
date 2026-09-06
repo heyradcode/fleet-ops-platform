@@ -34,8 +34,17 @@
  *   id token     - "who the user is". Claims/attributes. For your app.
  *   access token - "what they may do". Scopes and groups. For your API.
  *
- * This file uses HMAC so the demo can sign its own tokens offline. The
- * verification LOGIC below is the real logic; only the algorithm differs.
+ * TWO VERIFIERS LIVE HERE, and they share every check but the first.
+ *
+ *   verifyToken()       sync, HS256, against the demo issuer. No user pool, so
+ *                       the board runs offline and the tests stay synchronous.
+ *   verifyTokenRs256()  async, RS256, against a real pool's published JWKS.
+ *                       Async because WebCrypto is - which is the whole reason
+ *                       AuthProvider.restore() returns a promise.
+ *
+ * Checks 2-7 are one function called by both. If they ever forked, the offline
+ * board would be demonstrating rules the deployed one does not apply, which is
+ * a worse failure than either being wrong on its own.
  */
 import { b64urlDecode, b64urlDecodeText, b64urlEncode, hmacSha256, timingSafeEqual } from '../platform/crypto.ts';
 import type { Principal, TenantId } from '../platform/types.ts';
@@ -102,28 +111,25 @@ export function signDemoToken(claims: Partial<CognitoClaims> & { sub: string }):
  * Verify and decode. Returns a `Principal` - a token is not an identity until
  * it has been checked, so the rest of the codebase only ever sees Principal.
  */
-export function verifyToken(token: string): Principal {
+/** Split a JWS into its parts, trusting none of them yet. */
+function split(token: string) {
   const parts = token.split('.');
   if (parts.length !== 3) throw new TokenVerificationError('not a three-part JWS');
 
   const [headerB64, payloadB64, sigB64] = parts;
-  const header = JSON.parse(b64urlDecodeText(headerB64)) as { alg: string; kid?: string };
+  return {
+    headerB64, payloadB64, sigB64,
+    header: JSON.parse(b64urlDecodeText(headerB64)) as { alg: string; kid?: string },
+    claims: JSON.parse(b64urlDecodeText(payloadB64)) as CognitoClaims,
+  };
+}
 
-  // Check 7 first: never trust the token to tell you how to check the token.
-  if (header.alg !== 'HS256') throw new TokenVerificationError('unexpected alg ' + header.alg);
-
-  // Check 1: signature. timingSafeEqual, not ===, to avoid a timing oracle.
-  const expected = hmacSha256(DEMO_SECRET, headerB64 + '.' + payloadB64);
-  const actual = unb64url(sigB64);
-  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
-    throw new TokenVerificationError('signature mismatch');
-  }
-
-  const claims = JSON.parse(b64urlDecodeText(payloadB64)) as CognitoClaims;
+/** Checks 2-6 and the tenant claim, then the Principal. Shared by both paths. */
+function principalFrom(claims: CognitoClaims, issuer: string, clientId: string): Principal {
   const now = Math.floor(clockNow() / 1000);
 
-  if (claims.iss !== ISSUER) throw new TokenVerificationError('wrong issuer');                    // 2
-  if (claims.client_id !== CLIENT_ID) throw new TokenVerificationError('wrong client_id');        // 3
+  if (claims.iss !== issuer) throw new TokenVerificationError('wrong issuer');                    // 2
+  if (claims.client_id !== clientId) throw new TokenVerificationError('wrong client_id');         // 3
   if (claims.token_use !== 'access') throw new TokenVerificationError('expected an access token');// 4
   if (claims.exp <= now) throw new TokenVerificationError('expired');                             // 5
   if (claims.iat > now + 60) throw new TokenVerificationError('issued in the future');            // 6
@@ -137,6 +143,117 @@ export function verifyToken(token: string): Principal {
     scope: scopeFromClaims(claims),
     identityProvider: providerFromIdentities(claims.identities),
   };
+}
+
+export function verifyToken(token: string): Principal {
+  const { headerB64, payloadB64, sigB64, header, claims } = split(token);
+
+  // Check 7 first: never trust the token to tell you how to check the token.
+  if (header.alg !== 'HS256') throw new TokenVerificationError('unexpected alg ' + header.alg);
+
+  // Check 1: signature. timingSafeEqual, not ===, to avoid a timing oracle.
+  const expected = hmacSha256(DEMO_SECRET, headerB64 + '.' + payloadB64);
+  const actual = unb64url(sigB64);
+  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+    throw new TokenVerificationError('signature mismatch');
+  }
+
+  return principalFrom(claims, ISSUER, CLIENT_ID);
+}
+
+// ---------------------------------------------------------------------------
+// A real user pool: RS256 against the published JWKS
+// ---------------------------------------------------------------------------
+
+export type PoolConfig = {
+  /** `https://cognito-idp.{region}.amazonaws.com/{userPoolId}` */
+  issuer: string;
+  clientId: string;
+};
+
+/**
+ * The subset of a JWK we accept.
+ *
+ * Declared rather than imported: `JsonWebKey` is a DOM type, this file is in
+ * the graph the backend compiles without DOM, and one shared file cannot
+ * depend on a lib only half its consumers have.
+ */
+type Jwk = { kid: string; alg: string; kty: string; n: string; e: string };
+
+/**
+ * A view whose buffer is definitely an ArrayBuffer.
+ *
+ * WebCrypto's types reject a plain Uint8Array because it MIGHT be backed by a
+ * SharedArrayBuffer, which cannot be handed to crypto. Copying is the honest
+ * fix - the same one platform/crypto.ts already makes - and a signature is
+ * 256 bytes, so the copy costs nothing.
+ */
+function asBuffer(from: Uint8Array): Uint8Array<ArrayBuffer> {
+  const out = new Uint8Array(new ArrayBuffer(from.length));
+  out.set(from);
+  return out;
+}
+
+/**
+ * Imported keys, cached for the life of the page or the Lambda container.
+ *
+ * Cognito publishes two keys and rotates rarely, so caching by `kid` is safe;
+ * fetching per request adds a round trip to every call and eventually earns a
+ * throttle. A `kid` that misses re-fetches once - that is the rotation path,
+ * and it is why the miss is a cache refill rather than an error.
+ */
+const jwksCache = new Map<string, Map<string, CryptoKey>>();
+
+async function keyFor(issuer: string, kid: string): Promise<CryptoKey> {
+  let keys = jwksCache.get(issuer);
+
+  if (!keys?.has(kid)) {
+    const res = await fetch(issuer + '/.well-known/jwks.json');
+    if (!res.ok) throw new TokenVerificationError('could not fetch the pool JWKS');
+    const body = await res.json() as { keys: Jwk[] };
+
+    keys = new Map();
+    for (const jwk of body.keys) {
+      // Import only what we will accept. A pool that started publishing
+      // something else must not have it silently imported and trusted.
+      if (jwk.alg !== 'RS256') continue;
+      keys.set(jwk.kid, await crypto.subtle.importKey(
+        'jwk', jwk, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify'],
+      ));
+    }
+    jwksCache.set(issuer, keys);
+  }
+
+  const key = keys.get(kid);
+  if (!key) throw new TokenVerificationError('no published key matches kid ' + kid);
+  return key;
+}
+
+/**
+ * The same seven checks, against a deployed pool.
+ *
+ * `crypto.subtle` is the one cryptography API that exists unchanged in Node
+ * and in a browser, so this stays in the shared module graph like everything
+ * else - no `node:crypto`, and the board can verify its own token.
+ */
+export async function verifyTokenRs256(token: string, pool: PoolConfig): Promise<Principal> {
+  const { headerB64, payloadB64, sigB64, header, claims } = split(token);
+
+  // Check 7, and it carries more weight here than in the demo path. Accepting
+  // the token's own `alg` is the JWT confusion attack, and against a pool whose
+  // verification key is PUBLISHED, an attacker allowed to pick HS256 can sign
+  // their own tokens with that public key as the HMAC secret.
+  if (header.alg !== 'RS256') throw new TokenVerificationError('unexpected alg ' + header.alg);
+  if (!header.kid) throw new TokenVerificationError('no kid in the header');
+
+  const key = await keyFor(pool.issuer, header.kid);
+  const signed = asBuffer(new TextEncoder().encode(headerB64 + '.' + payloadB64));
+  const ok = await crypto.subtle.verify(
+    'RSASSA-PKCS1-v1_5', key, asBuffer(unb64url(sigB64)), signed,
+  );
+  if (!ok) throw new TokenVerificationError('signature mismatch');
+
+  return principalFrom(claims, pool.issuer, pool.clientId);
 }
 
 /**

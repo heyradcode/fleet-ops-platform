@@ -58,7 +58,11 @@ export function useRestoredSession(): Restored {
 
     // Restore on load, so a refresh does not sign you out. Re-verified rather
     // than trusted - see localAuth.restore().
-    setSession(auth.restore());
+    let stale = false;
+    auth.restore()
+      .then((s) => { if (!stale) setSession(s); })
+      .catch(() => { if (!stale) setSession(null); });
+    return () => { stale = true; };
   }, [setSession]);
 
   return [session, setSession, restoreError];

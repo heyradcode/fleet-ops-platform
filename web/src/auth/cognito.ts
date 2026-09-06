@@ -21,7 +21,7 @@
  */
 import type { AuthProvider, Realm, Session, SignUpRequest } from './index.ts';
 import { AuthError } from './index.ts';
-import { verifyToken } from '../../../src/auth/cognito-jwt-verifier.ts';
+import { verifyTokenRs256, type PoolConfig } from '../../../src/auth/cognito-jwt-verifier.ts';
 import { authorizeUrl, resolveIdpForEmail } from '../../../src/auth/providers.ts';
 import { sha256Bytes, b64urlEncode, uuid } from '../../../src/platform/crypto.ts';
 
@@ -32,18 +32,28 @@ import { sha256Bytes, b64urlEncode, uuid } from '../../../src/platform/crypto.ts
  * not Cognito is configured, and a missing variable must be a clear message at
  * sign-in time, not a crash while the bundle evaluates.
  */
-function config(): { domain: string; clientId: string; redirectUri: string } {
+function config(): { domain: string; clientId: string; redirectUri: string; pool: PoolConfig } {
   const domain = import.meta.env?.VITE_COGNITO_DOMAIN as string | undefined;
   const clientId = import.meta.env?.VITE_COGNITO_CLIENT_ID as string | undefined;
-  if (!domain || !clientId) {
+  const issuer = import.meta.env?.VITE_COGNITO_ISSUER as string | undefined;
+  if (!domain || !clientId || !issuer) {
     throw new AuthError('Cognito is not configured for this build - see web/src/auth/provider.ts.');
   }
-  return { domain, clientId, redirectUri: `${globalThis.location.origin}/callback` };
+  return {
+    domain,
+    clientId,
+    redirectUri: `${globalThis.location.origin}/callback`,
+    // The issuer is the JWKS root as well as the `iss` claim we require, so
+    // one variable pins both. A pool id in the URL and a different one in the
+    // token is precisely what check 2 exists to catch.
+    pool: { issuer, clientId },
+  };
 }
 
-/** True when both variables are present. Decides which provider the UI gets. */
+/** True when all three variables are present. Decides which provider the UI gets. */
 export function cognitoConfigured(): boolean {
-  return Boolean(import.meta.env?.VITE_COGNITO_DOMAIN && import.meta.env?.VITE_COGNITO_CLIENT_ID);
+  const e = import.meta.env;
+  return Boolean(e?.VITE_COGNITO_DOMAIN && e?.VITE_COGNITO_CLIENT_ID && e?.VITE_COGNITO_ISSUER);
 }
 
 const VERIFIER_KEY = 'meridian.pkce.verifier';
@@ -65,11 +75,12 @@ function createPkcePair(): { verifier: string; challenge: string } {
 }
 
 export const cognitoAuth: AuthProvider = {
-  restore() {
+  async restore() {
     const token = sessionStorage.getItem(TOKEN_KEY);
     if (!token) return null;
     try {
-      return { token, principal: verifyToken(token) };
+      // Re-verified against the pool's JWKS, not trusted because it is ours.
+      return { token, principal: await verifyTokenRs256(token, config().pool) };
     } catch {
       sessionStorage.removeItem(TOKEN_KEY);
       return null;
@@ -169,7 +180,7 @@ export async function completeRedirect(searchParams: URLSearchParams): Promise<S
   sessionStorage.removeItem(STATE_KEY);
   sessionStorage.removeItem(VERIFIER_KEY);
 
-  const { domain, clientId, redirectUri } = config();
+  const { domain, clientId, redirectUri, pool } = config();
   const res = await fetch(`https://${domain}/oauth2/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -184,7 +195,9 @@ export async function completeRedirect(searchParams: URLSearchParams): Promise<S
   if (!res.ok) throw new AuthError('The identity provider rejected the sign-in. Start again.');
 
   const { access_token: token } = await res.json() as { access_token: string };
-  const session = { token, principal: verifyToken(token) };
+  // The ACCESS token, not the id token: it is what carries cognito:groups and
+  // the custom claims the V2_0 trigger stamped, and what an API authorises on.
+  const session = { token, principal: await verifyTokenRs256(token, pool) };
   sessionStorage.setItem(TOKEN_KEY, token);
   return session;
 }

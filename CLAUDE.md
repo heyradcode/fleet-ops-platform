@@ -55,9 +55,12 @@ Use union types, as the existing code does.
 **Imports carry `.ts` extensions.** Required by type-stripping. `web/` handles
 this via `allowImportingTsExtensions`.
 
-**`infra/` is never deployed.** It is read-only demonstration material.
-Nothing in this repo needs an AWS account, and deploying it would cost real
-money — Aurora and any OpenSearch collection bill whether or not they are used.
+**Only `infra/terraform/auth/` is ever applied.** It creates a Cognito pool and
+the token trigger, and costs pennies. Every other root is read-only
+demonstration material: applying `envs/` brings up Aurora (~$87/month idle at
+a 0.5 ACU floor × 2 instances) and Kinesis (~$29/month, no free tier), and
+anything wanting a Bedrock Knowledge Base drags in OpenSearch Serverless at
+~$700/month. Nothing in this repo *needs* an AWS account.
 
 ## Rules that are load-bearing and easy to break
 
@@ -108,6 +111,14 @@ real belongs in this repo.
   the assistant failed on its first log line. Output goes through `out()` in
   `platform/logger.ts`; the contract test now asks the agent a question, and
   CI greps for any `process.` member, not just `.env`.
+- **A Cognito PreTokenGeneration trigger must be V2_0.** V1 writes claims to
+  the ID token only, and this platform authorises on the ACCESS token
+  (`token_use: 'access'` is check 4). A V1-wired pool signs people in and
+  hands them a token with no tenant claim, which the verifier then rejects —
+  so the symptom is "nobody can sign in" pointing at code that is correct.
+  Terraform pins it; a test pins the response shape.
+- **Cognito custom attributes are a one-way door.** They cannot be renamed or
+  removed once the pool exists, and there is a cap of 50.
 - **Shared thresholds live in one place.** `HOS_THRESHOLD_MINUTES` in
   `integrations/connector.ts` drives the detection rule, the reassignment
   guard AND the board's hours-of-service strip. It used to be typed three

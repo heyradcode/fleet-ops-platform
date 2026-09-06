@@ -50,8 +50,14 @@ export type SignUpRequest = {
 };
 
 export type AuthProvider = {
-  /** The session restored from storage, if any. */
-  restore(): Session | null;
+  /**
+   * The session restored from storage, if any.
+   *
+   * A promise because verifying a REAL pool's token is RS256 against its
+   * published JWKS, and WebCrypto is async. The offline provider resolves
+   * immediately; the interface does not pretend the two are the same shape.
+   */
+  restore(): Promise<Session | null>;
 
   /**
    * Which identity provider handles this email.

@@ -7,3 +7,7 @@ dist/
 .terraform.lock.hcl
 web/dist
 .pnpm-store/
+
+# Lambda bundles, produced by `pnpm build:lambda` and zipped by Terraform.
+infra/terraform/auth/.build/
+infra/terraform/modules/lambda/.build/

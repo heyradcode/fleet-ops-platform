@@ -186,8 +186,13 @@ person and has no business in a public repository. Vendor payload shapes are
 **modelled from published API references, not captured from live accounts** —
 Samsara, Motive, Lytx and the rest gate API access behind a customer contract.
 
-**Never deployed:** `infra/` is read-only demonstration material. Nothing here
-needs an AWS account.
+**Deployable, but only one part:** `infra/terraform/auth/` creates a real
+Cognito user pool and the token trigger, and costs pennies — see its README.
+Everything else under `infra/` is read-only demonstration material describing
+the full platform; applying it would bring up Aurora and Kinesis, which bill
+whether or not anything uses them. **Nothing here requires an AWS account** —
+with no pool configured the board runs the same Cognito logic against a local
+issuer.
 
 The offline model in `src/aws/bedrock.ts` is scripted, not intelligent. It
 reproduces the one behaviour that matters for understanding agents: emit a
@@ -228,9 +233,16 @@ serves `web/dist`; the same three settings work on Netlify or Cloudflare
 Pages. Import the repo, keep the root directory at the repo root (the build
 reaches into `src/`), and enable Corepack so the pinned pnpm is used.
 
-There is no separately hostable API yet. `src/api/` holds the Lambda handlers
-and `infra/` the Terraform that would run them on AWS — read-only material, and
-not free to deploy.
+Sign-in works with no AWS account: the board runs Cognito's own logic —
+home-realm discovery, the PreTokenGeneration trigger, the verifier's seven
+checks — against a local issuer. Set `VITE_COGNITO_DOMAIN`,
+`VITE_COGNITO_CLIENT_ID` and `VITE_COGNITO_ISSUER` and it switches to a real
+user pool with RS256 verification against the published JWKS;
+`infra/terraform/auth/` creates one for pennies a month.
+
+There is no separately hostable API. `src/api/` holds the Lambda handlers and
+the rest of `infra/` the Terraform that would run them — read-only material,
+and not free to deploy.
 
 ---
 

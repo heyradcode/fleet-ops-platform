@@ -10,6 +10,12 @@ variable "callback_urls" { type = list(string) }
 variable "logout_urls" { type = list(string) }
 variable "pre_token_generation_lambda_arn" { type = string }
 
+variable "advanced_security_mode" {
+  description = "OFF keeps the pool on the free feature plan. AUDIT and ENFORCED require Plus."
+  type        = string
+  default     = "AUDIT"
+}
+
 variable "google_client_id" {
   type      = string
   sensitive = true
@@ -53,16 +59,24 @@ resource "aws_cognito_user_pool" "main" {
     temporary_password_validity_days = 3
   }
 
-  # Advanced security catches credential stuffing and impossible travel. It is
-  # the highest-value paid Cognito feature; AUDIT in lower envs for cost.
+  # Threat protection catches credential stuffing and impossible travel. It is
+  # the highest-value paid Cognito feature and it moves the pool onto the Plus
+  # feature plan, so a demo pool that will never see an attack leaves it OFF
+  # and stays on the free plan.
   user_pool_add_ons {
-    advanced_security_mode = var.env == "prod" ? "ENFORCED" : "AUDIT"
+    advanced_security_mode = var.advanced_security_mode
   }
 
   mfa_configuration = var.env == "prod" ? "OPTIONAL" : "OFF"
 
-  software_token_mfa_configuration {
-    enabled = true
+  # Cognito REJECTS an MFA configuration while MFA is off - "can't turn off MFA
+  # and configure an MFA together" - so the block has to disappear rather than
+  # sit there harmlessly. A static block here fails the apply, not the plan.
+  dynamic "software_token_mfa_configuration" {
+    for_each = var.env == "prod" ? [1] : []
+    content {
+      enabled = true
+    }
   }
 
   # Custom attributes CANNOT be renamed or removed once created, and there is a
@@ -80,8 +94,18 @@ resource "aws_cognito_user_pool" "main" {
   }
 
   # The trigger that stamps tenant + roles into every token.
+  #
+  # V2_0, and that is not a preference. The V1 trigger can only add claims to
+  # the ID token. Everything in this platform authorises on the ACCESS token -
+  # `token_use: 'access'` is check 4 in auth/cognito-jwt-verifier.ts - so a
+  # pool wired to V1 mints access tokens carrying no tenant claim, the verifier
+  # correctly rejects every one of them, and the symptom is "nobody can sign
+  # in" pointing at code that is behaving exactly as designed.
   lambda_config {
-    pre_token_generation = var.pre_token_generation_lambda_arn
+    pre_token_generation_config {
+      lambda_arn     = var.pre_token_generation_lambda_arn
+      lambda_version = "V2_0"
+    }
   }
 
   account_recovery_setting {
@@ -102,7 +126,13 @@ resource "aws_cognito_user_pool" "main" {
 # Social identity providers
 # -----------------------------------------------------------------------------
 
+# The social providers exist only when there are credentials for them. An
+# identity provider created with an empty client_id is not a disabled provider,
+# it is an apply-time error - which makes the whole pool unappliable for want
+# of a Facebook app nobody wanted.
 resource "aws_cognito_identity_provider" "google" {
+  count = var.google_client_id == "" ? 0 : 1
+
   user_pool_id  = aws_cognito_user_pool.main.id
   provider_name = "Google"
   provider_type = "Google"
@@ -123,6 +153,8 @@ resource "aws_cognito_identity_provider" "google" {
 }
 
 resource "aws_cognito_identity_provider" "facebook" {
+  count = var.google_client_id == "" ? 0 : 1
+
   user_pool_id  = aws_cognito_user_pool.main.id
   provider_name = "Facebook"
   provider_type = "Facebook"
@@ -142,6 +174,8 @@ resource "aws_cognito_identity_provider" "facebook" {
 }
 
 resource "aws_cognito_identity_provider" "apple" {
+  count = var.google_client_id == "" ? 0 : 1
+
   user_pool_id  = aws_cognito_user_pool.main.id
   provider_name = "SignInWithApple"
   provider_type = "SignInWithApple"
@@ -224,9 +258,12 @@ resource "aws_cognito_user_pool_client" "web" {
 
   supported_identity_providers = compact([
     "COGNITO",
-    aws_cognito_identity_provider.google.provider_name,
-    aws_cognito_identity_provider.facebook.provider_name,
-    aws_cognito_identity_provider.apple.provider_name,
+    # Literal names, not references to the resources. A resource behind
+    # `count = 0` has no attributes to read, so referencing one here would
+    # break the pool for exactly the configuration that omits it.
+    var.google_client_id == "" ? "" : "Google",
+    var.google_client_id == "" ? "" : "Facebook",
+    var.google_client_id == "" ? "" : "SignInWithApple",
     var.saml_metadata_url == "" ? "" : "AcmeSAML",
     var.oidc_issuer == "" ? "" : "OktaOIDC",
   ])

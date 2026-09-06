@@ -195,6 +195,36 @@ test('a device-bound driver token carries no district at all', async () => {
   assert.equal(claims['custom:tenantId'], 'acme-freight');
 });
 
+test('a V2 trigger writes the claims to the ACCESS token', async () => {
+  // THE DEPLOYMENT BLOCKER, in a test.
+  //
+  // V1 reaches the id token only. This platform authorises on the access
+  // token, so a pool wired to V1 signs people in and hands them a token with
+  // no tenant claim - which the verifier then rejects, correctly, leaving a
+  // failure that looks like broken verification rather than a mis-versioned
+  // trigger. Terraform pins V2_0; this pins the shape it produces.
+  const event = await preTokenGeneration({
+    version: '2', triggerSource: 'TokenGeneration_HostedAuth',
+    userPoolId: 'us-east-1_TEST', userName: 'd',
+    request: {
+      userAttributes: { email: 'dispatcher@acme-freight.com' },
+      groupConfiguration: { groupsToOverride: [], iamRolesToOverride: [] },
+    },
+    response: {},
+  });
+
+  const access = event.response.claimsAndScopeOverrideDetails?.accessTokenGeneration;
+  assert.equal(access?.claimsToAddOrOverride?.['custom:tenantId'], 'acme-freight');
+  assert.equal(access?.claimsToAddOrOverride?.['custom:district'], 'dal');
+  assert.deepEqual(
+    event.response.claimsAndScopeOverrideDetails?.groupOverrideDetails?.groupsToOverride,
+    ['dispatcher'],
+  );
+  // And the V1 field stays empty, so nothing can read the old shape and
+  // silently get undefined.
+  assert.equal(event.response.claimsOverrideDetails, undefined);
+});
+
 test('an unknown domain gets no tenant - fail closed, not a guess', async () => {
   const event = await preTokenGeneration({
     version: '1', triggerSource: 'TokenGeneration_Authentication',

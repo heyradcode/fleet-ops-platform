@@ -4,7 +4,13 @@
 modules/    reusable building blocks, one concern each
 stack/      the whole platform wired together, defined ONCE
 envs/       dev | test | stage | prod — backend, provider, one module call
+auth/       the only root meant to be APPLIED: a Cognito pool + token trigger
 ```
+
+`auth/` is the exception to everything below. It is a deliberately small subset
+chosen so the board's identity can be real for pennies a month — see its own
+README. Applying `envs/` instead would bring up Aurora and Kinesis, which bill
+idle.
 
 Each environment is a ~60-line wrapper around `stack/` - no `variables.tf`, no
 `terraform.tfvars`, and exactly two variable declarations (the secrets CI

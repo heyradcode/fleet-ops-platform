@@ -24,12 +24,14 @@
     "typecheck": "tsc --noEmit",
     "web": "pnpm --filter @meridian/web dev",
     "web:build": "pnpm --filter @meridian/web build",
-    "verify": "pnpm typecheck && pnpm test && pnpm start && pnpm web:build"
+    "verify": "pnpm typecheck && pnpm test && pnpm start && pnpm web:build",
+    "build:lambda": "node scripts/build-lambda.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.4.1",
-    "typescript": "^5.6.0",
-    "nodemon": "^3.1.9"
+    "esbuild": "0.25.12",
+    "nodemon": "^3.1.9",
+    "typescript": "^5.6.0"
   },
   "packageManager": "pnpm@11.22.0"
 }

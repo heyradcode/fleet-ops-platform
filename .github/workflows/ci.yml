@@ -133,7 +133,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        env: [dev, test, stage, prod]
+        # auth/ is the root that actually gets applied, so its validation is the
+        # one that matters most. The others describe the full platform.
+        dir: [envs/dev, envs/test, envs/stage, envs/prod, auth]
 
     steps:
       - uses: actions/checkout@v4
@@ -151,11 +153,11 @@ jobs:
       # access to your cloud account.
       - name: Init (no backend)
         run: terraform init -backend=false
-        working-directory: infra/terraform/envs/${{ matrix.env }}
+        working-directory: infra/terraform/${{ matrix.dir }}
 
       - name: Validate
         run: terraform validate
-        working-directory: infra/terraform/envs/${{ matrix.env }}
+        working-directory: infra/terraform/${{ matrix.dir }}
 
   # ---------------------------------------------------------------------------
   security:

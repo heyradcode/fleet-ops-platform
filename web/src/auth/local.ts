@@ -133,7 +133,7 @@ function persist(session: Session): void {
 }
 
 export const localAuth: AuthProvider = {
-  restore() {
+  async restore() {
     let token: string | null = null;
     try {
       token = sessionStorage.getItem(STORAGE_KEY);
