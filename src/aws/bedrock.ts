@@ -202,11 +202,11 @@ function inferArgs(tool: ToolSpec, messages: Message[]): Record<string, unknown>
   for (const key of tool.input_schema.required ?? []) {
     if (key === 'query' || key === 'question') args[key] = question;
     else if (key === 'driverId' || key === 'fromDriverId') {
-      args[key] = extractDriverId(question) ?? 'drv-0142';
+      args[key] = extractDriverId(question) ?? 'drv-1000';
     }
-    else if (key === 'toDriverId') args[key] = 'drv-0143';
+    else if (key === 'toDriverId') args[key] = 'drv-1001';
     else if (key === 'districtId') args[key] = 'dal';
-    else if (key === 'driverIds') args[key] = [extractDriverId(question) ?? 'drv-0142'];
+    else if (key === 'driverIds') args[key] = [extractDriverId(question) ?? 'drv-1000'];
     else if (key === 'severity') args[key] = 'critical';
     else if (key === 'radiusKm') args[key] = 400;
     else if (key === 'hours') args[key] = 6;
@@ -222,8 +222,8 @@ function extractDriverId(text: string): string | undefined {
   // A dispatcher usually says a place or a name, not an id. Mapping the demo
   // fleet by district is enough to make the scripted agent behave plausibly.
   const named: Record<string, string> = {
-    dallas: 'drv-0142', austin: 'drv-0187', denver: 'drv-0311',
-    chicago: 'drv-0455', phoenix: 'drv-0501',
+    dallas: 'drv-1000', austin: 'drv-1016', denver: 'drv-1027',
+    chicago: 'drv-1038', phoenix: 'drv-1049',
   };
   const lower = text.toLowerCase();
   for (const [name, id] of Object.entries(named)) {

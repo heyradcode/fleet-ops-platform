@@ -104,9 +104,9 @@ export async function handler(event: ApiGatewayEvent): Promise<ApiGatewayResult>
        * parameter rather than Accept keeps it debuggable from a browser bar.
        */
       case 'GET /map': {
-        const sites = allDrivers(principal);
-        const bySite = new Map(sites.map((s) => [s.driverId, telemetryForDriver(principal, s.driverId)]));
-        const fc = driversToFeatureCollection(sites, bySite);
+        const fleet = allDrivers(principal);
+        const byDriver = new Map(fleet.map((d) => [d.driverId, telemetryForDriver(principal, d.driverId)]));
+        const fc = driversToFeatureCollection(fleet, byDriver);
 
         if (query.format === 'topojson') {
           const topo = toTopoJson(fc);

@@ -3,18 +3,29 @@
  * PostGIS on Aurora Serverless v2 - the queries that matter
  * ---------------------------------------------------------------------------
  * Why Aurora at all when we have DynamoDB? Because DynamoDB cannot answer
- * "which sites are within 75km of this point". Spatial indexes and ad-hoc joins
+ * "which drivers are within 75km of this point", and it cannot answer "which
+ * territory contains this position" at all. Spatial indexes and ad-hoc joins
  * are exactly what a relational engine is for. The split:
  *
- *   DynamoDB - hot, high-volume, known-key reads (signals, incidents)
- *   Aurora   - reference data + anything spatial or analytical (sites, regions)
+ *   DynamoDB - hot, high-volume, known-key reads. Current driver position,
+ *              telemetry, exceptions, incidents.
+ *   Aurora   - reference data and anything spatial or analytical. Territories,
+ *              geofences, route corridors, facilities.
+ *
+ * NOTE WHAT IS *NOT* HERE: the per-ping geofence check. At 11,000 readings a
+ * second, a PostGIS round trip per ping is neither fast nor affordable. The hot
+ * path does a bounding-box pre-filter in memory against geofences cached at
+ * module scope (geo/spatial.ts), and PostGIS stays the source of truth for the
+ * queries that are genuinely relational. Knowing which work belongs where is
+ * most of the value of having both stores.
  *
  * Connecting from Lambda - the one thing people get wrong: a Lambda per request
  * means a Postgres connection per request, and Postgres dies at a few hundred.
  * Options, best first:
  *   1. RDS Proxy - pools and multiplexes connections. The default answer.
  *   2. Aurora Data API - HTTP, no connection at all, IAM-authed. Perfect for
- *      serverless; slightly higher latency. Used in the snippet below.
+ *      serverless; slightly higher latency. Used in the snippet below, and the
+ *      reason this stack needs no VPC and therefore no NAT Gateway.
  *   3. Raw pg client with a module-scope pool - only for low concurrency.
  *
  * GEOMETRY vs GEOGRAPHY, the other guaranteed question:
@@ -33,7 +44,7 @@
  */
 export const SQL = {
   /**
-   * "Which sites are within N metres of this point?"
+   * "Which drivers are within N metres of this point?"
    *
    * ST_DWithin is index-assisted: the planner uses the GiST index to do a bbox
    * pre-filter, then refines. Writing `ST_Distance(...) < n` instead LOSES the
@@ -41,14 +52,15 @@ export const SQL = {
    */
   driversWithinRadius: `
     SELECT
-      site_id,
+      driver_id,
       name,
-      region,
-      headcount,
+      district_id,
+      status,
+      hos_remaining_minutes,
       ST_X(location::geometry) AS lon,
       ST_Y(location::geometry) AS lat,
       ROUND((ST_Distance(location, ST_MakePoint($2, $3)::geography) / 1000)::numeric, 2) AS distance_km
-    FROM sites
+    FROM drivers
     WHERE tenant_id = $1
       AND ST_DWithin(location, ST_MakePoint($2, $3)::geography, $4)
     ORDER BY location <-> ST_MakePoint($2, $3)::geography
@@ -56,19 +68,80 @@ export const SQL = {
   `,
 
   /**
-   * "Which service region contains this site?" - a spatial join.
-   * ST_Contains is the polygon-membership test; pointInPolygon in spatial.ts
-   * is the same algorithm, done in JS.
+   * "Who could actually take this load?"
+   *
+   * The reassignment query, and the filters are not cosmetic: dispatching a
+   * driver with no legal hours left is an hours-of-service violation, so the
+   * platform must never surface the option. Enforcing that in SQL rather than
+   * in the caller means every path gets it right, including the AI agent's
+   * findNearbyAvailableDrivers tool.
    */
-  regionContainingPoint: `
-    SELECT r.region_id, r.name
-    FROM service_regions r
-    WHERE r.tenant_id = $1
-      AND ST_Contains(r.boundary, ST_SetSRID(ST_MakePoint($2, $3), 4326));
+  availableDriversNear: `
+    SELECT
+      driver_id,
+      name,
+      status,
+      hos_remaining_minutes,
+      ROUND((ST_Distance(location, ST_MakePoint($2, $3)::geography) / 1000)::numeric, 2) AS distance_km
+    FROM drivers
+    WHERE tenant_id = $1
+      AND ST_DWithin(location, ST_MakePoint($2, $3)::geography, $4)
+      AND status <> 'off-duty'
+      AND hos_remaining_minutes > $5
+    ORDER BY location <-> ST_MakePoint($2, $3)::geography
+    LIMIT 20;
   `,
 
   /**
-   * The reporting view, straight to GeoJSON in the database.
+   * "Which district contains this position?" - a spatial join.
+   * ST_Contains is the polygon-membership test; pointInPolygon in spatial.ts
+   * is the same algorithm, done in JS on the hot path.
+   */
+  districtContainingPoint: `
+    SELECT t.district_id, t.name, t.region
+    FROM territories t
+    WHERE t.tenant_id = $1
+      AND ST_Contains(t.boundary, ST_SetSRID(ST_MakePoint($2, $3), 4326));
+  `,
+
+  /**
+   * "Which geofences is this driver inside?"
+   *
+   * The authoritative version of the check the ingest path does in memory.
+   * Used for reconciliation and for anything that must be exactly right rather
+   * than merely fast - a compliance report, a customer dispute.
+   */
+  geofencesContainingPoint: `
+    SELECT g.geofence_id, g.name, g.kind
+    FROM geofences g
+    WHERE g.tenant_id = $1
+      AND ST_Contains(g.boundary, ST_SetSRID(ST_MakePoint($2, $3), 4326));
+  `,
+
+  /**
+   * "How far off the planned route is this driver?"
+   *
+   * ST_Distance against a LINESTRING geography returns metres to the nearest
+   * point on the line - which IS route adherence. This is the query
+   * deriveRouteAdherence() stands in for on the hot path.
+   *
+   * The `<->` operator in the ORDER BY is the KNN index operator: it uses the
+   * GiST index to find nearest neighbours without measuring every row.
+   */
+  distanceFromCorridor: `
+    SELECT
+      c.corridor_id,
+      c.name,
+      ROUND(ST_Distance(c.path, ST_MakePoint($2, $3)::geography)::numeric, 0) AS metres
+    FROM route_corridors c
+    WHERE c.tenant_id = $1
+      AND c.district_id = $4
+    ORDER BY c.path <-> ST_MakePoint($2, $3)::geography
+    LIMIT 1;
+  `,
+
+  /**
+   * The dispatch board's map payload, built straight to GeoJSON in the database.
    *
    * ST_AsGeoJSON + json_build_object means Postgres hands you a
    * FeatureCollection the map can render with zero transformation in Lambda.
@@ -80,20 +153,22 @@ export const SQL = {
       'features', COALESCE(json_agg(
         json_build_object(
           'type', 'Feature',
-          'id', s.site_id,
-          'geometry', ST_AsGeoJSON(s.location)::json,
+          'id', d.driver_id,
+          'geometry', ST_AsGeoJSON(d.location)::json,
           'properties', json_build_object(
-            'driverId',   s.site_id,
-            'name',     s.name,
-            'severity', i.severity,
-            'title',    i.title,
-            'openedAt', i.opened_at
+            'driverId',   d.driver_id,
+            'name',       d.name,
+            'districtId', d.district_id,
+            'status',     d.status,
+            'severity',   i.severity,
+            'title',      i.title,
+            'openedAt',   i.opened_at
           )
         )
       ), '[]'::json)
     ) AS geojson
     FROM incidents i
-    JOIN sites s ON s.site_id = ANY(i.site_ids) AND s.tenant_id = i.tenant_id
+    JOIN drivers d ON d.driver_id = ANY(i.driver_ids) AND d.tenant_id = i.tenant_id
     WHERE i.tenant_id = $1
       AND i.status <> 'resolved';
   `,
@@ -101,14 +176,18 @@ export const SQL = {
   /**
    * Cluster nearby open incidents. ST_ClusterDBSCAN groups points that are
    * within `eps` metres of at least `minpoints` neighbours - which is how you
-   * turn "eleven alerts" into "one regional outage" on a zoomed-out map.
+   * turn "fourteen alerts" into "one road closure" on a zoomed-out map.
+   *
+   * This is the same idea as the merge rule in pipeline/steps.ts, applied at
+   * render time rather than at detection time. Note the eps: metres, not
+   * kilometres, and sized to a road closure rather than to a district.
    */
   clusterIncidents: `
     SELECT
       ST_ClusterDBSCAN(location::geometry, eps := $2, minpoints := 2) OVER () AS cluster_id,
-      site_id,
+      driver_id,
       ST_AsGeoJSON(location)::json AS geometry
-    FROM sites
+    FROM drivers
     WHERE tenant_id = $1;
   `,
 };
@@ -123,16 +202,18 @@ export const SQL = {
  *     resourceArn: process.env.AURORA_CLUSTER_ARN,
  *     secretArn:   process.env.AURORA_SECRET_ARN,
  *     database:    'meridian',
- *     sql:         SQL.driversWithinRadius,
+ *     sql:         SQL.availableDriversNear,
  *     parameters: [
  *       { name: 'tenantId', value: { stringValue: principal.tenantId } },
  *       { name: 'lon',      value: { doubleValue: lon } },
  *       { name: 'lat',      value: { doubleValue: lat } },
  *       { name: 'radiusM',  value: { doubleValue: radiusKm * 1000 } },
- *       { name: 'limit',    value: { longValue: 50 } },
+ *       { name: 'minHos',   value: { longValue: 60 } },
  *     ],
  *   }));
  *
  * Note the tenantId is bound from the verified JWT, not from the request body.
+ * Row-level security in schema.sql enforces the same boundary a second time, so
+ * even a query that forgot its tenant filter returns nothing.
  */
-export const AURORA_DATA_API_EXAMPLE = SQL.driversWithinRadius;
+export const AURORA_DATA_API_EXAMPLE = SQL.availableDriversNear;

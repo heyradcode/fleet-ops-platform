@@ -17,7 +17,7 @@
  * an RPC-style `result` envelope, PascalCase records, nested behaviour arrays.
  * That difference is the entire justification for the normalisation layer.
  *
- * The data is deliberately CORROBORATING. Driver drv-0142 brakes hard at the
+ * The data is deliberately CORROBORATING. Driver drv-1000 brakes hard at the
  * same instant in both the Samsara telematics feed and the Lytx dashcam feed -
  * two independent devices, one event. That is what `detectIncidents` is looking
  * for, and a single feed could never establish it.
@@ -37,7 +37,7 @@ export const samsaraVehicleStats = {
     {
       id: '281474977428999',
       name: 'TRK-8891',
-      externalIds: { driverId: 'drv-0142' },
+      externalIds: { driverId: 'drv-1000' },
       gps: {
         time: T, latitude: 32.7767, longitude: -96.7970,
         speedMilesPerHour: 41.6, headingDegrees: 187,
@@ -52,7 +52,7 @@ export const samsaraVehicleStats = {
     {
       id: '281474977429004',
       name: 'TRK-8892',
-      externalIds: { driverId: 'drv-0187' },
+      externalIds: { driverId: 'drv-1016' },
       gps: {
         time: T, latitude: 30.2672, longitude: -97.7431,
         speedMilesPerHour: 0, headingDegrees: 0,
@@ -71,7 +71,7 @@ export const geotabDeviceStatusInfo = {
   result: [
     {
       device: { id: 'b27', serialNumber: 'G9-000-111-222' },
-      driver: { id: 'drv-0311', name: 'Driver 0311' },
+      driver: { id: 'drv-1027', name: 'Driver 0311' },
       dateTime: T,
       latitude: 39.7392, longitude: -104.9903,
       speed: 88,                       // km/h - Geotab is metric, Samsara is not
@@ -87,7 +87,7 @@ export const verizonConnectVehicles = {
   Items: [
     {
       VehicleNumber: 'VZ-4410',
-      DriverNumber: 'drv-0455',
+      DriverNumber: 'drv-1038',
       UpdateUTC: T,
       Latitude: 41.8781, Longitude: -87.6298,
       Speed: 52, SpeedLimit: 40,       // 12 km/h over
@@ -106,7 +106,7 @@ export const motiveHosLogs = {
   logs: [
     {
       log: {
-        driver: { id: 'drv-0142', username: 'd.0142' },
+        driver: { id: 'drv-1000', username: 'd.0142' },
         date: '2026-09-08',
         // Motive reports the clock in seconds remaining.
         driving_time_remaining: 2_040,   // 34 minutes - close to the limit
@@ -117,7 +117,7 @@ export const motiveHosLogs = {
     },
     {
       log: {
-        driver: { id: 'drv-0187', username: 'd.0187' },
+        driver: { id: 'drv-1016', username: 'd.0187' },
         date: '2026-09-08',
         driving_time_remaining: 19_800,  // 5.5h - comfortable
         shift_time_remaining: 28_800,
@@ -133,7 +133,7 @@ export const motiveHosLogs = {
 export const omnitracsHos = {
   hosData: [
     {
-      driverId: 'drv-0311',
+      driverId: 'drv-1027',
       dutyStatus: 'D',
       // Omnitracs reports MINUTES, not seconds. Same concept, different unit -
       // exactly the sort of thing normalise() exists to absorb.
@@ -148,7 +148,7 @@ export const omnitracsHos = {
 export const platformScienceDuty = {
   duty_status: [
     {
-      driver_ref: 'drv-0455',
+      driver_ref: 'drv-1038',
       status: 'ON_DUTY_DRIVING',
       remaining_drive_minutes: 310,
       remaining_duty_minutes: 480,
@@ -164,7 +164,7 @@ export const platformScienceDuty = {
 /**
  * Lytx - GET /video/v2/events
  *
- * Note `drv-0142` at time T: the SAME harsh-braking event Samsara reported.
+ * Note `drv-1000` at time T: the SAME harsh-braking event Samsara reported.
  * Two independent devices, one physical event. That agreement is what lets
  * detectIncidents raise a safety exception instead of dismissing a sensor
  * glitch.
@@ -173,7 +173,7 @@ export const lytxEvents = {
   events: [
     {
       eventId: 'LYT-99120',
-      driverId: 'drv-0142',
+      driverId: 'drv-1000',
       vehicleId: 'TRK-8891',
       recordDateTime: T,
       latitude: 32.7767, longitude: -96.7970,
@@ -194,7 +194,7 @@ export const netradyneAlerts = {
   alerts: [
     {
       alertId: 'ND-55021',
-      driverIdentifier: 'drv-0187',
+      driverIdentifier: 'drv-1016',
       alertType: 'PROLONGED_IDLE',
       // Netradyne sends epoch millis, not ISO strings.
       alertTimeMs: Date.parse(T_MINUS_1M),

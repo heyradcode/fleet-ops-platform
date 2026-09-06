@@ -23,7 +23,7 @@ const globex = verifyToken(signDemoToken({
 function reading(tenantId: string, id: string): Telemetry {
   return {
     tenantId, telemetryId: id, provider: 'samsara', domain: 'telematics', kind: 'harsh-brake',
-    driverId: 'drv-0142', sourceRef: 'TRK-8891', value: 0.62, unit: 'g', severity: 'critical',
+    driverId: 'drv-1000', sourceRef: 'TRK-8891', value: 0.62, unit: 'g', severity: 'critical',
     observedAt: '2026-09-08T14:30:00.000Z', attributes: {},
   };
 }

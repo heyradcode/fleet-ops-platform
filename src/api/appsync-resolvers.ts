@@ -111,9 +111,9 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
       return driversWithinRadius(principal, { lon: Number(args.lon), lat: Number(args.lat) }, Number(args.radiusKm));
 
     case 'Query.mapLayer': {
-      const sites = allDrivers(principal);
-      const bySite = new Map(sites.map((s) => [s.driverId, telemetryForDriver(principal, s.driverId)]));
-      const fc = driversToFeatureCollection(sites, bySite);
+      const fleet = allDrivers(principal);
+      const byDriver = new Map(fleet.map((d) => [d.driverId, telemetryForDriver(principal, d.driverId)]));
+      const fc = driversToFeatureCollection(fleet, byDriver);
       return { featureCollection: JSON.stringify(fc), bbox: fc.bbox };
     }
 

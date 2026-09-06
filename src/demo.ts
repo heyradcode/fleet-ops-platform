@@ -26,7 +26,7 @@ import { rawBucket, historyBucket } from './aws/s3.ts';
 import { telemetryStream } from './aws/kinesis.ts';
 import { SCENARIOS } from './data/scenarios.ts';
 import { generateFleet, generateTrace } from './data/generate.ts';
-import { CORRIDORS } from './data/polylines.ts';
+import { CORRIDORS, nearestCorridor } from './data/polylines.ts';
 import {
   normaliseAll as normaliseScenario, resolveTerritory as resolveScenario,
   deriveRouteAdherence, evaluate as evaluateScenario,
@@ -344,9 +344,9 @@ function sectionData() {
   process.stdout.write('   \x1b[90mitems read: ' + afterQuery + '\x1b[0m\n');
 
   note('');
-  note('Same answer via GSI1 (PK=TENANT#acme-freight#DRIVER#drv-0142) - driver pattern:');
-  const dallas = telemetryForDriver(operator, 'drv-0142');
-  process.stdout.write('   ' + dallas.length + ' readings for drv-0142 from ' +
+  note('Same answer via GSI1 (PK=TENANT#acme-freight#DRIVER#drv-1000) - driver pattern:');
+  const dallas = telemetryForDriver(operator, 'drv-1000');
+  process.stdout.write('   ' + dallas.length + ' readings for drv-1000 from ' +
     new Set(dallas.map((s) => s.provider)).size + ' providers, one Query\n');
 
   note('');
@@ -414,7 +414,7 @@ async function sectionEvents() {
   note('4 rules registered before ingest ran, so the events above routed too.');
   note('Publishing 3 more events...');
   await bus.putEvents(
-    { source: 'meridian.evaluate', detailType: 'ExceptionRaised', detail: { tenantId: 'acme-freight', driverId: 'drv-0455', districtId: 'chi', kind: 'harsh-braking', severity: 'critical' } },
+    { source: 'meridian.evaluate', detailType: 'ExceptionRaised', detail: { tenantId: 'acme-freight', driverId: 'drv-1038', districtId: 'chi', kind: 'harsh-braking', severity: 'critical' } },
     { source: 'meridian.detect', detailType: 'IncidentOpened', detail: { incidentId: 'inc_crit', severity: 'critical' } },
     { source: 'meridian.detect', detailType: 'IncidentOpened', detail: { incidentId: 'inc_warn', severity: 'warning' } },
   );
@@ -493,7 +493,7 @@ async function sectionGraphql() {
   try {
     await call({
       info: { fieldName: 'openIncident', parentTypeName: 'Mutation' },
-      arguments: { input: { title: 'test', severity: 'critical', districtId: 'dal', driverIds: ['drv-0142'] } },
+      arguments: { input: { title: 'test', severity: 'critical', districtId: 'dal', driverIds: ['drv-1000'] } },
     }, outsider);
     process.stdout.write('   \x1b[31mALLOWED - RBAC failed\x1b[0m\n');
   } catch (err) {
@@ -506,7 +506,7 @@ async function sectionGraphql() {
   note('mutation { openIncident(...) } as acme OPERATOR:');
   const created = await call({
     info: { fieldName: 'openIncident', parentTypeName: 'Mutation' },
-    arguments: { input: { title: 'Harsh braking cluster, I-35E', severity: 'critical', districtId: 'dal', driverIds: ['drv-0142'] } },
+    arguments: { input: { title: 'Harsh braking cluster, I-35E', severity: 'critical', districtId: 'dal', driverIds: ['drv-1000'] } },
   }, operator) as { incidentId: string; title: string };
   process.stdout.write('   created ' + created.incidentId + ': ' + created.title + '\n');
 
@@ -560,7 +560,7 @@ function sectionGeo() {
 
   ensurePrincipals();
   const fleet = allDrivers(operator);
-  const dallas = fleet.find((d) => d.driverId === 'drv-0142')!;
+  const dallas = fleet.find((d) => d.driverId === 'drv-1000')!;
 
   // --- Spatial query -------------------------------------------------------
   note('ST_DWithin equivalent: drivers within 400km of the Dallas depot');
@@ -586,6 +586,28 @@ function sectionGeo() {
   }
   process.stdout.write('   \x1b[90mregionContaining(Dallas) = ' + regionContaining(dallas) + '\x1b[0m\n');
 
+  // --- Route corridors -----------------------------------------------------
+  note('');
+  note('ST_Distance to a LINESTRING: how far off the planned route is a driver?');
+  for (const d of fleet.filter((x) => x.districtId === 'dal').slice(0, 3)) {
+    const near = nearestCorridor({ lon: d.lon, lat: d.lat }, d.districtId);
+    if (!near) continue;
+    process.stdout.write('   ' + d.driverId + '  ' + near.corridor.name.padEnd(16) +
+      String(near.metres).padStart(6) + ' m\n');
+  }
+  note('   Zero, because the generator puts trucks ON roads. A random walk would');
+  note('   put them in the Trinity River - invisible until somebody zooms in.');
+
+  // The same driver, pushed onto the frontage road by a closure.
+  const stranded = fleet.find((x) => x.districtId === 'dal')!;
+  const detour = nearestCorridor({ lon: stranded.lon - 0.011, lat: stranded.lat }, 'dal');
+  if (detour) {
+    process.stdout.write('   ' + stranded.driverId + '  ' + detour.corridor.name.padEnd(16) +
+      String(detour.metres).padStart(6) + ' m  \x1b[33mOFF ROUTE\x1b[0m\n');
+  }
+  note('   That number IS route adherence, and a road closure is several drivers');
+  note('   whose distance from the SAME corridor jumps at the SAME place.');
+
   // --- GeoJSON -------------------------------------------------------------
   const byDriver = new Map(fleet.map((d) => [d.driverId, telemetryForDriver(operator, d.driverId)]));
   const fc = driversToFeatureCollection(fleet, byDriver);
@@ -605,7 +627,7 @@ function sectionGeo() {
   process.stdout.write('   GeoJSON  : ' + JSON.stringify(fc).length + ' bytes\n');
   process.stdout.write('   TopoJSON : ' + JSON.stringify(topo).length + ' bytes  (' +
     (saved * 100).toFixed(1) + '% smaller)\n');
-  const roundTripped = decodePoint(topo, topo.objects.sites.geometries[0]);
+  const roundTripped = decodePoint(topo, topo.objects.drivers.geometries[0]);
   process.stdout.write('   round trip: [' + roundTripped[0].toFixed(4) + ', ' + roundTripped[1].toFixed(4) +
     ']  vs original [' + fleet[0].lon + ', ' + fleet[0].lat + ']\n');
   note('   Lossy by design - quantisation trades sub-metre precision for bytes.');
@@ -627,7 +649,7 @@ function sectionGeo() {
   process.stdout.write('   geocode  : ' + geocodeUrl('1 Main St, Dallas TX', 'pk.REDACTED').slice(0, 96) + '...\n');
   process.stdout.write('   isochrone: ' + isochroneUrl([dallas.lon, dallas.lat], [15, 30], 'pk.REDACTED').slice(0, 96) + '...\n');
 
-  const denver = fleet.find((d) => d.driverId === 'drv-0311')!;
+  const denver = fleet.find((d) => d.driverId === 'drv-1027')!;
   process.stdout.write('   \x1b[90mDallas -> Denver = ' + haversineKm(dallas, denver).toFixed(1) + ' km\x1b[0m\n');
 }
 
@@ -677,7 +699,7 @@ async function sectionAi() {
   // --- The agent loop ------------------------------------------------------
   note('');
   note('AgentCore loop - operator asks an open-ended question:');
-  const agentQuestion = 'Why is drv-0142 behind schedule, and what are my options?';
+  const agentQuestion = 'Why is drv-1000 behind schedule, and what are my options?';
   process.stdout.write('   Q: ' + agentQuestion + '\n\n');
 
   const result = await runAgent({ question: agentQuestion, principal: operator, tools: TOOL_SPECS });
@@ -711,7 +733,7 @@ async function sectionAi() {
   note('');
   note('Now an explicit request to act (note openIncident appears only here):');
   const actionResult = await runAgent({
-    question: 'Open a critical incident for drv-0142 covering the braking cluster.',
+    question: 'Open a critical incident for drv-1000 covering the braking cluster.',
     principal: operator,
     tools: TOOL_SPECS,
   });

@@ -13,7 +13,7 @@
  *   2. Make bad calls impossible via the schema - enums, required fields,
  *      bounded numbers. A constraint in the schema beats a plea in the prompt.
  *   3. Return errors as data (`is_error: true`), not exceptions. The model can
- *      read "driver drv-9999 not found - valid ids are drv-0142, ..." and fix
+ *      read "driver drv-9999 not found - valid ids are drv-1000, ..." and fix
  *      its own call. A thrown exception just kills the turn.
  *
  * Every executor takes the caller's `Principal`. The agent has no ambient
@@ -78,7 +78,7 @@ export const TOOLS: Tool[] = [
       input_schema: {
         type: 'object',
         properties: {
-          driverId: { type: 'string', description: 'Driver id such as drv-0142.' },
+          driverId: { type: 'string', description: 'Driver id such as drv-1000.' },
           hours: { type: 'number', description: 'How many hours back to look. 1-24.' },
         },
         required: ['driverId', 'hours'],
@@ -89,8 +89,8 @@ export const TOOLS: Tool[] = [
       const driver = getDriver(principal, driverId);
       if (!driver) {
         // Error-as-data: tell the model how to correct itself.
-        return 'ERROR: unknown driverId "' + driverId + '". Valid ids: drv-0142, ' +
-          'drv-0187, drv-0311, drv-0455, drv-0501.';
+        return 'ERROR: unknown driverId "' + driverId + '". Valid ids: drv-1000, ' +
+          'drv-1016, drv-1027, drv-1038, drv-1049.';
       }
 
       const since = new Date(now() - Number(input.hours ?? 6) * 3600_000).toISOString();

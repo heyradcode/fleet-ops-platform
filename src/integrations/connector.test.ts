@@ -42,7 +42,7 @@ test('samsara: one vehicle row yields separate position and braking readings', (
 
   const brake = readings.find((t) => t.kind === 'harsh-brake');
   assert.ok(brake);
-  assert.equal(brake.driverId, 'drv-0142');
+  assert.equal(brake.driverId, 'drv-1000');
   assert.equal(brake.severity, 'critical'); // 0.62g, threshold is 0.55
 });
 
@@ -68,7 +68,7 @@ test('geotab: already-metric speed is passed through unconverted', () => {
 
   assert.equal(readings[0].value, 88);   // NOT converted - Geotab is metric
   assert.equal(readings[0].unit, 'kph');
-  assert.equal(readings[0].driverId, 'drv-0311');
+  assert.equal(readings[0].driverId, 'drv-1027');
 });
 
 test('verizon: a speeding reading only appears when over the posted limit', () => {
@@ -89,7 +89,7 @@ test('motive: hours-of-service SECONDS become canonical MINUTES', () => {
     payload: motiveHosLogs,
   });
 
-  const low = readings.find((t) => t.driverId === 'drv-0142');
+  const low = readings.find((t) => t.driverId === 'drv-1000');
   assert.ok(low);
   // 2040 seconds -> 34 minutes. Reading it as 2040 minutes would put this
   // driver comfortably inside every threshold and silence the warning.

@@ -12,14 +12,21 @@
  * than Aurora, and why position history lives in S3.
  */
 import type { Driver, Principal, Territory } from '../platform/types.ts';
-import { DRIVERS, DISTRICTS, US_SOUTH_REGION } from '../data/districts.ts';
+import { DISTRICTS, US_SOUTH_REGION } from '../data/districts.ts';
+import { fleetAsDrivers } from '../data/generate.ts';
 import { bboxAround, haversineKm, inBBox, pointInPolygon } from './spatial.ts';
 
 export type NearbyDriver = Driver & { distanceKm: number };
 
-/** Tenant-scoped view of the drivers table. */
+/**
+ * Tenant-scoped view of the drivers table.
+ *
+ * Sourced from the seeded generator, so the whole demo - the board, the
+ * scenarios, the agent's tools - reasons about ONE fleet of sixty drivers
+ * rather than two disjoint populations that happen to share a schema.
+ */
 export function allDrivers(principal: Principal): Driver[] {
-  return DRIVERS.map((d) => ({ ...d, tenantId: principal.tenantId }));
+  return fleetAsDrivers(principal.tenantId);
 }
 
 export function getDriver(principal: Principal, driverId: string): Driver | undefined {
