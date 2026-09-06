@@ -168,7 +168,7 @@ function toolsAlreadyRun(messages: Message[]): Set<string> {
  * an agent that pages someone because you asked "why is this slow?" is a bug,
  * not a feature.
  */
-const ACTION_TOOLS = new Set(['openIncident', 'acknowledgeIncident', 'dispatchEngineer']);
+const ACTION_TOOLS = new Set(['openIncident', 'acknowledgeIncident', 'reassignDriver']);
 const ACTION_INTENT = /\b(open|raise|create|file|page|escalate|acknowledge|dispatch)\b/i;
 
 function plan(req: { system: string; messages: Message[]; tools?: ToolSpec[] }): Omit<ModelResponse, 'usage'> {
@@ -201,7 +201,13 @@ function inferArgs(tool: ToolSpec, messages: Message[]): Record<string, unknown>
 
   for (const key of tool.input_schema.required ?? []) {
     if (key === 'query' || key === 'question') args[key] = question;
-    else if (key === 'siteId') args[key] = extractSiteId(question) ?? 'dal-01';
+    else if (key === 'driverId' || key === 'fromDriverId') {
+      args[key] = extractDriverId(question) ?? 'drv-0142';
+    }
+    else if (key === 'toDriverId') args[key] = 'drv-0143';
+    else if (key === 'districtId') args[key] = 'dal';
+    else if (key === 'driverIds') args[key] = [extractDriverId(question) ?? 'drv-0142'];
+    else if (key === 'severity') args[key] = 'critical';
     else if (key === 'radiusKm') args[key] = 400;
     else if (key === 'hours') args[key] = 6;
     else args[key] = question;
@@ -209,13 +215,15 @@ function inferArgs(tool: ToolSpec, messages: Message[]): Record<string, unknown>
   return args;
 }
 
-function extractSiteId(text: string): string | undefined {
-  const explicit = /\b([a-z]{3}-\d{2})\b/i.exec(text);
+function extractDriverId(text: string): string | undefined {
+  const explicit = /\b(drv-\d{4})\b/i.exec(text);
   if (explicit) return explicit[1].toLowerCase();
 
+  // A dispatcher usually says a place or a name, not an id. Mapping the demo
+  // fleet by district is enough to make the scripted agent behave plausibly.
   const named: Record<string, string> = {
-    dallas: 'dal-01', austin: 'aus-01', denver: 'den-01',
-    chicago: 'chi-01', phoenix: 'phx-01',
+    dallas: 'drv-0142', austin: 'drv-0187', denver: 'drv-0311',
+    chicago: 'drv-0455', phoenix: 'drv-0501',
   };
   const lower = text.toLowerCase();
   for (const [name, id] of Object.entries(named)) {

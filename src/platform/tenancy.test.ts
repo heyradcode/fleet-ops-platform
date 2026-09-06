@@ -6,31 +6,40 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { signDemoToken, verifyToken, TokenVerificationError } from '../auth/cognito-jwt-verifier.ts';
-import { assertSameTenant, requireRole, CrossTenantAccessError, tenantScopedSessionPolicy } from './tenancy.ts';
-import { putSignals, recentSignals } from './repository.ts';
-import type { Principal, Signal } from './types.ts';
+import {
+  assertSameTenant, requireRole, CrossTenantAccessError, tenantScopedSessionPolicy,
+  scopeAllowsDistrict, withinScope, OutOfScopeError, assertDistrictInScope,
+} from './tenancy.ts';
+import { putTelemetry, recentTelemetry } from './repository.ts';
+import type { Driver, Principal, Telemetry } from './types.ts';
 
 const acme = verifyToken(signDemoToken({
-  sub: 'u1', email: 'a@acme.com', 'custom:tenantId': 'acme', 'cognito:groups': ['operator'],
+  sub: 'u1', email: 'a@acme.com', 'custom:tenantId': 'acme', 'cognito:groups': ['dispatcher'],
 }));
 const globex = verifyToken(signDemoToken({
   sub: 'u2', email: 'b@globex.com', 'custom:tenantId': 'globex', 'cognito:groups': ['viewer'],
 }));
 
-function signal(tenantId: string, id: string): Signal {
+function reading(tenantId: string, id: string): Telemetry {
   return {
-    tenantId, signalId: id, provider: 'splunk', domain: 'observability', kind: 'error-rate',
-    siteId: 'dal-01', sourceRef: 'dal-01', value: 9, unit: 'percent', severity: 'critical',
-    observedAt: '2026-09-04T10:00:00Z', attributes: {},
+    tenantId, telemetryId: id, provider: 'samsara', domain: 'telematics', kind: 'harsh-brake',
+    driverId: 'drv-0142', sourceRef: 'TRK-8891', value: 0.62, unit: 'g', severity: 'critical',
+    observedAt: '2026-09-08T14:30:00.000Z', attributes: {},
   };
 }
 
-test('a tenant cannot read another tenant\'s signals', () => {
-  putSignals(acme, [signal('acme', 'acme-1')]);
-  putSignals(globex, [signal('globex', 'globex-1')]);
-
-  const acmeSees = recentSignals(acme, 100).map((s) => s.signalId);
-  const globexSees = recentSignals(globex, 100).map((s) => s.signalId);
+function driver(driverId: string, districtId: string): Driver {
+  return {
+    tenantId: 'acme', driverId, name: 'Test', districtId, vehicleId: 'V1',
+    status: 'driving', lon: 0, lat: 0, hosRemainingMinutes: 300,
+    updatedAt: '2026-09-08T14:30:00.000Z',
+  };
+}
+test('a tenant cannot read another tenant telemetry', () => {
+  putTelemetry(acme, [reading('acme', 'acme-1')]);
+  putTelemetry(globex, [reading('globex', 'globex-1')]);
+  const acmeSees = recentTelemetry(acme, 100).map((t) => t.telemetryId);
+  const globexSees = recentTelemetry(globex, 100).map((t) => t.telemetryId);
 
   assert.ok(acmeSees.includes('acme-1'));
   assert.ok(!acmeSees.includes('globex-1'));
@@ -44,8 +53,8 @@ test('assertSameTenant rejects a cross-tenant request', () => {
 });
 
 test('requireRole enforces write permissions', () => {
-  assert.throws(() => requireRole(globex, 'admin', 'operator'), /forbidden/);
-  assert.doesNotThrow(() => requireRole(acme, 'admin', 'operator'));
+  assert.throws(() => requireRole(globex, 'admin', 'dispatcher'), /forbidden/);
+  assert.doesNotThrow(() => requireRole(acme, 'admin', 'dispatcher'));
 });
 
 test('the IAM session policy pins dynamodb:LeadingKeys to one tenant', () => {
@@ -100,4 +109,41 @@ test('unknown Cognito groups degrade to viewer, never to admin', () => {
   assert.deepEqual(weird.roles, ['viewer']);
   const principal: Principal = weird;
   assert.throws(() => requireRole(principal, 'admin'));
+});
+
+// ---------------------------------------------------------------------------
+// Scope: the second boundary, inside the tenant
+// ---------------------------------------------------------------------------
+
+test('a district-scoped dispatcher cannot see another district', () => {
+  const dallas: Principal = { ...acme, scope: { kind: 'district', districtId: 'dal' } };
+
+  assert.ok(scopeAllowsDistrict(dallas, 'dal'));
+  assert.ok(!scopeAllowsDistrict(dallas, 'phx'));
+  assert.throws(() => assertDistrictInScope(dallas, 'phx'), OutOfScopeError);
+});
+
+test('withinScope narrows a driver list to the caller\'s district', () => {
+  const dallas: Principal = { ...acme, scope: { kind: 'district', districtId: 'dal' } };
+  const fleet = [driver('drv-1', 'dal'), driver('drv-2', 'phx'), driver('drv-3', 'dal')];
+
+  const visible = withinScope(dallas, fleet).map((d) => d.driverId);
+  assert.deepEqual(visible, ['drv-1', 'drv-3']);
+});
+
+test('a driver-scoped principal sees only themselves', () => {
+  const self: Principal = { ...acme, scope: { kind: 'driver', driverId: 'drv-2' } };
+  const fleet = [driver('drv-1', 'dal'), driver('drv-2', 'phx')];
+
+  assert.deepEqual(withinScope(self, fleet).map((d) => d.driverId), ['drv-2']);
+  // A driver has no district board at all - not even their own district's.
+  assert.ok(!scopeAllowsDistrict(self, 'phx'));
+});
+
+test('an admin is tenant-scoped, which is the only way to see everything', () => {
+  const admin: Principal = { ...acme, scope: { kind: 'tenant' } };
+  const fleet = [driver('drv-1', 'dal'), driver('drv-2', 'phx')];
+
+  assert.equal(withinScope(admin, fleet).length, 2);
+  assert.ok(scopeAllowsDistrict(admin, 'anything'));
 });

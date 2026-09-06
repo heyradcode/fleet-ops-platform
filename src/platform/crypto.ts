@@ -104,9 +104,40 @@ export function sha256Bytes(bytes: Uint8Array): Uint8Array {
  *
  * Deliberately NOT used for anything that must be idempotent - see `ids.ts` for
  * why telemetry ids are content hashes instead.
+ *
+ * Injectable for the same reason as the clock: without it, every demo run
+ * produces different incident ids and S3 keys, so two runs cannot be diffed.
+ * The default is `crypto.randomUUID()` and stays that way in production - the
+ * demo installs a seeded generator, and nothing security-sensitive draws here.
  */
-export function uuid(): string {
-  return globalThis.crypto.randomUUID();
+export type UuidFn = () => string;
+
+const cryptoUuid: UuidFn = () => globalThis.crypto.randomUUID();
+let currentUuid: UuidFn = cryptoUuid;
+
+export function setUuid(fn: UuidFn): void { currentUuid = fn; }
+
+export function uuid(): string { return currentUuid(); }
+
+/**
+ * A v4-shaped UUID drawn from an injected random source.
+ *
+ * Shaped like a real UUID (version and variant nibbles set) so that anything
+ * parsing it still works; NOT cryptographically random, and never used where
+ * that matters.
+ */
+export function seededUuid(random: () => number): UuidFn {
+  return () => {
+    const hex = '0123456789abcdef';
+    let out = '';
+    for (let i = 0; i < 36; i++) {
+      if (i === 8 || i === 13 || i === 18 || i === 23) { out += '-'; continue; }
+      if (i === 14) { out += '4'; continue; }
+      const n = Math.floor(random() * 16);
+      out += i === 19 ? hex[(n & 0x3) | 0x8] : hex[n];
+    }
+    return out;
+  };
 }
 
 // ---------------------------------------------------------------------------

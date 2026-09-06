@@ -98,9 +98,9 @@ export function checkOutput(answer: string, retrievedContext: string[]): Guardra
  * here means the worst case is a refused tool call.
  */
 export function canUseTool(principal: Principal, toolName: string): GuardrailVerdict {
-  const writeTools = new Set(['openIncident', 'acknowledgeIncident', 'dispatchEngineer']);
+  const writeTools = new Set(['openIncident', 'acknowledgeIncident', 'reassignDriver']);
 
-  if (writeTools.has(toolName) && !principal.roles.some((r) => r === 'admin' || r === 'operator')) {
+  if (writeTools.has(toolName) && !principal.roles.some((r) => r === 'admin' || r === 'dispatcher')) {
     return {
       allowed: false,
       reason: 'role ' + principal.roles.join('/') + ' may not invoke the write tool ' + toolName,

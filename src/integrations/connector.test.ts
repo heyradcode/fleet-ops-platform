@@ -1,106 +1,195 @@
 /**
- * The tests that matter most on an integration project: given ONE captured
- * vendor response, does normalise() produce the Signal we expect?
+ * The tests that matter most on an integration project: given ONE vendor
+ * response, does normalise() produce the Telemetry we expect?
  *
  * These are the tests that catch the day a vendor renames a field - which they
  * will do, without telling you.
+ *
+ * The unit conversions get their own assertions on purpose. A wrong factor of
+ * 60 in an hours-of-service reading does not throw, does not fail a type check,
+ * and silently disables every safety warning in the platform.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ciscoMeraki } from './network/cisco-meraki.ts';
-import { juniperMist } from './network/juniper-mist.ts';
-import { five9 } from './contact-center/five9.ts';
-import { splunk } from './observability/splunk.ts';
+import { samsara } from './telematics/samsara.ts';
+import { geotab } from './telematics/geotab.ts';
+import { verizonConnect } from './telematics/verizon-connect.ts';
+import { motive } from './eld-hos/motive.ts';
+import { omnitracs } from './eld-hos/omnitracs.ts';
+import { lytx } from './video-safety/lytx.ts';
+import { netradyne } from './video-safety/netradyne.ts';
 import { severityFor, withRetry, CircuitBreaker, ProviderError } from './connector.ts';
-import { connectors } from './registry.ts';
-import { merakiDeviceStatuses, mistDeviceStats, five9QueueStats, splunkSearchResults } from './fixtures.ts';
+import { connectors, connectorsFor, providersFor } from './registry.ts';
+import { verifyToken, signDemoToken } from '../auth/cognito-jwt-verifier.ts';
+import {
+  samsaraVehicleStats, geotabDeviceStatusInfo, verizonConnectVehicles,
+  motiveHosLogs, omnitracsHos, lytxEvents, netradyneAlerts,
+} from './fixtures.ts';
 
-const ctx = { tenantId: 'acme', secrets: {}, since: new Date(0) };
+const ctx = { tenantId: 'acme-freight', secrets: {}, since: new Date(0) };
+const T = '2026-09-08T14:30:00.000Z';
 
-test('meraki: one device row yields separate latency and loss signals', () => {
-  const signals = ciscoMeraki.normalise({
-    tenantId: 'acme', provider: 'cisco-meraki',
-    fetchedAt: '2026-09-04T10:00:00Z', payload: merakiDeviceStatuses,
+test('samsara: one vehicle row yields separate position and braking readings', () => {
+  const readings = samsara.normalise({
+    tenantId: 'acme-freight', provider: 'samsara', fetchedAt: T,
+    payload: samsaraVehicleStats,
   });
 
-  assert.equal(signals.length, merakiDeviceStatuses.items.length * 2);
+  // Two vehicles, both with GPS; only one has a harsh event.
+  assert.equal(readings.filter((t) => t.kind === 'position').length, 2);
+  assert.equal(readings.filter((t) => t.kind === 'harsh-brake').length, 1);
 
-  const dallasLoss = signals.find((s) => s.siteId === 'dal-01' && s.kind === 'packet-loss');
-  assert.ok(dallasLoss);
-  assert.equal(dallasLoss.value, 7.4);
-  assert.equal(dallasLoss.severity, 'critical'); // 7.4% loss, threshold is 5
+  const brake = readings.find((t) => t.kind === 'harsh-brake');
+  assert.ok(brake);
+  assert.equal(brake.driverId, 'drv-0142');
+  assert.equal(brake.severity, 'critical'); // 0.62g, threshold is 0.55
 });
 
-test('mist: unix seconds become ISO, and CPU util is inverted into health', () => {
-  const signals = juniperMist.normalise({
-    tenantId: 'acme', provider: 'juniper-mist',
-    fetchedAt: '2026-09-04T10:00:00Z', payload: mistDeviceStats,
+test('samsara: miles per hour are converted to km/h', () => {
+  const readings = samsara.normalise({
+    tenantId: 'acme-freight', provider: 'samsara', fetchedAt: T,
+    payload: samsaraVehicleStats,
   });
 
-  const dallas = signals.find((s) => s.siteId === 'dal-01');
-  assert.ok(dallas);
-  // cpu_util 91 -> health 9 -> critical, because health is inverted.
-  assert.equal(dallas.value, 9);
-  assert.equal(dallas.severity, 'critical');
-  assert.equal(dallas.observedAt, new Date(1_788_000_000 * 1000).toISOString());
+  const moving = readings.find((t) => t.kind === 'position' && t.value > 0);
+  assert.ok(moving);
+  // 41.6 mph is ~66.9 km/h. If this ever reads 41.6 the conversion was dropped
+  // and every speed in the platform is understated by 38%.
+  assert.ok(moving.value > 66 && moving.value < 68, 'expected ~66.9 kph, got ' + moving.value);
+  assert.equal(moving.unit, 'kph');
 });
 
-test('five9: site is parsed out of the queue name, unknown falls back safely', () => {
-  const signals = five9.normalise({
-    tenantId: 'acme', provider: 'five9',
-    fetchedAt: '2026-09-04T10:00:00Z', payload: five9QueueStats,
+test('geotab: already-metric speed is passed through unconverted', () => {
+  const readings = geotab.normalise({
+    tenantId: 'acme-freight', provider: 'geotab', fetchedAt: T,
+    payload: geotabDeviceStatusInfo,
   });
 
-  assert.equal(signals.find((s) => s.sourceRef === 'Dallas_Support')?.siteId, 'dal-01');
-  assert.equal(signals.find((s) => s.sourceRef === 'Austin_Billing')?.siteId, 'aus-01');
+  assert.equal(readings[0].value, 88);   // NOT converted - Geotab is metric
+  assert.equal(readings[0].unit, 'kph');
+  assert.equal(readings[0].driverId, 'drv-0311');
 });
 
-test('splunk: string numbers are parsed, and a NaN row is dropped not propagated', () => {
-  const poisoned = {
-    ...splunkSearchResults,
-    results: [...splunkSearchResults.results, { site: 'bad-01', error_rate: 'n/a', events: 'x', _time: '2026-09-04T09:55:00Z' }],
-  };
-
-  const signals = splunk.normalise({
-    tenantId: 'acme', provider: 'splunk', fetchedAt: '2026-09-04T10:00:00Z', payload: poisoned,
+test('verizon: a speeding reading only appears when over the posted limit', () => {
+  const readings = verizonConnect.normalise({
+    tenantId: 'acme-freight', provider: 'verizon-connect', fetchedAt: T,
+    payload: verizonConnectVehicles,
   });
 
-  assert.equal(signals.length, 2); // the unparseable row was skipped
-  assert.ok(signals.every((s) => Number.isFinite(s.value)));
+  const speeding = readings.find((t) => t.kind === 'speeding');
+  assert.ok(speeding);
+  assert.equal(speeding.value, 12);      // 52 observed - 40 posted
+  assert.equal(speeding.severity, 'warning');
 });
 
-test('signalId is a content hash, so re-ingesting the same reading is idempotent', async () => {
-  const raw = await ciscoMeraki.fetchRaw(ctx);
-  const first = ciscoMeraki.normalise({ ...raw, fetchedAt: '2026-09-04T10:00:00Z' });
-  const second = ciscoMeraki.normalise({ ...raw, fetchedAt: '2026-09-04T10:05:00Z' });
+test('motive: hours-of-service SECONDS become canonical MINUTES', () => {
+  const readings = motive.normalise({
+    tenantId: 'acme-freight', provider: 'motive', fetchedAt: T,
+    payload: motiveHosLogs,
+  });
+
+  const low = readings.find((t) => t.driverId === 'drv-0142');
+  assert.ok(low);
+  // 2040 seconds -> 34 minutes. Reading it as 2040 minutes would put this
+  // driver comfortably inside every threshold and silence the warning.
+  assert.equal(low.value, 34);
+  assert.equal(low.unit, 'minutes');
+  assert.equal(low.severity, 'critical'); // <= 40 minutes left
+});
+
+test('omnitracs: already-minutes hours-of-service is passed through', () => {
+  const readings = omnitracs.normalise({
+    tenantId: 'acme-freight', provider: 'omnitracs', fetchedAt: T,
+    payload: omnitracsHos,
+  });
+
+  assert.equal(readings[0].value, 45);   // NOT divided by 60
+  assert.equal(readings[0].unit, 'minutes');
+  assert.equal(readings[0].severity, 'warning');
+});
+
+test('hos-remaining severity is INVERTED - fewer minutes is worse', () => {
+  assert.equal(severityFor('hos-remaining', 300), 'ok');
+  assert.equal(severityFor('hos-remaining', 50), 'warning');
+  assert.equal(severityFor('hos-remaining', 20), 'critical');
+
+  // And the normal direction still works.
+  assert.equal(severityFor('harsh-brake', 0.1), 'ok');
+  assert.equal(severityFor('harsh-brake', 0.6), 'critical');
+});
+
+test('netradyne: epoch millis become ISO-8601', () => {
+  const readings = netradyne.normalise({
+    tenantId: 'acme-freight', provider: 'netradyne', fetchedAt: T,
+    payload: netradyneAlerts,
+  });
+
+  assert.equal(readings[0].observedAt, '2026-09-08T14:29:00.000Z');
+  assert.equal(readings[0].value, 23);   // 1380 seconds idling -> 23 minutes
+  assert.equal(readings[0].kind, 'idle');
+});
+
+test('samsara and lytx independently witness the SAME braking event', () => {
+  // This is the property the whole corroboration rule rests on: two different
+  // vendors, two different devices, one physical event on one truck.
+  const fromSamsara = samsara.normalise({
+    tenantId: 'acme-freight', provider: 'samsara', fetchedAt: T, payload: samsaraVehicleStats,
+  }).find((t) => t.kind === 'harsh-brake');
+
+  const fromLytx = lytx.normalise({
+    tenantId: 'acme-freight', provider: 'lytx', fetchedAt: T, payload: lytxEvents,
+  }).find((t) => t.kind === 'harsh-brake');
+
+  assert.ok(fromSamsara && fromLytx);
+  assert.equal(fromSamsara.driverId, fromLytx.driverId);
+  assert.equal(fromSamsara.observedAt, fromLytx.observedAt);
+  // Different vendors, so different ids - they are two witnesses, not a
+  // duplicate. detectIncidents counts DISTINCT providers for exactly this.
+  assert.notEqual(fromSamsara.provider, fromLytx.provider);
+  assert.notEqual(fromSamsara.telemetryId, fromLytx.telemetryId);
+});
+
+test('telemetryId is a content hash, so re-ingesting the same reading is idempotent', async () => {
+  const raw = await samsara.fetchRaw(ctx);
+  const first = samsara.normalise({ ...raw, fetchedAt: '2026-09-08T14:30:00.000Z' });
+  const second = samsara.normalise({ ...raw, fetchedAt: '2026-09-08T14:35:00.000Z' });
 
   // Different fetch times, same observation -> same ids. A duplicate delivery
   // overwrites rather than duplicating.
-  assert.deepEqual(first.map((s) => s.signalId), second.map((s) => s.signalId));
-});
-
-test('severity thresholds invert correctly for device-health', () => {
-  assert.equal(severityFor('packet-loss', 0.2), 'ok');
-  assert.equal(severityFor('packet-loss', 6), 'critical');
-
-  // Health is inverted: LOWER is worse.
-  assert.equal(severityFor('device-health', 99), 'ok');
-  assert.equal(severityFor('device-health', 70), 'critical');
+  assert.deepEqual(
+    first.map((t) => t.telemetryId),
+    second.map((t) => t.telemetryId),
+  );
 });
 
 test('every registered connector declares a rate limit and a domain', () => {
   for (const c of connectors) {
     assert.ok(c.rateLimitPerMin > 0, c.provider + ' must declare a rate limit');
-    assert.ok(['network', 'contact-center', 'observability'].includes(c.domain));
+    assert.ok(['telematics', 'eld-hos', 'video-safety'].includes(c.domain));
   }
+  assert.equal(connectors.length, 8);
+});
+
+test('a tenant polls only the vendors it actually runs', () => {
+  const acme = verifyToken(signDemoToken({
+    sub: 'u1', 'custom:tenantId': 'acme-freight', 'cognito:groups': ['dispatcher'],
+  }));
+
+  const active = connectorsFor(acme).map((c) => c.provider);
+  assert.deepEqual(active.sort(), ['lytx', 'motive', 'samsara']);
+
+  // A carrier running one GPS unit, one ELD and one dashcam per truck is the
+  // realistic case; polling all eight would not be.
+  assert.equal(active.length, 3);
+  assert.notDeepEqual(providersFor('acme-freight'), providersFor('northstar-logistics'));
 });
 
 test('withRetry retries a 503 but never retries a 401', async () => {
   let attempts = 0;
   const ok = await withRetry('t', async () => {
     attempts++;
-    if (attempts < 3) throw new ProviderError('splunk', 503, 'unavailable');
+    if (attempts < 3) throw new ProviderError('samsara', 503, 'unavailable');
     return 'done';
   }, { baseMs: 1 });
 
@@ -111,7 +200,7 @@ test('withRetry retries a 503 but never retries a 401', async () => {
   await assert.rejects(
     withRetry('t', async () => {
       authAttempts++;
-      throw new ProviderError('splunk', 401, 'bad token');
+      throw new ProviderError('samsara', 401, 'bad token');
     }, { baseMs: 1 }),
   );
   assert.equal(authAttempts, 1); // a bad credential will not fix itself

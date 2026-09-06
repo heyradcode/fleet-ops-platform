@@ -13,18 +13,20 @@
  *   2. Make bad calls impossible via the schema - enums, required fields,
  *      bounded numbers. A constraint in the schema beats a plea in the prompt.
  *   3. Return errors as data (`is_error: true`), not exceptions. The model can
- *      read "site xyz-99 not found - valid ids are dal-01, aus-01, ..." and fix
+ *      read "driver drv-9999 not found - valid ids are drv-0142, ..." and fix
  *      its own call. A thrown exception just kills the turn.
  *
  * Every executor takes the caller's `Principal`. The agent has no ambient
- * authority: it can only see what the human who asked could already see.
+ * authority: it can only see what the human who asked could already see, and
+ * it can only do what that human could already do.
  */
 import type { ToolSpec } from '../aws/bedrock.ts';
 import type { Principal } from '../platform/types.ts';
-import { signalsForSite, openIncidents, putIncident } from '../platform/repository.ts';
-import { sitesWithinRadius, getSite, locationOf } from '../geo/site-repository.ts';
+import { telemetryForDriver, openIncidents, putIncident } from '../platform/repository.ts';
+import { availableDriversNear, getDriver, locationOf } from '../geo/driver-repository.ts';
 import { knowledgeBase } from './knowledge-base.ts';
 import { incidentId } from '../platform/ids.ts';
+import { now, nowIso } from '../platform/clock.ts';
 import { canUseTool } from './guardrails.ts';
 
 export type ToolExecutor = (
@@ -68,40 +70,45 @@ export const TOOLS: Tool[] = [
 
   {
     spec: {
-      name: 'querySignals',
+      name: 'queryDriverTelemetry',
       description:
-        'Fetch recent normalised telemetry for one site across every connected ' +
-        'system - network devices, contact centre queues and observability ' +
-        'probes. Use this to find out what is actually happening at a site ' +
-        'before explaining why.',
+        'Fetch recent normalised telemetry for one driver across every ' +
+        'connected system - GPS, hours-of-service and dashcam. Use this to ' +
+        'find out what is actually happening to a driver before explaining why.',
       input_schema: {
         type: 'object',
         properties: {
-          siteId: { type: 'string', description: 'Site id such as dal-01, aus-01, den-01, chi-01, phx-01.' },
+          driverId: { type: 'string', description: 'Driver id such as drv-0142.' },
           hours: { type: 'number', description: 'How many hours back to look. 1-24.' },
         },
-        required: ['siteId', 'hours'],
+        required: ['driverId', 'hours'],
       },
     },
     execute(input, principal) {
-      const siteId = String(input.siteId);
-      const site = getSite(principal, siteId);
-      if (!site) {
+      const driverId = String(input.driverId);
+      const driver = getDriver(principal, driverId);
+      if (!driver) {
         // Error-as-data: tell the model how to correct itself.
-        return 'ERROR: unknown siteId "' + siteId + '". Valid ids: dal-01, aus-01, den-01, chi-01, phx-01.';
+        return 'ERROR: unknown driverId "' + driverId + '". Valid ids: drv-0142, ' +
+          'drv-0187, drv-0311, drv-0455, drv-0501.';
       }
 
-      const since = new Date(Date.now() - Number(input.hours ?? 6) * 3600_000).toISOString();
-      const signals = signalsForSite(principal, siteId, since);
-      if (signals.length === 0) return 'No signals for ' + siteId + ' in that window.';
+      const since = new Date(now() - Number(input.hours ?? 6) * 3600_000).toISOString();
+      const readings = telemetryForDriver(principal, driverId, since);
+      if (readings.length === 0) return 'No telemetry for ' + driverId + ' in that window.';
 
-      const lines = signals
-        .filter((s) => s.severity !== 'ok')
-        .map((s) => [s.severity.toUpperCase(), s.provider, s.kind, s.value + s.unit, 'at ' + s.observedAt].join(' | '));
+      const lines = readings
+        .filter((t) => t.severity !== 'ok')
+        .map((t) => [
+          t.severity.toUpperCase(), t.provider, t.kind,
+          t.value + t.unit, 'at ' + t.observedAt,
+        ].join(' | '));
 
       return [
-        'Site ' + site.name + ' (' + siteId + '), ' + site.headcount + ' staff, region ' + site.region + '.',
-        signals.length + ' signals, ' + lines.length + ' non-OK:',
+        driver.name + ' (' + driverId + '), vehicle ' + driver.vehicleId +
+          ', district ' + driver.districtId + ', status ' + driver.status +
+          ', ' + driver.hosRemainingMinutes + ' minutes of drive time left.',
+        readings.length + ' readings, ' + lines.length + ' non-OK:',
         ...lines.slice(0, 12),
       ].join('\n');
     },
@@ -109,32 +116,36 @@ export const TOOLS: Tool[] = [
 
   {
     spec: {
-      name: 'findNearbySites',
+      name: 'findNearbyAvailableDrivers',
       description:
-        'Find sites within a radius of a given site, using a spatial query. ' +
-        'Use this to work out whether a problem is local to one building or ' +
-        'regional - a regional pattern usually means the carrier, not the site.',
+        'Find drivers near a given driver who could take over their work, ' +
+        'using a spatial query. Use this when the user asks what their options ' +
+        'are for reassigning a load, or whether help is close by. Only returns ' +
+        'drivers with enough legal hours remaining to actually accept work.',
       input_schema: {
         type: 'object',
         properties: {
-          siteId: { type: 'string', description: 'The site at the centre of the search.' },
-          radiusKm: { type: 'number', description: 'Search radius in kilometres, 1-2000.' },
+          driverId: { type: 'string', description: 'The driver at the centre of the search.' },
+          radiusKm: { type: 'number', description: 'Search radius in kilometres, 1-500.' },
         },
-        required: ['siteId', 'radiusKm'],
+        required: ['driverId', 'radiusKm'],
       },
     },
     execute(input, principal) {
-      const centre = locationOf(principal, String(input.siteId));
-      if (!centre) return 'ERROR: unknown siteId "' + input.siteId + '".';
+      const centre = locationOf(principal, String(input.driverId));
+      if (!centre) return 'ERROR: unknown driverId "' + input.driverId + '".';
 
-      const nearby = sitesWithinRadius(principal, centre, Number(input.radiusKm));
-      if (nearby.length <= 1) {
-        return 'No other sites within ' + input.radiusKm + 'km - this site is isolated, ' +
-          'so a shared regional cause is unlikely.';
+      const nearby = availableDriversNear(principal, centre, Number(input.radiusKm))
+        .filter((d) => d.driverId !== input.driverId);
+
+      if (nearby.length === 0) {
+        return 'No available drivers within ' + input.radiusKm + 'km. Everyone in ' +
+          'range is either off duty or short on hours, so reassignment is not an option.';
       }
 
       return nearby
-        .map((s) => s.siteId + ' (' + s.name + ') ' + s.distanceKm + 'km, ' + s.headcount + ' staff')
+        .map((d) => d.driverId + ' (' + d.name + ') ' + d.distanceKm + 'km, ' +
+          d.status + ', ' + d.hosRemainingMinutes + ' min left')
         .join('\n');
     },
   },
@@ -151,7 +162,8 @@ export const TOOLS: Tool[] = [
       const incidents = openIncidents(principal);
       if (incidents.length === 0) return 'No open incidents.';
       return incidents
-        .map((i) => i.incidentId + ' [' + i.severity + '] ' + i.title + ' sites=' + i.siteIds.join(','))
+        .map((i) => i.incidentId + ' [' + i.severity + '] ' + i.title +
+          ' drivers=' + i.driverIds.join(','))
         .join('\n');
     },
   },
@@ -168,9 +180,10 @@ export const TOOLS: Tool[] = [
         properties: {
           title: { type: 'string', description: 'Short imperative summary.' },
           severity: { type: 'string', enum: ['info', 'warning', 'critical'] },
-          siteIds: { type: 'array', items: { type: 'string' }, description: 'Affected site ids.' },
+          districtId: { type: 'string', description: 'District the incident is in.' },
+          driverIds: { type: 'array', items: { type: 'string' }, description: 'Affected driver ids.' },
         },
-        required: ['title', 'severity', 'siteIds'],
+        required: ['title', 'severity', 'districtId', 'driverIds'],
       },
     },
     execute(input, principal) {
@@ -185,12 +198,55 @@ export const TOOLS: Tool[] = [
         title: String(input.title),
         severity: input.severity as 'info' | 'warning' | 'critical',
         status: 'open' as const,
-        siteIds: (input.siteIds as string[]) ?? [],
-        signalIds: [],
-        openedAt: new Date().toISOString(),
+        districtId: String(input.districtId),
+        driverIds: (input.driverIds as string[]) ?? [],
+        exceptionIds: [],
+        openedAt: nowIso(),
       };
       putIncident(principal, incident);
       return 'Opened ' + incident.incidentId + ': ' + incident.title;
+    },
+  },
+
+  {
+    spec: {
+      name: 'reassignDriver',
+      description:
+        'Reassign a load from one driver to another. This changes the dispatch ' +
+        'plan and notifies both drivers, so use it only when the user explicitly ' +
+        'asks to reassign, and only after confirming the replacement has enough ' +
+        'legal hours with findNearbyAvailableDrivers.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          fromDriverId: { type: 'string', description: 'Driver giving up the load.' },
+          toDriverId: { type: 'string', description: 'Driver taking it on.' },
+          reason: { type: 'string', description: 'Why, for the audit record.' },
+        },
+        required: ['fromDriverId', 'toDriverId', 'reason'],
+      },
+    },
+    execute(input, principal) {
+      // The write tool that proves the rule: the agent acts with the CALLER's
+      // authority, never the platform's. A safety reviewer can read everything
+      // here and still not be able to move a load.
+      const verdict = canUseTool(principal, 'reassignDriver');
+      if (!verdict.allowed) return 'ERROR: ' + verdict.reason;
+
+      const to = getDriver(principal, String(input.toDriverId));
+      if (!to) return 'ERROR: unknown toDriverId "' + input.toDriverId + '".';
+      if (to.hosRemainingMinutes < 60) {
+        // Refusing here rather than in the prompt matters: dispatching a driver
+        // with no legal hours left is a regulatory violation, and it must be
+        // impossible regardless of how convincingly the model was asked.
+        return 'ERROR: ' + to.driverId + ' has only ' + to.hosRemainingMinutes +
+          ' minutes of drive time left and cannot accept a reassignment.';
+      }
+
+      // In production this starts the Step Functions reassignment saga:
+      // validate -> check eligibility -> notify both -> update plan -> emit.
+      return 'Reassignment queued: ' + input.fromDriverId + ' -> ' + input.toDriverId +
+        ' (' + input.reason + ').';
     },
   },
 ];
@@ -201,8 +257,7 @@ export function toolByName(name: string): Tool | undefined {
   return TOOLS.find((t) => t.spec.name === name);
 }
 
-/** Read-only subset, for a "explain but do not act" agent profile. */
+/** Read-only subset, for an "explain but do not act" agent profile. */
 export const READ_ONLY_TOOL_SPECS: ToolSpec[] = TOOLS
-  .filter((t) => t.spec.name !== 'openIncident')
+  .filter((t) => t.spec.name !== 'openIncident' && t.spec.name !== 'reassignDriver')
   .map((t) => t.spec);
-

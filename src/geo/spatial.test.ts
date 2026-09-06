@@ -7,13 +7,13 @@ import assert from 'node:assert/strict';
 
 import { haversineKm, bboxAround, inBBox, pointInPolygon, centroid } from './spatial.ts';
 import { encode, decodePoint, compressionRatio } from './topojson.ts';
-import { sitesToFeatureCollection, computeBBox, polygon } from './geojson.ts';
-import { sitesWithinRadius, regionContaining } from './site-repository.ts';
-import { US_SOUTH_REGION } from '../data/sites.ts';
+import { driversToFeatureCollection, computeBBox, polygon } from './geojson.ts';
+import { driversWithinRadius, regionContaining } from './driver-repository.ts';
+import { US_SOUTH_REGION } from '../data/districts.ts';
 import { verifyToken, signDemoToken } from '../auth/cognito-jwt-verifier.ts';
 
 const principal = verifyToken(signDemoToken({
-  sub: 'u1', 'custom:tenantId': 'acme', 'cognito:groups': ['operator'],
+  sub: 'u1', 'custom:tenantId': 'acme', 'cognito:groups': ['dispatcher'],
 }));
 
 const DALLAS = { lon: -96.7970, lat: 32.7767 };
@@ -45,16 +45,16 @@ test('the bbox pre-filter never excludes a point that is genuinely in range', ()
   assert.ok(haversineKm(DALLAS, AUSTIN) < radiusKm);
 });
 
-test('sitesWithinRadius returns results sorted by distance', () => {
-  const near = sitesWithinRadius(principal, DALLAS, 1200);
-  const distances = near.map((s) => s.distanceKm);
+test('driversWithinRadius returns results sorted by distance', () => {
+  const near = driversWithinRadius(principal, DALLAS, 1200);
+  const distances = near.map((d) => d.distanceKm);
 
   assert.ok(near.length > 1);
   assert.deepEqual(distances, [...distances].sort((a, b) => a - b));
-  assert.equal(near[0].siteId, 'dal-01'); // itself, at 0km
+  assert.equal(near[0].driverId, 'drv-0142'); // parked on the depot, at 0km
 });
 
-test('point-in-polygon puts only the southern sites in the us-south region', () => {
+test('point-in-polygon puts only the southern districts in the us-south region', () => {
   assert.ok(pointInPolygon(DALLAS, US_SOUTH_REGION));
   assert.ok(pointInPolygon(AUSTIN, US_SOUTH_REGION));
   assert.ok(!pointInPolygon({ lon: -87.6298, lat: 41.8781 }, US_SOUTH_REGION)); // Chicago
@@ -77,8 +77,12 @@ test('centroid of two points is their midpoint', () => {
 });
 
 test('TopoJSON round-trips within the quantisation error, and shrinks polygons', () => {
-  const fc = sitesToFeatureCollection(
-    [{ tenantId: 'acme', siteId: 'dal-01', name: 'Dallas', region: 'us-south', ...DALLAS, headcount: 10 }],
+  const fc = driversToFeatureCollection(
+    [{
+      tenantId: 'acme', driverId: 'drv-0142', name: 'A. Okafor', districtId: 'dal',
+      vehicleId: 'TRK-8891', status: 'driving', ...DALLAS, hosRemainingMinutes: 300,
+      updatedAt: '2026-09-08T14:30:00.000Z',
+    }],
     new Map(),
   );
   const topo = encode(fc);
@@ -106,17 +110,21 @@ test('TopoJSON round-trips within the quantisation error, and shrinks polygons',
 });
 
 test('FeatureCollection properties carry what MapBox styles read', () => {
-  const fc = sitesToFeatureCollection(
-    [{ tenantId: 'acme', siteId: 'dal-01', name: 'Dallas', region: 'us-south', ...DALLAS, headcount: 1200 }],
-    new Map([['dal-01', [{
-      tenantId: 'acme', signalId: 's1', provider: 'splunk', domain: 'observability',
-      kind: 'error-rate', siteId: 'dal-01', sourceRef: 'x', value: 9, unit: 'percent',
-      severity: 'critical', observedAt: '2026-09-04T10:00:00Z', attributes: {},
+  const fc = driversToFeatureCollection(
+    [{
+      tenantId: 'acme', driverId: 'drv-0142', name: 'A. Okafor', districtId: 'dal',
+      vehicleId: 'TRK-8891', status: 'driving', ...DALLAS, hosRemainingMinutes: 30,
+      updatedAt: '2026-09-08T14:30:00.000Z',
+    }],
+    new Map([['drv-0142', [{
+      tenantId: 'acme', telemetryId: 't1', provider: 'samsara', domain: 'telematics',
+      kind: 'harsh-brake', driverId: 'drv-0142', sourceRef: 'x', value: 0.62, unit: 'g',
+      severity: 'critical', observedAt: '2026-09-08T14:30:00.000Z', attributes: {},
     }]]]),
   );
 
-  const props = fc.features[0].properties as { severity: string; impactScore: number };
+  const props = fc.features[0].properties as { severity: string; urgency: number };
   assert.equal(props.severity, 'critical'); // drives circle-color
-  assert.ok(props.impactScore > 0);         // drives circle-radius
+  assert.ok(props.urgency > 0);             // drives circle-radius
   assert.deepEqual(fc.features[0].geometry, { type: 'Point', coordinates: [DALLAS.lon, DALLAS.lat] });
 });

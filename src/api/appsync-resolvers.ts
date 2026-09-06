@@ -27,11 +27,12 @@
  */
 import type { Principal } from '../platform/types.ts';
 import {
-  recentSignals, signalsForSite, signalsBySeverity,
+  recentTelemetry, telemetryForDriver, telemetryBySeverity,
   openIncidents, getIncident, putIncident,
 } from '../platform/repository.ts';
-import { allSites, getSite, sitesWithinRadius } from '../geo/site-repository.ts';
-import { sitesToFeatureCollection } from '../geo/geojson.ts';
+import { allDrivers, getDriver, driversWithinRadius } from '../geo/driver-repository.ts';
+import { driversToFeatureCollection } from '../geo/geojson.ts';
+import { nowIso } from '../platform/clock.ts';
 import { askWithRag } from '../ai/bedrock-rag.ts';
 import { runAgent } from '../ai/agent-core.ts';
 import { TOOL_SPECS, READ_ONLY_TOOL_SPECS } from '../ai/tools.ts';
@@ -46,7 +47,7 @@ import { b64urlEncode } from '../platform/crypto.ts';
  * token by AppSync itself - you never parse a JWT in a resolver.
  */
 export type AppSyncEvent = {
-  info: { fieldName: string; parentTypeName: 'Query' | 'Mutation' | 'Site' | 'Incident' };
+  info: { fieldName: string; parentTypeName: 'Query' | 'Mutation' | 'Driver' | 'Incident' };
   arguments: Record<string, unknown>;
   /** The parent object, for nested field resolvers like Site.signals. */
   source?: Record<string, unknown>;
@@ -65,6 +66,11 @@ export function principalFrom(event: AppSyncEvent): Principal {
     email: String(claims.email ?? ''),
     tenantId: String(claims['custom:tenantId'] ?? ''),
     roles: (event.identity.groups ?? ['viewer']) as Principal['roles'],
+    // The district claim is stamped by the PreTokenGeneration trigger, so a
+    // dispatcher cannot widen their own board by editing the request.
+    scope: claims['custom:district']
+      ? { kind: 'district', districtId: String(claims['custom:district']) }
+      : { kind: 'tenant' },
     identityProvider: 'cognito',
   };
 }
@@ -76,17 +82,17 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
 
   switch (key) {
     // ---- Query ----------------------------------------------------------
-    case 'Query.sites':
-      return allSites(principal);
+    case 'Query.drivers':
+      return allDrivers(principal);
 
-    case 'Query.site':
-      return getSite(principal, String(args.siteId));
+    case 'Query.driver':
+      return getDriver(principal, String(args.driverId));
 
-    case 'Query.signals': {
+    case 'Query.telemetry': {
       const limit = Number(args.limit ?? 25);
       const items = args.severity
-        ? signalsBySeverity(principal, args.severity as never).slice(0, limit)
-        : recentSignals(principal, limit);
+        ? telemetryBySeverity(principal, args.severity as never).slice(0, limit)
+        : recentTelemetry(principal, limit);
       // The cursor is opaque to the client and encodes DynamoDB's
       // LastEvaluatedKey. Never leak the raw key - it exposes the key schema.
       const nextToken = items.length === limit
@@ -101,13 +107,13 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
     case 'Query.incident':
       return getIncident(principal, String(args.incidentId));
 
-    case 'Query.sitesNear':
-      return sitesWithinRadius(principal, { lon: Number(args.lon), lat: Number(args.lat) }, Number(args.radiusKm));
+    case 'Query.driversNear':
+      return driversWithinRadius(principal, { lon: Number(args.lon), lat: Number(args.lat) }, Number(args.radiusKm));
 
     case 'Query.mapLayer': {
-      const sites = allSites(principal);
-      const bySite = new Map(sites.map((s) => [s.siteId, signalsForSite(principal, s.siteId)]));
-      const fc = sitesToFeatureCollection(sites, bySite);
+      const sites = allDrivers(principal);
+      const bySite = new Map(sites.map((s) => [s.driverId, telemetryForDriver(principal, s.driverId)]));
+      const fc = driversToFeatureCollection(sites, bySite);
       return { featureCollection: JSON.stringify(fc), bbox: fc.bbox };
     }
 
@@ -130,29 +136,32 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
      *   2. Cache it - AppSync per-resolver caching, keyed on $context.source.
      *   3. Denormalise the top few signals onto the Site item at write time.
      */
-    case 'Site.signals': {
-      const siteId = String(event.source?.siteId);
-      const all = signalsForSite(principal, siteId);
+    case 'Driver.telemetry': {
+      const driverId = String(event.source?.driverId);
+      const all = telemetryForDriver(principal, driverId);
       const filtered = args.severity ? all.filter((s) => s.severity === args.severity) : all;
       return filtered.slice(0, Number(args.limit ?? 20));
     }
 
-    case 'Incident.sites': {
-      const ids = (event.source?.siteIds as string[]) ?? [];
-      return ids.map((id) => getSite(principal, id)).filter(Boolean);
+    case 'Incident.drivers': {
+      const ids = (event.source?.driverIds as string[]) ?? [];
+      return ids.map((id) => getDriver(principal, id)).filter(Boolean);
     }
 
-    case 'Incident.signals': {
-      const ids = new Set((event.source?.signalIds as string[]) ?? []);
-      return recentSignals(principal, 500).filter((s) => ids.has(s.signalId));
+    case 'Incident.telemetry': {
+      const ids = new Set((event.source?.telemetryIds as string[]) ?? []);
+      return recentTelemetry(principal, 500).filter((s) => ids.has(s.telemetryId));
     }
 
     // ---- Mutation --------------------------------------------------------
     case 'Mutation.openIncident': {
-      const input = args.input as { title: string; severity: 'info' | 'warning' | 'critical'; siteIds: string[] };
+      const input = args.input as {
+        title: string; severity: 'info' | 'warning' | 'critical';
+        districtId: string; driverIds: string[];
+      };
       // Belt and braces: the @aws_auth directive already blocked viewers, but
       // defence in depth costs one line.
-      requireRole(principal, 'admin', 'operator');
+      requireRole(principal, 'admin', 'dispatcher');
 
       const incident = {
         tenantId: principal.tenantId,
@@ -160,9 +169,10 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
         title: input.title,
         severity: input.severity,
         status: 'open' as const,
-        siteIds: input.siteIds,
-        signalIds: [],
-        openedAt: new Date().toISOString(),
+        districtId: input.districtId,
+        driverIds: input.driverIds,
+        exceptionIds: [],
+        openedAt: nowIso(),
       };
       putIncident(principal, incident);
 
@@ -180,7 +190,7 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
     }
 
     case 'Mutation.acknowledgeIncident': {
-      requireRole(principal, 'admin', 'operator');
+      requireRole(principal, 'admin', 'dispatcher');
       const existing = getIncident(principal, String(args.incidentId));
       if (!existing) throw new Error('incident not found');
 
@@ -193,7 +203,7 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
     case 'Mutation.askAgent': {
       // Viewers get the read-only tool set; operators get the full one. The
       // agent's authority is the CALLER's authority, never the Lambda's.
-      const isOperator = principal.roles.some((r) => r === 'admin' || r === 'operator');
+      const isOperator = principal.roles.some((r) => r === 'admin' || r === 'dispatcher');
       const result = await runAgent({
         question: String(args.question),
         principal,

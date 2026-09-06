@@ -11,16 +11,23 @@
  * *together* sort *next to each other*. You then "query" a prefix.
  *
  *   PK                                SK                        entity
- *   TENANT#acme#SITE                  SITE#dal-01               Site
- *   TENANT#acme#SIGNAL                2026-09-04T10:00Z#sig_ab  Signal
- *   TENANT#acme#INCIDENT              2026-09-04T10:02Z#inc_7f  Incident
+ *   TENANT#acme#DRIVER                DRIVER#drv-0142           Driver
+ *   TENANT#acme#TELEMETRY             2026-09-08T14:30Z#tlm_ab  Telemetry
+ *   TENANT#acme#EXCEPTION             2026-09-08T14:31Z#exc_3c  Exception
+ *   TENANT#acme#INCIDENT              2026-09-08T14:32Z#inc_7f  Incident
  *
- * Because the SK starts with a timestamp, "give me this tenant's signals from
+ * THE DRIVER ITEM IS OVERWRITTEN, NEVER APPENDED. One item per driver holds
+ * current position and status; at 330k drivers that is 330k items no matter how
+ * often devices report. Position *history* is appended to S3 instead, because
+ * ~950M rows a day in the operational store would be both slow and ruinous.
+ * That split is the single most consequential storage decision in the platform.
+ *
+ * Because the SK starts with a timestamp, "give me this tenant's telemetry from
  * the last hour, newest first" is one Query with a `begins_with` / range
  * condition and `ScanIndexForward: false`. No scan, no filter, O(result size).
  *
- * GSI1 flips it so we can ask "all signals for site dal-01 across providers":
- *   GSI1PK = TENANT#acme#SITE#dal-01 , GSI1SK = observedAt
+ * GSI1 flips it so we can ask "all readings for driver drv-0142 across vendors":
+ *   GSI1PK = TENANT#acme#DRIVER#drv-0142 , GSI1SK = observedAt
  *
  * The rule to repeat in an interview: *model your access patterns first, then
  * derive the keys*. Never the other way round.
@@ -111,12 +118,25 @@ export const mainTable = new DynamoTable(process.env.TABLE_NAME ?? 'meridian-dev
 
 /** Key builders live next to the table so the layout is documented in one place. */
 export const keys = {
-  site: (p: Principal, siteId: string) => ({ PK: `TENANT#${p.tenantId}#SITE`, SK: `SITE#${siteId}` }),
-  signal: (p: Principal, observedAt: string, id: string) => ({
-    PK: `TENANT#${p.tenantId}#SIGNAL`, SK: `${observedAt}#${id}`,
+  /** The hot-state item. One per driver, overwritten on every position ping. */
+  driver: (p: Principal, driverId: string) => ({
+    PK: `TENANT#${p.tenantId}#DRIVER`, SK: `DRIVER#${driverId}`,
   }),
-  signalBySite: (p: Principal, siteId: string, observedAt: string) => ({
-    GSI1PK: `TENANT#${p.tenantId}#SITE#${siteId}`, GSI1SK: observedAt,
+  /**
+   * GSI1 on the driver item flips driver -> district, which is what makes a
+   * dispatcher's board one Query instead of a scan-and-filter over the fleet.
+   */
+  driverByDistrict: (p: Principal, districtId: string, driverId: string) => ({
+    GSI1PK: `TENANT#${p.tenantId}#DISTRICT#${districtId}`, GSI1SK: `DRIVER#${driverId}`,
+  }),
+  telemetry: (p: Principal, observedAt: string, id: string) => ({
+    PK: `TENANT#${p.tenantId}#TELEMETRY`, SK: `${observedAt}#${id}`,
+  }),
+  telemetryByDriver: (p: Principal, driverId: string, observedAt: string) => ({
+    GSI1PK: `TENANT#${p.tenantId}#DRIVER#${driverId}`, GSI1SK: observedAt,
+  }),
+  exception: (p: Principal, raisedAt: string, id: string) => ({
+    PK: `TENANT#${p.tenantId}#EXCEPTION`, SK: `${raisedAt}#${id}`,
   }),
   incident: (p: Principal, openedAt: string, id: string) => ({
     PK: `TENANT#${p.tenantId}#INCIDENT`, SK: `${openedAt}#${id}`,

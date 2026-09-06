@@ -12,7 +12,7 @@
  *      if a vendor sends you EPSG:3857 "GeoJSON", it is not GeoJSON.
  */
 import type { Position } from './spatial.ts';
-import type { Signal, Site } from '../platform/types.ts';
+import type { Driver, Severity, Telemetry } from '../platform/types.ts';
 
 export type GeoGeometry =
   | { type: 'Point'; coordinates: Position }
@@ -49,35 +49,44 @@ function closeRing(ring: Position[]): Position[] {
 }
 
 /**
- * Sites + their worst current signal, as a FeatureCollection.
- * This is literally the payload the map front-end fetches.
+ * Drivers + their worst current reading, as a FeatureCollection.
+ * This is literally the payload the dispatch board fetches.
  */
-export function sitesToFeatureCollection(
-  sites: Site[],
-  signalsBySite: Map<string, Signal[]>,
+export function driversToFeatureCollection(
+  drivers: Driver[],
+  telemetryByDriver: Map<string, Telemetry[]>,
 ): GeoFeatureCollection {
   const rank = { ok: 0, info: 1, warning: 2, critical: 3 };
 
-  const features = sites.map((site) => {
-    const signals = signalsBySite.get(site.siteId) ?? [];
-    const worst = signals.reduce<Signal['severity']>(
-      (acc, s) => (rank[s.severity] > rank[acc] ? s.severity : acc),
+  const features = drivers.map((driver) => {
+    const readings = telemetryByDriver.get(driver.driverId) ?? [];
+    const worst = readings.reduce<Severity>(
+      (acc, t) => (rank[t.severity] > rank[acc] ? t.severity : acc),
       'ok',
     );
 
     return {
       type: 'Feature',
-      id: site.siteId,
-      geometry: point(site.lon, site.lat),
+      id: driver.driverId,
+      geometry: point(driver.lon, driver.lat),
       properties: {
-        siteId: site.siteId,
-        name: site.name,
-        region: site.region,
-        headcount: site.headcount,
-        severity: worst,              // MapBox styles colour straight off this
-        signalCount: signals.length,
-        // Weighted "how much do we care" - drives circle radius on the map.
-        impactScore: Math.round(rank[worst] * Math.log10(site.headcount + 1) * 10),
+        driverId: driver.driverId,
+        name: driver.name,
+        districtId: driver.districtId,
+        vehicleId: driver.vehicleId,
+        status: driver.status,
+        hosRemainingMinutes: driver.hosRemainingMinutes,
+        // The board styles straight off these two - colour from severity,
+        // radius from urgency. Data-driven styling runs on the GPU, so there
+        // is no per-feature JavaScript and no re-render loop.
+        severity: worst,
+        readingCount: readings.length,
+        // Low hours remaining is urgent even when nothing has gone wrong yet;
+        // this is what makes a driver about to run out of legal time visible
+        // on the map before they become an exception.
+        urgency: Math.round(
+          rank[worst] * 25 + Math.max(0, 120 - driver.hosRemainingMinutes) / 2,
+        ),
       },
     } satisfies GeoFeature;
   });

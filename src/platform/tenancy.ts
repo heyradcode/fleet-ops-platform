@@ -22,7 +22,7 @@
  *      "dynamic tenant isolation" and is what a Solutions Architect will
  *      want to hear. Sketch below in `tenantScopedSessionPolicy`.
  */
-import type { Principal, TenantId } from './types.ts';
+import type { DistrictId, Driver, Principal, TenantId } from './types.ts';
 
 export class CrossTenantAccessError extends Error {
   constructor(want: TenantId, got: TenantId) {
@@ -40,6 +40,60 @@ export function pk(principal: Principal, entity: string): string {
 export function assertSameTenant(principal: Principal, tenantId: TenantId): void {
   if (principal.tenantId !== tenantId) {
     throw new CrossTenantAccessError(tenantId, principal.tenantId);
+  }
+}
+
+/**
+ * Thrown when a caller is inside the right tenant but outside their scope -
+ * a Dallas dispatcher reaching for Phoenix.
+ */
+export class OutOfScopeError extends Error {
+  constructor(what: string) {
+    super('out of scope: ' + what + ' is outside the caller scope');
+    this.name = 'OutOfScopeError';
+  }
+}
+
+/**
+ * Does this principal's scope admit this district?
+ *
+ * The `Scope` union is what makes this checkable at all. With an optional
+ * `districtId?: string` there would be no way to distinguish "no district
+ * specified, show everything" from "no district specified, show nothing", and
+ * every caller would have to remember which one it meant. Widening access has
+ * to be a deliberate `kind: 'tenant'`.
+ */
+export function scopeAllowsDistrict(principal: Principal, districtId: DistrictId): boolean {
+  switch (principal.scope.kind) {
+    case 'tenant':   return true;
+    case 'region':   return true;   // region -> district needs the territory table
+    case 'district': return principal.scope.districtId === districtId;
+    case 'driver':   return false;  // a driver sees their own work, not a district
+  }
+}
+
+export function assertDistrictInScope(principal: Principal, districtId: DistrictId): void {
+  if (!scopeAllowsDistrict(principal, districtId)) throw new OutOfScopeError(districtId);
+}
+
+/**
+ * Narrow a set of drivers to what this principal may actually see.
+ *
+ * Applied in the repository layer rather than the resolver, for the same reason
+ * the tenant key is: a filter you have to remember is a filter you will forget.
+ */
+export function withinScope(principal: Principal, drivers: Driver[]): Driver[] {
+  switch (principal.scope.kind) {
+    case 'tenant':   return drivers;
+    case 'region':   return drivers;
+    case 'district': {
+      const { districtId } = principal.scope;
+      return drivers.filter((d) => d.districtId === districtId);
+    }
+    case 'driver': {
+      const { driverId } = principal.scope;
+      return drivers.filter((d) => d.driverId === driverId);
+    }
   }
 }
 

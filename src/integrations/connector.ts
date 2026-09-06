@@ -20,6 +20,7 @@
  */
 import type { ProviderDomain, ProviderId, RawRecord, Telemetry, TenantId } from '../platform/types.ts';
 import { log } from '../platform/logger.ts';
+import { random } from '../platform/random.ts';
 
 export type ConnectorContext = {
   tenantId: TenantId;
@@ -82,7 +83,7 @@ export async function withRetry<T>(
       if (attempt === attempts) break;
 
       const ceiling = base * Math.pow(2, attempt - 1);
-      const delay = Math.random() * ceiling; // full jitter
+      const delay = random() * ceiling; // full jitter
       log.warn(label + ' attempt ' + attempt + '/' + attempts + ' failed', {
         retryInMs: Math.round(delay),
         error: err instanceof Error ? err.message : String(err),

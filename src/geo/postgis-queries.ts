@@ -39,7 +39,7 @@ export const SQL = {
    * pre-filter, then refines. Writing `ST_Distance(...) < n` instead LOSES the
    * index and forces a full scan - a very common and very expensive mistake.
    */
-  sitesWithinRadius: `
+  driversWithinRadius: `
     SELECT
       site_id,
       name,
@@ -83,7 +83,7 @@ export const SQL = {
           'id', s.site_id,
           'geometry', ST_AsGeoJSON(s.location)::json,
           'properties', json_build_object(
-            'siteId',   s.site_id,
+            'driverId',   s.site_id,
             'name',     s.name,
             'severity', i.severity,
             'title',    i.title,
@@ -123,7 +123,7 @@ export const SQL = {
  *     resourceArn: process.env.AURORA_CLUSTER_ARN,
  *     secretArn:   process.env.AURORA_SECRET_ARN,
  *     database:    'meridian',
- *     sql:         SQL.sitesWithinRadius,
+ *     sql:         SQL.driversWithinRadius,
  *     parameters: [
  *       { name: 'tenantId', value: { stringValue: principal.tenantId } },
  *       { name: 'lon',      value: { doubleValue: lon } },
@@ -135,4 +135,4 @@ export const SQL = {
  *
  * Note the tenantId is bound from the verified JWT, not from the request body.
  */
-export const AURORA_DATA_API_EXAMPLE = SQL.sitesWithinRadius;
+export const AURORA_DATA_API_EXAMPLE = SQL.driversWithinRadius;

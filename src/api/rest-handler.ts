@@ -18,15 +18,16 @@
  */
 import type { Principal } from '../platform/types.ts';
 import { principalFromContext } from '../auth/authorizer.ts';
-import { recentSignals, openIncidents } from '../platform/repository.ts';
-import { allSites, sitesWithinRadius, getSite } from '../geo/site-repository.ts';
-import { sitesToFeatureCollection } from '../geo/geojson.ts';
-import { signalsForSite } from '../platform/repository.ts';
+import { recentTelemetry, openIncidents } from '../platform/repository.ts';
+import { allDrivers, driversWithinRadius, getDriver } from '../geo/driver-repository.ts';
+import { driversToFeatureCollection } from '../geo/geojson.ts';
+import { telemetryForDriver } from '../platform/repository.ts';
 import { mapPayload } from '../geo/mapbox.ts';
 import { encode as toTopoJson, compressionRatio } from '../geo/topojson.ts';
 import { askWithRag } from '../ai/bedrock-rag.ts';
 import { requireRole } from '../platform/tenancy.ts';
 import { log } from '../platform/logger.ts';
+import { random } from '../platform/random.ts';
 
 export type ApiGatewayEvent = {
   version: '2.0';
@@ -64,10 +65,10 @@ export async function handler(event: ApiGatewayEvent): Promise<ApiGatewayResult>
         return json(200, { status: 'ok', ts: new Date().toISOString() });
 
       case 'GET /sites':
-        return json(200, { items: allSites(principal) });
+        return json(200, { items: allDrivers(principal) });
 
-      case 'GET /sites/{siteId}': {
-        const site = getSite(principal, String(event.pathParameters?.siteId));
+      case 'GET /sites/{driverId}': {
+        const site = getDriver(principal, String(event.pathParameters?.driverId));
         return site ? json(200, site) : json(404, { message: 'site not found' });
       }
 
@@ -86,12 +87,12 @@ export async function handler(event: ApiGatewayEvent): Promise<ApiGatewayResult>
           return json(400, { message: 'coordinates out of range - did you swap lon and lat?' });
         }
 
-        return json(200, { items: sitesWithinRadius(principal, { lon, lat }, radiusKm) });
+        return json(200, { items: driversWithinRadius(principal, { lon, lat }, radiusKm) });
       }
 
       case 'GET /signals': {
         const limit = Math.min(Number(query.limit ?? 25), 100);
-        return json(200, { items: recentSignals(principal, limit) });
+        return json(200, { items: recentTelemetry(principal, limit) });
       }
 
       case 'GET /incidents':
@@ -103,9 +104,9 @@ export async function handler(event: ApiGatewayEvent): Promise<ApiGatewayResult>
        * parameter rather than Accept keeps it debuggable from a browser bar.
        */
       case 'GET /map': {
-        const sites = allSites(principal);
-        const bySite = new Map(sites.map((s) => [s.siteId, signalsForSite(principal, s.siteId)]));
-        const fc = sitesToFeatureCollection(sites, bySite);
+        const sites = allDrivers(principal);
+        const bySite = new Map(sites.map((s) => [s.driverId, telemetryForDriver(principal, s.driverId)]));
+        const fc = driversToFeatureCollection(sites, bySite);
 
         if (query.format === 'topojson') {
           const topo = toTopoJson(fc);
@@ -127,7 +128,7 @@ export async function handler(event: ApiGatewayEvent): Promise<ApiGatewayResult>
       }
 
       case 'POST /incidents': {
-        requireRole(principal, 'admin', 'operator');
+        requireRole(principal, 'admin', 'dispatcher');
         return json(501, { message: 'use the GraphQL openIncident mutation - it drives the subscription' });
       }
 
@@ -193,7 +194,7 @@ export function eventFor(
     pathParameters: opts.path,
     body: opts.body ? JSON.stringify(opts.body) : undefined,
     requestContext: {
-      requestId: 'req-' + Math.random().toString(36).slice(2, 10),
+      requestId: 'req-' + random().toString(36).slice(2, 10),
       http: { method, path },
       authorizer: {
         lambda: {

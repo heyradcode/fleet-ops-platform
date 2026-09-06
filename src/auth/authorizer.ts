@@ -107,6 +107,11 @@ export function principalFromContext(ctx: Record<string, string>): Principal {
     email: ctx.email ?? '',
     tenantId: ctx.tenantId,
     roles: (ctx.roles ?? 'viewer').split(',') as Principal['roles'],
+    // API Gateway authorizer context is a flat string map - it cannot carry a
+    // nested object, so the scope is rebuilt from two scalars here.
+    scope: ctx.district
+      ? { kind: 'district', districtId: ctx.district }
+      : { kind: 'tenant' },
     identityProvider: (ctx.identityProvider ?? 'cognito') as Principal['identityProvider'],
   };
 }

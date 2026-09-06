@@ -22,6 +22,7 @@
  *     "detail": { "severity": ["critical"] } }
  */
 import { log } from '../platform/logger.ts';
+import { nowIso } from '../platform/clock.ts';
 
 export type EventEnvelope<T = unknown> = {
   source: string;          // e.g. 'meridian.ingest'
@@ -49,6 +50,15 @@ export class EventBus {
   /** Events whose target threw after retries. In AWS this is an SQS DLQ. */
   readonly deadLetterQueue: Array<{ event: EventEnvelope; error: string }> = [];
   published = 0;
+  /**
+   * Every envelope that reached the bus.
+   *
+   * Real EventBridge does not retain events, so this is a demo-only affordance -
+   * but it earns its place: it is what lets a test assert that telemetry NEVER
+   * reaches the bus, which is the load-bearing claim of the whole architecture
+   * and otherwise unobservable from outside.
+   */
+  readonly log: EventEnvelope[] = [];
 
   constructor(name: string) { this.name = name; }
 
@@ -59,8 +69,9 @@ export class EventBus {
 
   async putEvents(...events: Array<Omit<EventEnvelope, 'time'>>): Promise<void> {
     for (const e of events) {
-      const envelope: EventEnvelope = { ...e, time: new Date().toISOString() };
+      const envelope: EventEnvelope = { ...e, time: nowIso() };
       this.published++;
+      this.log.push(envelope);
       const matched = this.#rules.filter((r) => matches(r.pattern, envelope));
       log.info('event ' + envelope.detailType, { source: envelope.source, matchedRules: matched.length });
 

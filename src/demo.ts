@@ -20,24 +20,24 @@ import { assertSameTenant, tenantScopedSessionPolicy, CrossTenantAccessError } f
 
 import { buildIngestWorkflow } from './pipeline/ingest-workflow.ts';
 import { incidentSpreadKm } from './pipeline/steps.ts';
-import { connectors, breakers } from './integrations/registry.ts';
+import { connectors, connectorsFor, breakers } from './integrations/registry.ts';
 import { chaos } from './integrations/fixtures.ts';
 import { rawBucket } from './aws/s3.ts';
 import { mainTable } from './aws/dynamodb.ts';
 import { bus } from './aws/eventbridge.ts';
 
-import { recentSignals, openIncidents, signalsForSite } from './platform/repository.ts';
+import { recentTelemetry, openIncidents, telemetryForDriver } from './platform/repository.ts';
 import { handler as graphqlHandler, type AppSyncEvent } from './api/appsync-resolvers.ts';
 import { subscribe, subscriberCount } from './api/subscriptions.ts';
 import { handler as restHandler, eventFor } from './api/rest-handler.ts';
 
-import { allSites, sitesWithinRadius, regionContaining } from './geo/site-repository.ts';
-import { sitesToFeatureCollection } from './geo/geojson.ts';
+import { allDrivers, driversWithinRadius, regionContaining } from './geo/driver-repository.ts';
+import { driversToFeatureCollection } from './geo/geojson.ts';
 import { encode as toTopoJson, compressionRatio, decodePoint } from './geo/topojson.ts';
 import { haversineKm, pointInPolygon } from './geo/spatial.ts';
 import { severityLayerStyle, geocodeUrl, isochroneUrl } from './geo/mapbox.ts';
 import { SQL } from './geo/postgis-queries.ts';
-import { US_SOUTH_REGION } from './data/sites.ts';
+import { US_SOUTH_REGION } from './data/districts.ts';
 
 import { knowledgeBase } from './ai/knowledge-base.ts';
 import { askWithRag } from './ai/bedrock-rag.ts';
@@ -45,7 +45,10 @@ import { runAgent } from './ai/agent-core.ts';
 import { TOOL_SPECS, READ_ONLY_TOOL_SPECS } from './ai/tools.ts';
 import { usage as bedrockUsage, MODELS } from './aws/bedrock.ts';
 import { checkInput, canUseTool } from './ai/guardrails.ts';
-import { b64urlEncode, b64urlDecodeText } from './platform/crypto.ts';
+import { b64urlEncode, b64urlDecodeText, setUuid, seededUuid } from './platform/crypto.ts';
+import { setClock, fixedClock } from './platform/clock.ts';
+import { setRandom, seededRandom } from './platform/random.ts';
+import { loadRunbooksFromDisk } from './platform/runbook-loader.node.ts';
 
 // ---------------------------------------------------------------------------
 
@@ -58,6 +61,17 @@ let operator: Principal;
 let outsider: Principal;
 
 async function main() {
+  // Pin the clock so every run prints identical timestamps. A demo that stamps
+  // wall-clock time cannot be narrated, screenshotted, or diffed against the
+  // previous run to see what a change actually did.
+  setClock(fixedClock());
+  const rng = seededRandom();
+  setRandom(rng);
+  setUuid(seededUuid(rng));
+  // The Node adapter for the runbook registry. This is the ONLY place the
+  // filesystem is touched, which is what lets the same code run in a browser.
+  loadRunbooksFromDisk();
+
   setCorrelationId(traceId());
   banner();
   registerEventRules();
@@ -76,9 +90,9 @@ async function main() {
 
 function banner() {
   process.stdout.write(
-    '\n\x1b[1m\x1b[36mMeridian\x1b[0m \x1b[90m- multi-tenant agentic SaaS on AWS serverless\x1b[0m\n' +
-    '\x1b[90mCisco/Juniper/Aruba + Genesys/Five9/Connect + ThousandEyes/Splunk\n' +
-    '-> Step Functions -> DynamoDB + PostGIS -> AppSync/REST -> Bedrock agent\x1b[0m\n',
+    '\n\x1b[1m\x1b[36mMeridian\x1b[0m \x1b[90m- real-time fleet dispatch on AWS serverless\x1b[0m\n' +
+    '\x1b[90mSamsara/Geotab/Verizon + Motive/Omnitracs/PlatformScience + Lytx/Netradyne\n' +
+    '-> Kinesis-shaped batches -> DynamoDB hot state + PostGIS -> AppSync -> agent\x1b[0m\n',
   );
 }
 
@@ -125,8 +139,8 @@ async function sectionAuth() {
   const operatorToken = signDemoToken({
     sub: 'Google_1029384756',
     email: 'alice@acme.com',
-    'custom:tenantId': 'acme',
-    'cognito:groups': ['operator'],
+    'custom:tenantId': 'acme-freight',
+    'cognito:groups': ['dispatcher'],
     identities: [{ providerName: 'Google', userId: '1029384756' }],
   });
 
@@ -173,13 +187,13 @@ async function sectionAuth() {
   note('');
   note('Tenant isolation - globex viewer reaching for acme data:');
   try {
-    assertSameTenant(outsider, 'acme');
+    assertSameTenant(outsider, 'acme-freight');
   } catch (err) {
     if (err instanceof CrossTenantAccessError) {
       process.stdout.write('   \x1b[32mdenied in code:\x1b[0m ' + err.message + '\n');
     }
   }
-  const policy = tenantScopedSessionPolicy('acme', 'arn:aws:dynamodb:us-east-1:111122223333:table/meridian-dev-main');
+  const policy = tenantScopedSessionPolicy('acme-freight', 'arn:aws:dynamodb:us-east-1:111122223333:table/meridian-dev-main');
   process.stdout.write('   \x1b[32mdenied in IAM:\x1b[0m dynamodb:LeadingKeys = ' +
     JSON.stringify(policy.Statement[0].Condition['ForAllValues:StringLike']['dynamodb:LeadingKeys']) + '\n');
 }
@@ -189,11 +203,12 @@ async function sectionAuth() {
 // ===========================================================================
 
 async function sectionIngest() {
-  section('2', 'Step Functions: fan out to 8 vendor APIs, normalise, correlate');
+  section('2', 'Step Functions: fan out to this carrier vendors, normalise, correlate');
 
   ensurePrincipals();
-  note(connectors.length + ' connectors registered:');
-  for (const c of connectors) {
+  note(connectors.length + ' connectors implemented; this carrier runs ' +
+    connectorsFor(operator).length + ' of them (one GPS, one ELD, one dashcam):');
+  for (const c of connectorsFor(operator)) {
     process.stdout.write('   ' + c.provider.padEnd(15) + c.domain.padEnd(16) +
       '\x1b[90mauth=' + c.auth + ' limit=' + c.rateLimitPerMin + '/min\x1b[0m\n');
   }
@@ -224,11 +239,11 @@ async function sectionIngest() {
   note('Correlated incidents (deterministic rules, not an LLM):');
   for (const i of incidents) {
     process.stdout.write('   ' + i.incidentId + ' [' + i.severity + '] ' + i.title + '\n');
-    process.stdout.write('     sites=' + i.siteIds.join(',') +
-      ' signals=' + i.signalIds.length +
+    process.stdout.write('     drivers=' + i.driverIds.join(',') +
+      ' exceptions=' + i.exceptionIds.length +
       ' spread=' + incidentSpreadKm(operator, i) + 'km\n');
   }
-  if (incidents.length === 0) note('   (none - no site had critical signals from 2+ providers)');
+  if (incidents.length === 0) note('   (none - no driver had an exception seen by 2+ vendors)');
 }
 
 // ===========================================================================
@@ -241,10 +256,10 @@ function sectionData() {
   ensurePrincipals();
   const before = { ...mainTable.stats };
 
-  const recent = recentSignals(operator, 5);
+  const recent = recentTelemetry(operator, 5);
   const afterQuery = mainTable.stats.itemsScanned - before.itemsScanned;
 
-  note('Query on PK=TENANT#acme#SIGNAL, descending, limit 5');
+  note('Query on PK=TENANT#acme-freight#TELEMETRY, descending, limit 5');
   for (const s of recent) {
     process.stdout.write('   ' + s.observedAt + '  ' + s.provider.padEnd(15) +
       s.kind.padEnd(15) + String(s.value).padStart(6) + s.unit.padEnd(8) + s.severity + '\n');
@@ -252,9 +267,9 @@ function sectionData() {
   process.stdout.write('   \x1b[90mitems read: ' + afterQuery + '\x1b[0m\n');
 
   note('');
-  note('Same answer via GSI1 (PK=TENANT#acme#SITE#dal-01) - the site access pattern:');
-  const dallas = signalsForSite(operator, 'dal-01');
-  process.stdout.write('   ' + dallas.length + ' signals for dal-01 from ' +
+  note('Same answer via GSI1 (PK=TENANT#acme-freight#DRIVER#drv-0142) - driver pattern:');
+  const dallas = telemetryForDriver(operator, 'drv-0142');
+  process.stdout.write('   ' + dallas.length + ' readings for drv-0142 from ' +
     new Set(dallas.map((s) => s.provider)).size + ' providers, one Query\n');
 
   note('');
@@ -297,10 +312,15 @@ function registerEventRules() {
     { source: ['meridian.detect'], detailType: ['IncidentOpened'], detail: { severity: ['warning'] } },
     (e) => { delivered.push('slack    <- ' + (e.detail as { incidentId: string }).incidentId); });
 
-  // Rule 3: everything from ingest -> analytics (Firehose -> S3 -> Athena).
-  bus.rule('all-ingest-to-analytics',
-    { source: ['meridian.ingest'] },
-    (e) => { delivered.push('firehose <- ' + e.detailType); });
+  // Rule 3: every exception -> the safety review queue. Note the source: this
+  // matches meridian.evaluate, NOT meridian.ingest - because telemetry never
+  // reaches the bus at all. Only exceptions do.
+  bus.rule('exceptions-to-safety-review',
+    { source: ['meridian.evaluate'], detailType: ['ExceptionRaised'] },
+    (e) => {
+      const d = e.detail as { driverId: string; kind: string };
+      delivered.push('safety   <- ' + d.kind + ' ' + d.driverId);
+    });
 
   // Rule 4: a deliberately broken target, to show the DLQ.
   bus.rule('broken-consumer',
@@ -317,7 +337,7 @@ async function sectionEvents() {
   note('4 rules registered before ingest ran, so the events above routed too.');
   note('Publishing 3 more events...');
   await bus.putEvents(
-    { source: 'meridian.ingest', detailType: 'SignalsNormalized', detail: { tenantId: 'acme', count: 17 } },
+    { source: 'meridian.evaluate', detailType: 'ExceptionRaised', detail: { tenantId: 'acme-freight', driverId: 'drv-0455', districtId: 'chi', kind: 'harsh-braking', severity: 'critical' } },
     { source: 'meridian.detect', detailType: 'IncidentOpened', detail: { incidentId: 'inc_crit', severity: 'critical' } },
     { source: 'meridian.detect', detailType: 'IncidentOpened', detail: { incidentId: 'inc_warn', severity: 'warning' } },
   );
@@ -364,7 +384,7 @@ async function sectionGraphql() {
   note(subscriberCount() + ' WebSocket subscribers registered with server-side filters.');
 
   // --- Query ---------------------------------------------------------------
-  const conn = await call({ info: { fieldName: 'signals', parentTypeName: 'Query' }, arguments: { limit: 3 } }, operator) as
+  const conn = await call({ info: { fieldName: 'telemetry', parentTypeName: 'Query' }, arguments: { limit: 3 } }, operator) as
     { items: Array<{ provider: string; kind: string; value: number; severity: string }>; nextToken: string | null };
 
   note('');
@@ -375,19 +395,19 @@ async function sectionGraphql() {
   process.stdout.write('   nextToken: ' + (conn.nextToken ? conn.nextToken.slice(0, 28) + '...' : 'null') + '\n');
 
   // --- Nested resolver / N+1 ----------------------------------------------
-  const sites = await call({ info: { fieldName: 'sites', parentTypeName: 'Query' } }, operator) as Array<{ siteId: string; name: string }>;
+  const fleet = await call({ info: { fieldName: 'drivers', parentTypeName: 'Query' } }, operator) as Array<{ driverId: string; name: string }>;
   note('');
-  note('query { sites { name signals(limit: 2) { kind severity } } }  <- N+1 lives here');
-  for (const site of sites.slice(0, 3)) {
+  note('query { drivers { name telemetry(limit: 2) { kind severity } } } <- N+1 lives here');
+  for (const driver of fleet.slice(0, 3)) {
     const nested = await call({
-      info: { fieldName: 'signals', parentTypeName: 'Site' },
-      source: { siteId: site.siteId },
+      info: { fieldName: 'telemetry', parentTypeName: 'Driver' },
+      source: { driverId: driver.driverId },
       arguments: { limit: 2 },
     }, operator) as Array<{ kind: string; severity: string }>;
-    process.stdout.write('   ' + site.name.padEnd(20) +
+    process.stdout.write('   ' + driver.name.padEnd(20) +
       nested.map((n) => n.kind + '=' + n.severity).join(', ') + '\n');
   }
-  process.stdout.write('   \x1b[90m' + sites.length + ' sites -> ' + sites.length +
+  process.stdout.write('   \x1b[90m' + fleet.length + ' drivers -> ' + fleet.length +
     ' extra resolver calls. Fix with a BatchInvoke resolver or per-resolver caching.\x1b[0m\n');
 
   // --- RBAC ----------------------------------------------------------------
@@ -396,7 +416,7 @@ async function sectionGraphql() {
   try {
     await call({
       info: { fieldName: 'openIncident', parentTypeName: 'Mutation' },
-      arguments: { input: { title: 'test', severity: 'critical', siteIds: ['dal-01'] } },
+      arguments: { input: { title: 'test', severity: 'critical', districtId: 'dal', driverIds: ['drv-0142'] } },
     }, outsider);
     process.stdout.write('   \x1b[31mALLOWED - RBAC failed\x1b[0m\n');
   } catch (err) {
@@ -409,7 +429,7 @@ async function sectionGraphql() {
   note('mutation { openIncident(...) } as acme OPERATOR:');
   const created = await call({
     info: { fieldName: 'openIncident', parentTypeName: 'Mutation' },
-    arguments: { input: { title: 'Dallas WAN degradation', severity: 'critical', siteIds: ['dal-01'] } },
+    arguments: { input: { title: 'Harsh braking cluster, I-35E', severity: 'critical', districtId: 'dal', driverIds: ['drv-0142'] } },
   }, operator) as { incidentId: string; title: string };
   process.stdout.write('   created ' + created.incidentId + ': ' + created.title + '\n');
 
@@ -429,9 +449,9 @@ async function sectionRest() {
   ensurePrincipals();
   const routes: Array<[string, NonNullable<Parameters<typeof eventFor>[2]>]> = [
     ['GET /health', {}],
-    ['GET /sites', {}],
-    ['GET /sites/near', { query: { lon: '-96.797', lat: '32.7767', radiusKm: '400' } }],
-    ['GET /sites/near', { query: { lon: '32.7767', lat: '-96.797' } }],   // swapped on purpose
+    ['GET /drivers', {}],
+    ['GET /drivers/near', { query: { lon: '-96.797', lat: '32.7767', radiusKm: '400' } }],
+    ['GET /drivers/near', { query: { lon: '32.7767', lat: '-96.797' } }],   // swapped on purpose
     ['GET /signals', { query: { limit: '3' } }],
     ['GET /map', { query: { format: 'topojson' } }],
     ['POST /webhooks/{provider}', { path: { provider: 'genesys' }, body: { event: 'queue.alert' } }],
@@ -462,36 +482,36 @@ function sectionGeo() {
   section('7', 'Geospatial: PostGIS, GeoJSON, TopoJSON, MapBox');
 
   ensurePrincipals();
-  const sites = allSites(operator);
-  const dallas = sites.find((s) => s.siteId === 'dal-01')!;
+  const fleet = allDrivers(operator);
+  const dallas = fleet.find((d) => d.driverId === 'drv-0142')!;
 
   // --- Spatial query -------------------------------------------------------
-  note('ST_DWithin equivalent: sites within 400km of Dallas');
-  for (const s of sitesWithinRadius(operator, dallas, 400)) {
-    process.stdout.write('   ' + s.siteId + '  ' + s.name.padEnd(20) +
+  note('ST_DWithin equivalent: drivers within 400km of the Dallas depot');
+  for (const s of driversWithinRadius(operator, dallas, 400)) {
+    process.stdout.write('   ' + s.driverId + '  ' + s.name.padEnd(20) +
       String(s.distanceKm).padStart(8) + ' km\n');
   }
   process.stdout.write('   \x1b[90mtwo phases: indexable bbox filter, then exact haversine\x1b[0m\n');
 
   note('');
   note('The SQL this stands in for:');
-  for (const line of SQL.sitesWithinRadius.trim().split('\n').slice(0, 6)) {
+  for (const line of SQL.driversWithinRadius.trim().split('\n').slice(0, 6)) {
     process.stdout.write('   \x1b[90m' + line.trim() + '\x1b[0m\n');
   }
 
   // --- Point in polygon ----------------------------------------------------
   note('');
-  note('ST_Contains equivalent: which sites are in the us-south service region?');
-  for (const s of sites) {
-    const inside = pointInPolygon({ lon: s.lon, lat: s.lat }, US_SOUTH_REGION);
+  note('ST_Contains equivalent: which drivers are in the us-south region?');
+  for (const d of fleet) {
+    const inside = pointInPolygon({ lon: d.lon, lat: d.lat }, US_SOUTH_REGION);
     process.stdout.write('   ' + (inside ? '\x1b[32min \x1b[0m' : '\x1b[90mout\x1b[0m') +
-      '  ' + s.siteId + '  ' + s.name + '\n');
+      '  ' + d.driverId + '  ' + d.name + '\n');
   }
   process.stdout.write('   \x1b[90mregionContaining(Dallas) = ' + regionContaining(dallas) + '\x1b[0m\n');
 
   // --- GeoJSON -------------------------------------------------------------
-  const bySite = new Map(sites.map((s) => [s.siteId, signalsForSite(operator, s.siteId)]));
-  const fc = sitesToFeatureCollection(sites, bySite);
+  const byDriver = new Map(fleet.map((d) => [d.driverId, telemetryForDriver(operator, d.driverId)]));
+  const fc = driversToFeatureCollection(fleet, byDriver);
 
   note('');
   note('GeoJSON FeatureCollection - the map payload:');
@@ -510,10 +530,10 @@ function sectionGeo() {
     (saved * 100).toFixed(1) + '% smaller)\n');
   const roundTripped = decodePoint(topo, topo.objects.sites.geometries[0]);
   process.stdout.write('   round trip: [' + roundTripped[0].toFixed(4) + ', ' + roundTripped[1].toFixed(4) +
-    ']  vs original [' + sites[0].lon + ', ' + sites[0].lat + ']\n');
+    ']  vs original [' + fleet[0].lon + ', ' + fleet[0].lat + ']\n');
   note('   Lossy by design - quantisation trades sub-metre precision for bytes.');
-  note('   5 points share no borders, so that ratio is unimpressive. The format is');
-  note('   built for detailed polygons - here is the same encoder on one:');
+  note('   Scattered driver pins share no borders, so that ratio is unimpressive.');
+  note('   The format is built for territory polygons - same encoder, one of those:');
 
   // A 600-vertex boundary, the shape TopoJSON actually exists for.
   const detailed = polygonFeatureCollection(600);
@@ -525,12 +545,12 @@ function sectionGeo() {
   // --- MapBox --------------------------------------------------------------
   note('');
   note('MapBox: data-driven styling reads properties.severity straight off the GeoJSON');
-  const style = severityLayerStyle('meridian-sites');
+  const style = severityLayerStyle('meridian-drivers');
   process.stdout.write('   circle-color: ' + JSON.stringify(style.paint['circle-color']) + '\n');
   process.stdout.write('   geocode  : ' + geocodeUrl('1 Main St, Dallas TX', 'pk.REDACTED').slice(0, 96) + '...\n');
   process.stdout.write('   isochrone: ' + isochroneUrl([dallas.lon, dallas.lat], [15, 30], 'pk.REDACTED').slice(0, 96) + '...\n');
 
-  const denver = sites.find((s) => s.siteId === 'den-01')!;
+  const denver = fleet.find((d) => d.driverId === 'drv-0311')!;
   process.stdout.write('   \x1b[90mDallas -> Denver = ' + haversineKm(dallas, denver).toFixed(1) + ' km\x1b[0m\n');
 }
 
@@ -580,7 +600,7 @@ async function sectionAi() {
   // --- The agent loop ------------------------------------------------------
   note('');
   note('AgentCore loop - operator asks an open-ended question:');
-  const agentQuestion = 'Why is the Dallas site degraded, and is it just Dallas?';
+  const agentQuestion = 'Why is drv-0142 behind schedule, and what are my options?';
   process.stdout.write('   Q: ' + agentQuestion + '\n\n');
 
   const result = await runAgent({ question: agentQuestion, principal: operator, tools: TOOL_SPECS });
@@ -614,7 +634,7 @@ async function sectionAi() {
   note('');
   note('Now an explicit request to act (note openIncident appears only here):');
   const actionResult = await runAgent({
-    question: 'Open a critical incident for dal-01 covering the WAN degradation.',
+    question: 'Open a critical incident for drv-0142 covering the braking cluster.',
     principal: operator,
     tools: TOOL_SPECS,
   });
@@ -677,7 +697,7 @@ function ensurePrincipals() {
   // Lets `--only=geo` work without running the auth section first.
   operator ??= verifyToken(signDemoToken({
     sub: 'Google_1029384756', email: 'alice@acme.com',
-    'custom:tenantId': 'acme', 'cognito:groups': ['operator'],
+    'custom:tenantId': 'acme-freight', 'cognito:groups': ['dispatcher'],
   }));
   outsider ??= verifyToken(signDemoToken({
     sub: 'Okta_555', email: 'bob@globex.com',

@@ -56,6 +56,8 @@ export type CognitoClaims = {
   'cognito:groups': string[];
   /** Custom attributes are prefixed `custom:` and are how tenancy travels. */
   'custom:tenantId': TenantId;
+  /** The dispatcher's district. Signed by Cognito, so it cannot be widened. */
+  'custom:district'?: string;
   /** Which IdP the user federated from. Cognito sets this for federated users. */
   identities?: Array<{ providerName: string; userId: string }>;
 };
@@ -128,6 +130,7 @@ export function verifyToken(token: string): Principal {
     email: claims.email,
     tenantId: claims['custom:tenantId'],
     roles: mapGroupsToRoles(claims['cognito:groups'] ?? []),
+    scope: scopeFromClaims(claims),
     identityProvider: providerFromIdentities(claims.identities),
   };
 }
@@ -140,9 +143,30 @@ export function verifyToken(token: string): Principal {
 function mapGroupsToRoles(groups: string[]): Principal['roles'] {
   const valid: Principal['roles'] = [];
   for (const g of groups) {
-    if (g === 'admin' || g === 'operator' || g === 'viewer') valid.push(g);
+    if (g === 'admin' || g === 'dispatcher' || g === 'safety' ||
+        g === 'driver' || g === 'viewer') valid.push(g);
   }
   return valid.length > 0 ? valid : ['viewer'];
+}
+
+/**
+ * Derive the caller's scope from their claims.
+ *
+ * Cognito stamps `custom:district` in the PreTokenGeneration trigger, so the
+ * scope arrives already signed - a dispatcher cannot widen their own board by
+ * editing a request. Absence of a district is NOT treated as "see everything":
+ * only an explicit admin role gets tenant-wide scope, and everyone else falls
+ * back to the narrowest thing that still makes sense.
+ */
+function scopeFromClaims(claims: CognitoClaims): Principal['scope'] {
+  const roles = mapGroupsToRoles(claims['cognito:groups'] ?? []);
+  if (roles.includes('admin')) return { kind: 'tenant' };
+
+  const district = claims['custom:district'];
+  if (district) return { kind: 'district', districtId: district };
+
+  // A driver with no district claim sees their own assignments and nothing else.
+  return { kind: 'driver', driverId: claims.sub };
 }
 
 function providerFromIdentities(identities: CognitoClaims['identities']): Principal['identityProvider'] {
