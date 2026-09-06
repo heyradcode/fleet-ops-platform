@@ -6,7 +6,7 @@ board and an assistant on top. This is the shortest path through it.
 ## 1. Run it (5 minutes)
 
 ```bash
-npm start -- --only=scenarios
+pnpm start --only=scenarios
 ```
 
 Six situations go through the real pipeline. Each one exists to prove a claim
@@ -17,8 +17,8 @@ light up; a board that cries wolf is one people stop reading.
 Then the whole thing, and the board:
 
 ```bash
-npm start
-npm run web
+pnpm start
+pnpm web
 ```
 
 ## 2. Read in this order (2-3 hours)

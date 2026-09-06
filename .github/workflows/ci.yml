@@ -29,26 +29,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # pnpm has to be on PATH before setup-node, or its cache resolution
+      # cannot find the store.
+      - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
 
-      # `npm ci` not `npm install`: it installs exactly the lockfile and fails
+      # `--frozen-lockfile`: install exactly the lockfile and fail
       # if package.json and the lock have drifted. Non-negotiable in CI.
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
 
       - name: Typecheck
-        run: npm run typecheck
+        run: pnpm typecheck
 
       - name: Unit tests
-        run: npm test
+        run: pnpm test
 
       # The demo IS an integration test: it exercises every connector, the
       # state machine, both APIs, the geospatial layer and the agent loop.
       # If it exits non-zero, something real is broken.
       - name: End-to-end smoke run
-        run: npm start
+        run: pnpm start
 
       # The demo is seeded and clock-injected, so two runs must produce
       # identical output apart from wall-clock durations. This catches
@@ -56,8 +60,8 @@ jobs:
       # otherwise only show up as a screenshot that will not reproduce.
       - name: Determinism check
         run: |
-          npm start > /tmp/run-a.txt 2>&1
-          npm start > /tmp/run-b.txt 2>&1
+          pnpm start > /tmp/run-a.txt 2>&1
+          pnpm start > /tmp/run-b.txt 2>&1
           if diff /tmp/run-a.txt /tmp/run-b.txt              | grep '^[<>]' | grep -viE 'retryInMs|[0-9]+ms' | grep -q .; then
             echo "Demo output is not reproducible between runs:"
             diff /tmp/run-a.txt /tmp/run-b.txt | head -40
@@ -102,19 +106,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # pnpm has to be on PATH before setup-node, or its cache resolution
+      # cannot find the store.
+      - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
 
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
 
       # The board imports the backend directly and type-checks against it, so
       # this build fails if a backend change breaks the API the client depends
       # on - which is the point of the transport boundary being a real
       # interface rather than a convention.
       - name: Build
-        run: npm run web:build
+        run: pnpm web:build
 
   terraform:
     name: terraform validate
@@ -182,4 +190,4 @@ jobs:
           sarif_file: trivy.sarif
 
       - name: Dependency audit
-        run: npm audit --audit-level=high
+        run: pnpm audit --audit-level high

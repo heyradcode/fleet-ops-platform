@@ -6,23 +6,28 @@ board in `web/` (React + MapLibre, its own dependencies).
 
 ## Commands
 
+This repo uses **pnpm**, not npm. The lockfile and the non-hoisted layout both
+assume it, and `npm install` would flatten `web/`'s dependencies into a place
+`src/` can import from - which quietly breaks the zero-dependency backend.
+
 ```bash
-npm start                       # the backend demo, narrated, all sections
-npm start -- --only=scenarios   # the six scenarios — the best 30 seconds in the repo
-npm test                        # 89 tests, no network. Picks up web/ tests too.
-npm run typecheck               # backend
-npm run web                     # dispatch board, http://localhost:5180
-npm run web:build               # typechecks web/ AND builds it
+pnpm install
+pnpm start                      # the backend demo, narrated, all sections
+pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
+pnpm dev                        # the same, restarting on every save (nodemon)
+pnpm test                       # 90 tests, no network. Picks up web/ tests too.
+pnpm typecheck                  # backend
+pnpm web                        # dispatch board, http://localhost:5180
+pnpm web:build                  # typechecks web/ AND builds it
+pnpm verify                     # all four checks, in order
 ```
 
 `--only=` takes: `auth ingest scenarios data events graphql rest geo ai`.
+Note `pnpm start --only=x` needs no `--` separator; npm did.
 
-Verify a change with all four, in this order — each catches things the others
-do not:
-
-```bash
-npm run typecheck && npm test && npm start > /dev/null && npm run web:build
-```
+`pnpm verify` runs typecheck, tests, the demo and the web build in that order.
+Each catches something the others do not - and none of them catches everything,
+which is why the list ends with actually reading the demo output.
 
 ## Invariants — break these and something silently stops working
 
@@ -38,13 +43,13 @@ Anything platform-specific goes behind `src/platform/` — that is what
 
 **Everything is deterministic.** Never `new Date()`, `Date.now()` or
 `Math.random()` — use `platform/clock.ts` and `platform/random.ts`. Two
-`npm start` runs must produce identical output apart from wall-clock
+`pnpm start` runs must produce identical output apart from wall-clock
 durations, and CI diffs them. This is what makes a screenshot reproducible and
 a real change distinguishable from noise.
 
 **No TypeScript `enum`, `namespace`, parameter properties or decorators.**
 `node src/demo.ts` runs TS via type-stripping, which cannot handle anything
-requiring code generation. `tsc` stays green and `npm start` dies at runtime.
+requiring code generation. `tsc` stays green and `pnpm start` dies at runtime.
 Use union types, as the existing code does.
 
 **Imports carry `.ts` extensions.** Required by type-stripping. `web/` handles
@@ -94,6 +99,11 @@ real belongs in this repo.
 
 ## Gotchas found the hard way
 
+- **`process` does not exist in a browser.** Not undefined - UNBOUND, so
+  `process.env.FOO` throws. Every read of it was at module scope, so the board
+  was a blank page. Configuration goes through `platform/env.ts`. This is the
+  bug that motivated the browser-contract test, which loads the whole graph
+  with `process` and `Buffer` deleted.
 - **`crypto.randomUUID()` is secure-context only.** Undefined over plain http
   on a LAN address, which is how the board is reached behind a VPN that
   intercepts loopback. `platform/crypto.ts` falls back to `getRandomValues`.

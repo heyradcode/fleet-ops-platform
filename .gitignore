@@ -6,3 +6,4 @@ dist/
 .terraform/
 .terraform.lock.hcl
 web/dist
+.pnpm-store/

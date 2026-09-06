@@ -47,12 +47,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # pnpm before setup-node, so its cache resolution can find the store.
+      - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
 
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
 
       # esbuild bundles + tree-shakes each handler. Bundle size is the single
       # biggest lever on Lambda cold-start time, so this is not cosmetic.

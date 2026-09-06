@@ -1,0 +1,17 @@
+# pnpm ignores package.json "workspaces" and reads this file instead.
+#
+# The backend has zero runtime dependencies and the board has its own. Hoisting
+# would blur that line by making web/'s packages importable from src/, which is
+# exactly the mistake this repo's structure exists to prevent. pnpm's default
+# non-hoisted layout enforces it: src/ can only import what the root
+# package.json declares, which is nothing.
+packages:
+  - 'web'
+
+# pnpm blocks dependency install scripts by default, and that is the right
+# default - a postinstall is arbitrary code execution from a transitive
+# dependency. esbuild genuinely needs its: it validates and links the platform
+# binary Vite compiles with. Declared here rather than approved interactively,
+# so a fresh clone and CI both get the same answer without a prompt.
+allowBuilds:
+  esbuild: true

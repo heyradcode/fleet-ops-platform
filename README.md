@@ -7,8 +7,9 @@ that shows its working.
 It runs on your machine with **no AWS account and no network**:
 
 ```bash
-npm start        # the backend, narrated, in your terminal
-npm run web      # the dispatch board, at localhost:5180
+pnpm install
+pnpm start       # the backend, narrated, in your terminal
+pnpm web         # the dispatch board, at localhost:5180
 ```
 
 <sub>Node 22+ for the backend — it is TypeScript and Node runs it directly via
@@ -55,7 +56,7 @@ downstream proportional to *incidents* rather than to *fleet size*.
 
 ## The thing worth looking at first
 
-Run `npm start -- --only=scenarios`. Six situations go through the real
+Run `pnpm start --only=scenarios`. Six situations go through the real
 pipeline, and each proves one claim:
 
 ```
@@ -195,19 +196,22 @@ you can watch the scores move.
 ## Commands
 
 ```bash
-npm start                          # every section, in order
-npm start -- --only=scenarios      # the six scenarios — start here
-npm start -- --only=ingest         # auth | ingest | scenarios | data | events
-npm start -- --only=ai             # graphql | rest | geo | ai
+pnpm start                         # every section, in order
+pnpm start --only=scenarios        # the six scenarios — start here
+pnpm start --only=ingest           # auth | ingest | scenarios | data | events
+pnpm start --only=ai               # graphql | rest | geo | ai
+pnpm dev                           # the same, restarting on every save
 
-npm test                           # 89 tests, no network
-npm run typecheck
+pnpm test                          # 90 tests, no network
+pnpm typecheck
 
-npm run web                        # the dispatch board
-npm run web:build
+pnpm web                           # the dispatch board
+pnpm web:build
+
+pnpm verify                        # all four, in the order that catches most
 ```
 
-Two runs of `npm start` produce identical output apart from wall-clock
+Two runs of `pnpm start` produce identical output apart from wall-clock
 durations — CI asserts it. Everything is seeded and the clock is injected, so a
 screenshot reproduces and a real change is distinguishable from noise.
 

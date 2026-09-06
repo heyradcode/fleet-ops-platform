@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json.schemastore.org/nodemon.json",
+
+  "watch": ["src"],
+  "ext": "ts,md,sql,json,graphql",
+  "ignore": ["src/**/*.test.ts"],
+  "exec": "node src/demo.ts",
+
+  "//": [
+    "Watches the runbook markdown and schema.sql as well as the TypeScript,",
+    "because both are inputs: the knowledge base indexes the .md files at",
+    "startup, so editing a runbook changes what the agent retrieves.",
+    "",
+    "Test files are ignored - `pnpm test:watch` is the loop for those, and",
+    "having the demo restart every time a test is edited is just noise.",
+    "",
+    "The delay stops a multi-file save from triggering three runs. The demo",
+    "takes about a second, so restarting mid-edit wastes more than it costs."
+  ],
+  "delay": 400
+}
