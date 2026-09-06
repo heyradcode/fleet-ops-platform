@@ -121,17 +121,17 @@ resource "aws_appsync_resolver" "query_site" {
 # Everything that needs real compute goes to the Lambda data source.
 resource "aws_appsync_resolver" "lambda_backed" {
   for_each = {
-    "Query.mapLayer"                = "Query"
-    "Query.driversNear"             = "Query"
-    "Query.availableDriversNear"    = "Query"
-    "Query.exceptions"              = "Query"
-    "Query.askRunbooks"             = "Query"
-    "Query.incidents"               = "Query"
-    "Mutation.openIncident"         = "Mutation"
-    "Mutation.acknowledgeIncident"  = "Mutation"
-    "Mutation.reassignDriver"       = "Mutation"
-    "Mutation.askAgent"             = "Mutation"
-    "Driver.telemetry"              = "Driver"
+    "Query.mapLayer"               = "Query"
+    "Query.driversNear"            = "Query"
+    "Query.availableDriversNear"   = "Query"
+    "Query.exceptions"             = "Query"
+    "Query.askRunbooks"            = "Query"
+    "Query.incidents"              = "Query"
+    "Mutation.openIncident"        = "Mutation"
+    "Mutation.acknowledgeIncident" = "Mutation"
+    "Mutation.reassignDriver"      = "Mutation"
+    "Mutation.askAgent"            = "Mutation"
+    "Driver.telemetry"             = "Driver"
   }
 
   api_id      = aws_appsync_graphql_api.main.id
@@ -153,12 +153,12 @@ resource "aws_appsync_resolver" "lambda_backed" {
 resource "aws_appsync_api_cache" "main" {
   count = var.env == "prod" ? 1 : 0
 
-  api_id                       = aws_appsync_graphql_api.main.id
-  api_caching_behavior         = "PER_RESOLVER_CACHING"
-  type                         = "SMALL"
-  ttl                          = 30
-  at_rest_encryption_enabled   = true
-  transit_encryption_enabled   = true
+  api_id                     = aws_appsync_graphql_api.main.id
+  api_caching_behavior       = "PER_RESOLVER_CACHING"
+  type                       = "SMALL"
+  ttl                        = 30
+  at_rest_encryption_enabled = true
+  transit_encryption_enabled = true
 }
 
 # -----------------------------------------------------------------------------

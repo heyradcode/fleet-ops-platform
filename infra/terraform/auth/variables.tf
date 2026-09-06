@@ -26,6 +26,12 @@ variable "monthly_budget_usd" {
   default     = "5"
 }
 
+variable "domain_prefix" {
+  description = "Hosted UI domain prefix, GLOBALLY unique across all AWS accounts. Empty derives it from the env name. Set it if the apply says the domain is taken."
+  type        = string
+  default     = ""
+}
+
 variable "google_client_id" {
   description = "Google OAuth client id. Empty means no Google sign-in."
   type        = string

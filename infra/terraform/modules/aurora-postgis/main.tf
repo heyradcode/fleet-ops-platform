@@ -100,12 +100,12 @@ resource "aws_rds_cluster_instance" "writer" {
 resource "aws_rds_cluster_instance" "reader" {
   count = var.env == "prod" ? 1 : 0
 
-  identifier          = "${var.name_prefix}-aurora-reader"
-  cluster_identifier  = aws_rds_cluster.main.id
-  instance_class      = "db.serverless"
-  engine              = aws_rds_cluster.main.engine
-  engine_version      = aws_rds_cluster.main.engine_version
-  promotion_tier      = 1
+  identifier                   = "${var.name_prefix}-aurora-reader"
+  cluster_identifier           = aws_rds_cluster.main.id
+  instance_class               = "db.serverless"
+  engine                       = aws_rds_cluster.main.engine
+  engine_version               = aws_rds_cluster.main.engine_version
+  promotion_tier               = 1
   performance_insights_enabled = true
 }
 

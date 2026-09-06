@@ -20,6 +20,29 @@ The expensive parts of the platform are deliberately absent — Aurora (~$87/mo
 idle), Kinesis (~$29/mo), and anything needing a vector store (OpenSearch
 Serverless floors at ~$700/mo). The reasoning is at the top of `main.tf`.
 
+## Before you start
+
+Two CLIs, neither of which ships with the repo:
+
+```powershell
+winget install Hashicorp.Terraform
+winget install Amazon.AWSCLI
+```
+
+Then credentials. `aws configure sso` is the right answer if you have IAM
+Identity Center; an IAM user's access keys via `aws configure` is the pragmatic
+one for a personal account. Confirm it works before touching Terraform, because
+"no valid credential sources" is otherwise the first thing the apply tells you:
+
+```bash
+aws sts get-caller-identity
+```
+
+The identity needs to create Cognito pools, Lambda functions, IAM roles, log
+groups and budgets. On a personal account `AdministratorAccess` is the usual
+choice; on anything shared it should be scoped, because a role that can create
+IAM roles can create one more privileged than itself.
+
 ## Apply it
 
 ```bash
@@ -27,10 +50,18 @@ pnpm build:lambda          # esbuild the trigger into .build/
 cd infra/terraform/auth
 terraform init
 
-terraform apply \
+terraform plan \
   -var 'app_urls=["https://your-app.vercel.app"]' \
   -var 'alert_email=you@example.com'
 ```
+
+**Read the plan.** It should create around fifteen resources and no database.
+If it mentions `aws_rds_cluster` you are in the wrong directory. Then swap
+`plan` for `apply`.
+
+If it fails saying the domain already exists, that is the one name here that is
+globally unique across every AWS account, and a stranger has it. Add
+`-var 'domain_prefix=meridian-<something-of-yours>'`.
 
 `app_urls` takes origins **without a trailing slash**; `/callback` is appended
 and `http://localhost:5180` is added for you. Cognito matches redirect URIs

@@ -33,6 +33,13 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.70"
     }
+    # The lambda module zips its source with archive_file. Declared here because
+    # the module does not declare it, and an inferred provider is a warning
+    # today and a hard error in some future version.
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.6"
+    }
   }
 
   # Local state, on purpose. Remote state with a DynamoDB lock table is right
@@ -121,6 +128,10 @@ module "cognito" {
   logout_urls   = local.logout_urls
 
   pre_token_generation_lambda_arn = module.pre_token.arn
+
+  # Globally unique across all of AWS. Leave it empty and it derives from the
+  # name prefix; set it if the apply tells you the domain is taken.
+  domain_prefix = var.domain_prefix
 
   # Threat protection is the Cognito "Plus" feature plan. It is the highest
   # value paid feature on a real pool and pointless on a demo one, so it stays

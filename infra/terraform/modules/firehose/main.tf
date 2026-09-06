@@ -58,7 +58,13 @@ resource "aws_kinesis_firehose_delivery_stream" "history" {
       enabled = true
 
       input_format_configuration {
-        deserializer { open_x_json_ser_de {} }
+        deserializer {
+          # A nested block on its own line. HCL allows a one-line block to hold a
+          # single ARGUMENT, never a nested block - `deserializer {
+          # open_x_json_ser_de {} }` does not parse, and it fails at `fmt`,
+          # before validate, which is why nothing downstream ever reported it.
+          open_x_json_ser_de {}
+        }
       }
 
       output_format_configuration {
@@ -102,6 +108,13 @@ resource "aws_s3_bucket_lifecycle_configuration" "history" {
   rule {
     id     = "tier-then-expire"
     status = "Enabled"
+
+    # An empty filter means every object, and it has to be stated. A rule with
+    # neither `filter` nor `prefix` is accepted with a warning today and will
+    # be rejected by a future provider - and the sibling policy in
+    # modules/s3-bedrock-kb already carries one, so this was a lone omission
+    # rather than a convention.
+    filter {}
 
     transition {
       days          = 30

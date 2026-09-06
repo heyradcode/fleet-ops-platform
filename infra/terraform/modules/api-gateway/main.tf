@@ -82,15 +82,15 @@ resource "aws_apigatewayv2_integration" "lambda" {
 locals {
   # route => whether it needs auth
   routes = {
-    "GET /health"               = false
-    "GET /drivers"              = true
-    "GET /drivers/{driverId}"   = true
-    "GET /drivers/near"         = true
-    "GET /telemetry"            = true
-    "GET /incidents"            = true
-    "GET /map"                  = true
-    "POST /ask"                 = true
-    "POST /incidents"           = true
+    "GET /health"             = false
+    "GET /drivers"            = true
+    "GET /drivers/{driverId}" = true
+    "GET /drivers/near"       = true
+    "GET /telemetry"          = true
+    "GET /incidents"          = true
+    "GET /map"                = true
+    "POST /ask"               = true
+    "POST /incidents"         = true
     # Webhooks authenticate with an HMAC signature, not a JWT - the vendor has
     # no Cognito token. Verify the signature inside the handler.
     "POST /webhooks/{provider}" = false
@@ -146,8 +146,8 @@ resource "aws_apigatewayv2_stage" "default" {
   default_route_settings {
     # Protects your Lambda concurrency (and your bill) from a single client.
     # Per-client quotas need a REST API with usage plans, or WAF rate rules.
-    throttling_burst_limit = var.env == "prod" ? 2000 : 100
-    throttling_rate_limit  = var.env == "prod" ? 1000 : 50
+    throttling_burst_limit   = var.env == "prod" ? 2000 : 100
+    throttling_rate_limit    = var.env == "prod" ? 1000 : 50
     detailed_metrics_enabled = true
   }
 }

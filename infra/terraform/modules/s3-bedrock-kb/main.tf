@@ -178,7 +178,7 @@ resource "aws_bedrockagent_knowledge_base" "runbooks" {
         # Without it, a knowledge base is a cross-tenant data leak waiting to
         # happen - the RAG equivalent of a missing WHERE clause, except that
         # nothing errors and the wrong answer looks completely plausible.
-        metadata_field    = "metadata"
+        metadata_field = "metadata"
       }
     }
   }

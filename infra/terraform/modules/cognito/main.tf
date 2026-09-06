@@ -10,6 +10,12 @@ variable "callback_urls" { type = list(string) }
 variable "logout_urls" { type = list(string) }
 variable "pre_token_generation_lambda_arn" { type = string }
 
+variable "domain_prefix" {
+  description = "Hosted UI domain prefix. Globally unique across all AWS accounts. Empty derives it from name_prefix."
+  type        = string
+  default     = ""
+}
+
 variable "advanced_security_mode" {
   description = "OFF keeps the pool on the free feature plan. AUDIT and ENFORCED require Plus."
   type        = string
@@ -298,8 +304,11 @@ resource "aws_cognito_user_pool_client" "web" {
   write_attributes = ["email"]
 }
 
+# The hosted UI domain prefix is GLOBALLY unique - across every AWS account,
+# not just yours - so an obvious name is probably already taken by a stranger,
+# and the apply fails on it. Overridable for exactly that reason.
 resource "aws_cognito_user_pool_domain" "main" {
-  domain       = "${var.name_prefix}-auth"
+  domain       = coalesce(var.domain_prefix, "${var.name_prefix}-auth")
   user_pool_id = aws_cognito_user_pool.main.id
 }
 

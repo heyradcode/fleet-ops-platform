@@ -64,6 +64,16 @@ locals {
   name_prefix = "meridian-${var.env}"
   src_root    = "${path.module}/../../../src"
 
+  # Stamped onto every resource that takes tags. Cost allocation is the reason
+  # that matters: without a consistent Environment tag, Cost Explorer cannot
+  # tell you what dev costs against prod, and that is the number that starts
+  # the conversation about switching dev off overnight.
+  tags = {
+    Project     = "meridian"
+    Environment = var.env
+    ManagedBy   = "terraform"
+  }
+
   # ---------------------------------------------------------------------------
   # DERIVED front-end URLs
   # ---------------------------------------------------------------------------
@@ -101,13 +111,13 @@ locals {
 # -----------------------------------------------------------------------------
 
 module "dynamodb" {
-  source      = "../../modules/dynamodb"
+  source      = "../modules/dynamodb"
   name_prefix = local.name_prefix
   env         = var.env
 }
 
 module "storage" {
-  source      = "../../modules/s3-bedrock-kb"
+  source      = "../modules/s3-bedrock-kb"
   name_prefix = local.name_prefix
   env         = var.env
 
@@ -124,17 +134,20 @@ module "storage" {
 # Telemetry ingest: the stream, and the cold path it feeds
 # ---------------------------------------------------------------------------
 module "kinesis" {
-  source = "../../modules/kinesis"
+  source = "../modules/kinesis"
   name   = local.name_prefix
   env    = var.env
   tags   = local.tags
 
-  consumer_function_arn = module.lambda["evaluate"].alias_arn
-  on_failure_arn        = module.events.dlq_arn
+  # The stream is consumed by the evaluate step, on its ALIAS rather than the
+  # function - an event source mapping pinned to $LATEST re-points itself mid
+  # deploy, which is how a half-published version ends up reading the stream.
+  consumer_function_arn = module.lambda_pipeline["evaluate"].alias_arn
+  on_failure_arn        = module.eventbridge.dlq_arn
 }
 
 module "firehose" {
-  source = "../../modules/firehose"
+  source = "../modules/firehose"
   name   = local.name_prefix
   tags   = local.tags
 
@@ -145,7 +158,7 @@ module "firehose" {
 }
 
 module "aurora" {
-  source                   = "../../modules/aurora-postgis"
+  source                   = "../modules/aurora-postgis"
   name_prefix              = local.name_prefix
   env                      = var.env
   vpc_id                   = data.aws_vpc.main.id
@@ -160,7 +173,7 @@ module "aurora" {
 # are - that difference is the entire point of not using one shared role.
 
 module "lambda_pre_token" {
-  source     = "../../modules/lambda"
+  source     = "../modules/lambda"
   name       = "${local.name_prefix}-pre-token"
   env        = var.env
   handler    = "auth/pre-token-generation.handler"
@@ -181,7 +194,7 @@ module "lambda_pre_token" {
 }
 
 module "lambda_authorizer" {
-  source     = "../../modules/lambda"
+  source     = "../modules/lambda"
   name       = "${local.name_prefix}-authorizer"
   env        = var.env
   handler    = "auth/authorizer.handler"
@@ -201,7 +214,7 @@ module "lambda_authorizer" {
 }
 
 module "lambda_graphql" {
-  source          = "../../modules/lambda"
+  source          = "../modules/lambda"
   name            = "${local.name_prefix}-graphql"
   env             = var.env
   handler         = "api/appsync-resolvers.handler"
@@ -257,7 +270,7 @@ module "lambda_graphql" {
 }
 
 module "lambda_rest" {
-  source     = "../../modules/lambda"
+  source     = "../modules/lambda"
   name       = "${local.name_prefix}-rest"
   env        = var.env
   handler    = "api/rest-handler.handler"
@@ -278,7 +291,7 @@ module "lambda_rest" {
 
 # The five pipeline steps. for_each so adding a step is one line.
 module "lambda_pipeline" {
-  source = "../../modules/lambda"
+  source = "../modules/lambda"
 
   for_each = {
     collect   = { memory = 512, timeout = 120 }
@@ -330,7 +343,7 @@ module "lambda_pipeline" {
 }
 
 module "lambda_notifier" {
-  source     = "../../modules/lambda"
+  source     = "../modules/lambda"
   name       = "${local.name_prefix}-notifier"
   env        = var.env
   handler    = "pipeline/notifier.handler"
@@ -348,7 +361,7 @@ module "lambda_notifier" {
 # -----------------------------------------------------------------------------
 
 module "cognito" {
-  source        = "../../modules/cognito"
+  source        = "../modules/cognito"
   name_prefix   = local.name_prefix
   env           = var.env
   callback_urls = local.callback_urls
@@ -364,7 +377,7 @@ module "cognito" {
 }
 
 module "appsync" {
-  source              = "../../modules/appsync"
+  source              = "../modules/appsync"
   name_prefix         = local.name_prefix
   env                 = var.env
   schema_path         = "${local.src_root}/api/schema.graphql"
@@ -377,7 +390,7 @@ module "appsync" {
 }
 
 module "api_gateway" {
-  source                = "../../modules/api-gateway"
+  source                = "../modules/api-gateway"
   name_prefix           = local.name_prefix
   env                   = var.env
   rest_lambda_arn       = module.lambda_rest.arn
@@ -388,7 +401,7 @@ module "api_gateway" {
 }
 
 module "step_functions" {
-  source          = "../../modules/step-functions"
+  source          = "../modules/step-functions"
   name_prefix     = local.name_prefix
   env             = var.env
   definition_path = "${local.src_root}/pipeline/state-machine.asl.json"
@@ -401,7 +414,7 @@ module "step_functions" {
 }
 
 module "eventbridge" {
-  source                   = "../../modules/eventbridge"
+  source                   = "../modules/eventbridge"
   name_prefix              = local.name_prefix
   env                      = var.env
   ingest_state_machine_arn = module.step_functions.state_machine_arn
