@@ -25,12 +25,20 @@
  * The functions in this file are the LAMBDA data source, implemented properly.
  * VTL and APPSYNC_JS examples for the direct-DynamoDB paths are in api/vtl/.
  */
-import type { Principal } from '../platform/types.ts';
+import type { Principal, Exception } from '../platform/types.ts';
+
+/** The subset of an Exception that crosses the subscription wire. */
+type DriverExceptionPayload = Pick<
+  Exception, 'exceptionId' | 'driverId' | 'districtId' | 'kind' | 'severity' | 'providers' | 'raisedAt'
+>;
 import {
   recentTelemetry, telemetryForDriver, telemetryBySeverity,
-  openIncidents, getIncident, putIncident,
+  recentExceptions, openIncidents, getIncident, putIncident,
 } from '../platform/repository.ts';
-import { allDrivers, getDriver, driversWithinRadius } from '../geo/driver-repository.ts';
+import {
+  allDrivers, allDistricts, getDriver, driversWithinRadius, availableDriversNear,
+} from '../geo/driver-repository.ts';
+import { withinScope, scopeAllowsDistrict } from '../platform/tenancy.ts';
 import { driversToFeatureCollection } from '../geo/geojson.ts';
 import { nowIso } from '../platform/clock.ts';
 import { askWithRag } from '../ai/bedrock-rag.ts';
@@ -82,11 +90,41 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
 
   switch (key) {
     // ---- Query ----------------------------------------------------------
-    case 'Query.drivers':
-      return allDrivers(principal);
+    case 'Query.drivers': {
+      // SCOPE FIRST, filters second. `districtId` is a convenience for the
+      // client; withinScope() is the boundary, derived from the token. A
+      // dispatcher who passes another district gets an empty list rather than
+      // someone else's board.
+      let fleet = withinScope(principal, allDrivers(principal));
+      if (args.districtId) fleet = fleet.filter((d) => d.districtId === args.districtId);
+      if (args.status) fleet = fleet.filter((d) => d.status === args.status);
+      return fleet;
+    }
 
-    case 'Query.driver':
-      return getDriver(principal, String(args.driverId));
+    case 'Query.territories':
+      return allDistricts(principal);
+
+    case 'Query.exceptions': {
+      const all = recentExceptions(principal, Number(args.limit ?? 50));
+      const scoped = all.filter((e) => scopeAllowsDistrict(principal, e.districtId));
+      return args.districtId
+        ? scoped.filter((e) => e.districtId === args.districtId)
+        : scoped;
+    }
+
+    case 'Query.availableDriversNear':
+      return availableDriversNear(
+        principal,
+        { lon: Number(args.lon), lat: Number(args.lat) },
+        Number(args.radiusKm),
+      );
+
+    case 'Query.driver': {
+      const driver = getDriver(principal, String(args.driverId));
+      // Inside the tenant but outside the caller's district is still a refusal.
+      if (driver && !scopeAllowsDistrict(principal, driver.districtId)) return null;
+      return driver;
+    }
 
     case 'Query.telemetry': {
       const limit = Number(args.limit ?? 25);
@@ -198,6 +236,46 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
       putIncident(principal, updated);
       publishToSubscribers('onIncidentAcknowledged', updated);
       return updated;
+    }
+
+    /**
+     * Called by the ingest pipeline with IAM auth, purely to trigger the
+     * subscription fan-out.
+     *
+     * This is the AppSync detail people get wrong: you CANNOT push to a
+     * subscription by writing to DynamoDB. A subscription is declared against a
+     * MUTATION, and the payload is that mutation's return value - so a backend
+     * that wants to push has to call the mutation, usually with IAM.
+     *
+     * And note what has no equivalent here: telemetry. Pushing 11,000
+     * readings/sec to every connected board would be useless to a human and
+     * ruinous to pay for. Positions refresh on a poll; only exceptions push.
+     */
+    case 'Mutation.publishException': {
+      const exception = args.input as DriverExceptionPayload;
+      // The subscription filter matches on these top-level fields, so they have
+      // to be in the returned object - a subscriber cannot receive a field the
+      // mutation did not return, even if they asked for it.
+      publishToSubscribers('onDriverException', exception);
+      return exception;
+    }
+
+    case 'Mutation.reassignDriver': {
+      // The same authorisation the agent's reassignDriver tool goes through.
+      // There is no privileged path for the agent - it calls what a dispatcher
+      // calls, with the dispatcher's own authority.
+      requireRole(principal, 'admin', 'dispatcher');
+      const to = getDriver(principal, String((args.input as { toDriverId: string }).toDriverId));
+      if (!to) throw new Error('unknown driver');
+      if (to.hosRemainingMinutes < 60) {
+        // A regulatory refusal, not a preference. Enforced here as well as in
+        // the tool, because both are entry points to the same action.
+        throw new Error(
+          to.driverId + ' has ' + to.hosRemainingMinutes +
+          ' minutes of drive time left and cannot accept a reassignment',
+        );
+      }
+      throw new Error('reassignment saga not implemented in the offline demo');
     }
 
     case 'Mutation.askAgent': {

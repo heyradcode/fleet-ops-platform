@@ -6,8 +6,8 @@
 #
 #   @aws_cognito_user_pools / @aws_iam / @aws_api_key
 #       Authorisation is declared IN THE SCHEMA, per type and per field. You can
-#       run several auth modes at once - Cognito for users, IAM for the ingest
-#       Lambda - and AppSync enforces it before a resolver runs.
+#       run several auth modes at once - Cognito for dispatchers, IAM for the
+#       ingest Lambda - and AppSync enforces it before a resolver runs.
 #
 #   @aws_auth(cognito_groups: [...])
 #       Field-level RBAC with no resolver code at all.
@@ -17,6 +17,10 @@
 #       when the named mutation succeeds, AppSync pushes the result over
 #       WebSocket to every client whose filter matches. This is the single
 #       biggest reason to choose AppSync over a hand-rolled GraphQL server.
+#
+# THE SUBSCRIPTION FILTER IS A COST DECISION, NOT A FEATURE. At fleet scale a
+# dispatcher watching Dallas must not be woken by - or billed for - national
+# traffic. See `onDriverException` at the bottom.
 # =============================================================================
 
 schema {
@@ -30,18 +34,28 @@ schema {
 # -----------------------------------------------------------------------------
 
 enum Severity { ok info warning critical }
-enum ProviderDomain { network contact_center observability }
+enum ProviderDomain { telematics eld_hos video_safety }
 enum IncidentStatus { open acknowledged resolved }
+enum DriverStatus { driving stopped on_break off_duty }
 
-enum SignalKind {
-  device_health
-  wan_latency
-  packet_loss
-  queue_wait
-  abandon_rate
-  agent_occupancy
-  error_rate
-  log_volume
+enum TelemetryKind {
+  position
+  speeding
+  harsh_brake
+  idle
+  hos_remaining
+  route_adherence
+  geofence_state
+  panic
+}
+
+enum ExceptionKind {
+  geofence_breach
+  harsh_braking
+  route_deviation
+  prolonged_idle
+  hos_risk
+  panic
 }
 
 # -----------------------------------------------------------------------------
@@ -51,31 +65,46 @@ enum SignalKind {
 type Location {
   lon: Float!
   lat: Float!
-  region: String!
+  district: ID!
 }
 
-type Site {
-  siteId: ID!
+type Driver {
+  driverId: ID!
+  name: String!
+  districtId: ID!
+  vehicleId: String!
+  status: DriverStatus!
+  lon: Float!
+  lat: Float!
+
+  # Minutes of legal drive time remaining. The board colours on this even when
+  # nothing has gone wrong yet - a driver about to run out of hours is a problem
+  # you want to see coming, not one you want paged about.
+  hosRemainingMinutes: Int!
+  updatedAt: AWSDateTime!
+
+  # A nested resolver. Fetched ONLY if the client asks for it - that is the
+  # whole point of GraphQL over REST for a board with many widgets.
+  # Watch out for N+1: this runs once per Driver in the parent list, so back it
+  # with a batch resolver (AppSync BatchInvoke, max 2000 items) rather than a
+  # per-item Lambda call.
+  telemetry(limit: Int = 20, severity: Severity): [Telemetry!]!
+}
+
+type Territory {
+  districtId: ID!
   name: String!
   region: String!
   lon: Float!
   lat: Float!
-  headcount: Int!
-
-  # A nested resolver. Fetched ONLY if the client asks for it - that is the
-  # whole point of GraphQL over REST for a dashboard with many widgets.
-  # Watch out for N+1: this runs once per Site in the parent list, so back it
-  # with a batch resolver (AppSync BatchInvoke, max 2000 items) rather than a
-  # per-item Lambda call.
-  signals(limit: Int = 20, severity: Severity): [Signal!]!
 }
 
-type Signal {
-  signalId: ID!
+type Telemetry {
+  telemetryId: ID!
   provider: String!
   domain: ProviderDomain!
-  kind: SignalKind!
-  siteId: ID!
+  kind: TelemetryKind!
+  driverId: ID!
   sourceRef: String!
   value: Float!
   unit: String!
@@ -87,17 +116,35 @@ type Signal {
   attributes: AWSJSON
 }
 
+# What a deterministic rule decided about ONE driver. Not yet a page - see
+# Incident. The board shows these so a dispatcher can see what the platform
+# noticed but chose not to escalate.
+type DriverException {
+  exceptionId: ID!
+  driverId: ID!
+  districtId: ID!
+  kind: ExceptionKind!
+  severity: Severity!
+  # Which vendors witnessed it. Two or more is what makes it corroborated.
+  providers: [String!]!
+  telemetryIds: [ID!]!
+  raisedAt: AWSDateTime!
+  driver: Driver
+}
+
 type Incident {
   incidentId: ID!
   title: String!
   severity: Severity!
   status: IncidentStatus!
-  siteIds: [ID!]!
+  districtId: ID!
+  driverIds: [ID!]!
+  exceptionIds: [ID!]!
   openedAt: AWSDateTime!
   aiSummary: String
   aiCitations: [Citation!]!
-  sites: [Site!]!
-  signals: [Signal!]!
+  drivers: [Driver!]!
+  telemetry: [Telemetry!]!
 }
 
 type Citation {
@@ -107,8 +154,8 @@ type Citation {
 
 # Cursor-based pagination. NEVER offset-based on DynamoDB: the underlying
 # LastEvaluatedKey is a key, not a row number, and offsets cannot express it.
-type SignalConnection {
-  items: [Signal!]!
+type TelemetryConnection {
+  items: [Telemetry!]!
   nextToken: String
 }
 
@@ -140,17 +187,29 @@ type AgentStep {
 # -----------------------------------------------------------------------------
 
 type Query @aws_cognito_user_pools {
-  sites: [Site!]!
-  site(siteId: ID!): Site
+  # The board's first load. `districtId` is a filter, but scope is enforced
+  # from the token regardless - passing another district returns nothing.
+  drivers(districtId: ID, status: DriverStatus): [Driver!]!
+  driver(driverId: ID!): Driver
+
+  territories: [Territory!]!
 
   # nextToken is opaque - it is the base64 of DynamoDB's LastEvaluatedKey.
-  signals(limit: Int = 25, severity: Severity, nextToken: String): SignalConnection!
+  telemetry(limit: Int = 25, severity: Severity, nextToken: String): TelemetryConnection!
+
+  # Raised but not necessarily escalated. Showing these is what lets a
+  # dispatcher see the noise filter working rather than just trusting it.
+  exceptions(districtId: ID, limit: Int = 50): [DriverException!]!
 
   incidents(status: IncidentStatus = open, limit: Int = 25): [Incident!]!
   incident(incidentId: ID!): Incident
 
   # Spatial query -> Aurora PostGIS ST_DWithin.
-  sitesNear(lon: Float!, lat: Float!, radiusKm: Float!): [Site!]!
+  driversNear(lon: Float!, lat: Float!, radiusKm: Float!): [Driver!]!
+
+  # "Who could take this load?" - the same query with the hours-of-service
+  # filter applied in SQL, so an ineligible driver can never be offered.
+  availableDriversNear(lon: Float!, lat: Float!, radiusKm: Float!): [Driver!]!
 
   # The map payload: GeoJSON FeatureCollection + bbox.
   mapLayer: GeoLayer!
@@ -166,10 +225,16 @@ type Query @aws_cognito_user_pools {
 type Mutation @aws_cognito_user_pools {
   # Field-level RBAC, enforced by AppSync before any resolver runs.
   openIncident(input: OpenIncidentInput!): Incident!
-    @aws_auth(cognito_groups: ["admin", "operator"])
+    @aws_auth(cognito_groups: ["admin", "dispatcher"])
 
   acknowledgeIncident(incidentId: ID!): Incident!
-    @aws_auth(cognito_groups: ["admin", "operator"])
+    @aws_auth(cognito_groups: ["admin", "dispatcher", "safety"])
+
+  # Moving a load is the most consequential thing on this API, so it is the
+  # narrowest. The tool the AI agent calls hits this same path and the same
+  # check - the agent has no privileged route in.
+  reassignDriver(input: ReassignDriverInput!): Incident!
+    @aws_auth(cognito_groups: ["admin", "dispatcher"])
 
   # Invokes the AgentCore loop. Long-running, so in production this returns
   # immediately with a jobId and the answer arrives on a subscription.
@@ -178,24 +243,35 @@ type Mutation @aws_cognito_user_pools {
   # Called by the ingest Lambda, authenticated with IAM rather than a user
   # pool - there is no human in that flow. Multiple auth modes on one API is
   # an AppSync strength worth calling out.
-  publishSignal(input: PublishSignalInput!): Signal! @aws_iam
+  #
+  # NOTE WHAT IS MISSING: there is no publishTelemetry. Telemetry never reaches
+  # a subscription, because 11,000 readings/sec pushed to every connected board
+  # would be both useless to a human and ruinous to pay for. Positions refresh
+  # on a poll; only exceptions are pushed.
+  publishException(input: PublishExceptionInput!): DriverException! @aws_iam
 }
 
 input OpenIncidentInput {
   title: String!
   severity: Severity!
-  siteIds: [ID!]!
+  districtId: ID!
+  driverIds: [ID!]!
 }
 
-input PublishSignalInput {
-  signalId: ID!
-  provider: String!
-  siteId: ID!
-  kind: SignalKind!
-  value: Float!
-  unit: String!
+input ReassignDriverInput {
+  fromDriverId: ID!
+  toDriverId: ID!
+  reason: String!
+}
+
+input PublishExceptionInput {
+  exceptionId: ID!
+  driverId: ID!
+  districtId: ID!
+  kind: ExceptionKind!
   severity: Severity!
-  observedAt: AWSDateTime!
+  providers: [String!]!
+  raisedAt: AWSDateTime!
 }
 
 # -----------------------------------------------------------------------------
@@ -203,20 +279,27 @@ input PublishSignalInput {
 # -----------------------------------------------------------------------------
 
 type Subscription @aws_cognito_user_pools {
-  # Fires whenever openIncident succeeds. The optional argument becomes a
-  # server-side FILTER: a client subscribing with severity: critical never
-  # receives warning events. Filtering happens in AppSync, so you are not
-  # paying to push messages the client will discard.
-  onIncidentOpened(severity: Severity): Incident
+  # THE ONE THAT MAKES A 330k-DRIVER BOARD AFFORDABLE.
+  #
+  # The arguments become a server-side FILTER. AppSync evaluates them BEFORE
+  # pushing, so a dispatcher watching Dallas is neither billed for nor woken by
+  # Phoenix traffic - and cannot see it in dev tools either, which is a
+  # confidentiality property as much as a cost one.
+  #
+  # Without this you push every event to every client and filter in the browser:
+  # slow, expensive, and leaking other districts' data to anyone who looks.
+  #
+  # Two AppSync limits to design around: 100 subscriptions per connection and a
+  # 240KB payload cap. A board watching 40 districts needs ONE subscription with
+  # a filter, not 40 subscriptions.
+  onDriverException(districtId: ID, severity: Severity, kind: ExceptionKind): DriverException
+    @aws_subscription(mutations: ["publishException"])
+    @aws_iam
+    @aws_cognito_user_pools
+
+  onIncidentOpened(districtId: ID, severity: Severity): Incident
     @aws_subscription(mutations: ["openIncident"])
 
   onIncidentAcknowledged(incidentId: ID): Incident
     @aws_subscription(mutations: ["acknowledgeIncident"])
-
-  # The live map feed. Filter by site so a client watching Dallas is not woken
-  # up by Chicago.
-  onSignalPublished(siteId: ID, severity: Severity): Signal
-    @aws_subscription(mutations: ["publishSignal"])
-    @aws_iam
-    @aws_cognito_user_pools
 }

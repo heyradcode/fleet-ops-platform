@@ -1,6 +1,6 @@
 /**
  * ===========================================================================
- * APPSYNC_JS unit resolver - Query.signals
+ * APPSYNC_JS unit resolver - Query.telemetry
  * ===========================================================================
  * The modern replacement for VTL. Same idea, real JavaScript, and you can
  * unit test it. Deployed with runtime = { name: "APPSYNC_JS", runtimeVersion:
@@ -34,7 +34,7 @@ export function request(ctx) {
       // read cost is proportional to what we return.
       expression: 'PK = :pk',
       expressionValues: util.dynamodb.toMapValues({
-        ':pk': `TENANT#${tenantId}#SIGNAL`,
+        ':pk': `TENANT#${tenantId}#TELEMETRY`,
       }),
     },
     // Newest first: our SK starts with the ISO timestamp, so descending order

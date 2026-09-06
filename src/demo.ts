@@ -514,6 +514,37 @@ async function sectionGraphql() {
   note('Subscription fan-out (AppSync filters server-side, so only one matched):');
   for (const r of received) process.stdout.write('   ' + r + '\n');
   if (received.length === 1) note('   The warning-watcher was never woken. No wasted push, no wasted bill.');
+
+  // --- The filter that makes a 330k-driver board affordable ----------------
+  note('');
+  note('Now the subscription that actually matters: onDriverException, filtered');
+  note('by district. Three dispatchers watching three different boards.');
+
+  const boards: string[] = [];
+  for (const district of ['dal', 'phx', 'chi']) {
+    subscribe('onDriverException', { districtId: district }, (p) => {
+      const e = p as { driverId: string; kind: string };
+      boards.push(district.toUpperCase() + ' board <- ' + e.kind + ' ' + e.driverId);
+    });
+  }
+
+  await call({
+    info: { fieldName: 'publishException', parentTypeName: 'Mutation' },
+    arguments: {
+      input: {
+        exceptionId: 'exc_demo01', driverId: 'drv-1000', districtId: 'dal',
+        kind: 'route-deviation', severity: 'critical',
+        providers: ['samsara'], raisedAt: new Date().toISOString(),
+      },
+    },
+  }, operator);
+
+  for (const b of boards) process.stdout.write('   ' + b + '\n');
+  note('   Phoenix and Chicago were never woken - AppSync evaluated the filter');
+  note('   BEFORE pushing. At 11,000 readings/sec that is not a nicety: it is');
+  note('   the difference between a bill proportional to INCIDENTS and one');
+  note('   proportional to FLEET SIZE. It is also a confidentiality property -');
+  note('   Phoenix cannot see Dallas traffic in dev tools either.');
 }
 
 // ===========================================================================

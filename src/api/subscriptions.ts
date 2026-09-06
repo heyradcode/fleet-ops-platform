@@ -21,10 +21,11 @@
  *     they asked for it. This surprises everyone once.
  *   - You cannot publish from arbitrary backend code by writing to DynamoDB.
  *     To push from a Lambda you must CALL THE MUTATION (usually with IAM auth).
- *     That is why `publishSignal` exists in the schema and is @aws_iam: the
+ *     That is why `publishException` exists in the schema and is @aws_iam: the
  *     ingest pipeline calls it purely to trigger the subscription fan-out.
- *   - Filtering happens server-side, so a client watching one site is not
- *     billed for or woken by every other site's traffic.
+ *   - Filtering happens server-side, so a dispatcher watching one district is
+ *     neither billed for nor woken by another district's traffic. At fleet
+ *     scale that is a cost decision, not a nicety.
  *   - Limits worth remembering: 100 subscriptions per connection, 240KB max
  *     payload, and a connection idle timeout you must handle by reconnecting.
  *
@@ -48,7 +49,7 @@ type Registration = {
 let nextId = 1;
 const registrations: Registration[] = [];
 
-/** Client side: `subscription { onIncidentOpened(severity: critical) { .. } }` */
+/** Client side: `subscription { onDriverException(districtId: "dal") { .. } }` */
 export function subscribe(field: string, filter: Record<string, unknown>, handler: Handler): number {
   const id = nextId++;
   registrations.push({ id, field, filter, handler });

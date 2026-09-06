@@ -1,10 +1,10 @@
 ## ===========================================================================
-## VTL request mapping template - Query.site
+## VTL request mapping template - Query.driver
 ## DynamoDB data source. No Lambda: AppSync talks to DynamoDB directly.
 ## ===========================================================================
 ##
 ## VTL (Velocity) is the older AppSync resolver language. New work should use
-## the APPSYNC_JS runtime instead (see Query.site.js next to this file), but
+## the APPSYNC_JS runtime instead (see Query.telemetry.js next to this file), but
 ## you WILL meet VTL in any AppSync codebase more than a couple of years old,
 ## so being able to read it matters.
 ##
@@ -22,8 +22,8 @@
   "operation": "GetItem",
   "key": {
     ## $util.dynamodb.toDynamoDBJson handles the {"S": "..."} wrapping for you.
-    "PK": $util.dynamodb.toDynamoDBJson("TENANT#${tenantId}#SITE"),
-    "SK": $util.dynamodb.toDynamoDBJson("SITE#${ctx.args.siteId}")
+    "PK": $util.dynamodb.toDynamoDBJson("TENANT#${tenantId}#DRIVER"),
+    "SK": $util.dynamodb.toDynamoDBJson("DRIVER#${ctx.args.driverId}")
   },
   ## Strongly consistent reads cost twice as much. Default to false unless you
   ## genuinely cannot tolerate a read-your-own-write lag.

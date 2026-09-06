@@ -29,7 +29,7 @@ resource "aws_appsync_graphql_api" "main" {
     default_action = "DENY" # deny anything the schema does not explicitly allow
   }
 
-  # ADDITIONAL auth: IAM, for the ingest pipeline calling publishSignal to
+  # ADDITIONAL auth: IAM, for the ingest pipeline calling publishException to
   # trigger subscription fan-out. Multiple auth modes on one API is a genuine
   # AppSync strength - the same schema serves humans and services, with
   # per-field control via @aws_iam / @aws_cognito_user_pools.
@@ -100,7 +100,7 @@ resource "aws_appsync_resolver" "query_signals" {
   type        = "Query"
   field       = "signals"
   data_source = aws_appsync_datasource.dynamodb.name
-  code        = file("${var.resolver_code_dir}/Query.signals.js")
+  code        = file("${var.resolver_code_dir}/Query.telemetry.js")
 
   runtime {
     name            = "APPSYNC_JS"
@@ -108,27 +108,30 @@ resource "aws_appsync_resolver" "query_signals" {
   }
 }
 
-# Query.site: the older VTL style, kept as a reference. You will meet it.
+# Query.driver: the older VTL style, kept as a reference. You will meet it.
 resource "aws_appsync_resolver" "query_site" {
   api_id            = aws_appsync_graphql_api.main.id
   type              = "Query"
   field             = "site"
   data_source       = aws_appsync_datasource.dynamodb.name
-  request_template  = file("${var.resolver_code_dir}/Query.site.request.vtl")
-  response_template = file("${var.resolver_code_dir}/Query.site.response.vtl")
+  request_template  = file("${var.resolver_code_dir}/Query.driver.request.vtl")
+  response_template = file("${var.resolver_code_dir}/Query.driver.response.vtl")
 }
 
 # Everything that needs real compute goes to the Lambda data source.
 resource "aws_appsync_resolver" "lambda_backed" {
   for_each = {
-    "Query.mapLayer"              = "Query"
-    "Query.sitesNear"             = "Query"
-    "Query.askRunbooks"           = "Query"
-    "Query.incidents"             = "Query"
-    "Mutation.openIncident"       = "Mutation"
-    "Mutation.acknowledgeIncident" = "Mutation"
-    "Mutation.askAgent"           = "Mutation"
-    "Site.signals"                = "Site"
+    "Query.mapLayer"                = "Query"
+    "Query.driversNear"             = "Query"
+    "Query.availableDriversNear"    = "Query"
+    "Query.exceptions"              = "Query"
+    "Query.askRunbooks"             = "Query"
+    "Query.incidents"               = "Query"
+    "Mutation.openIncident"         = "Mutation"
+    "Mutation.acknowledgeIncident"  = "Mutation"
+    "Mutation.reassignDriver"       = "Mutation"
+    "Mutation.askAgent"             = "Mutation"
+    "Driver.telemetry"              = "Driver"
   }
 
   api_id      = aws_appsync_graphql_api.main.id
