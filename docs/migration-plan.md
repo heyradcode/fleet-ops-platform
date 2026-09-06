@@ -32,6 +32,62 @@ too-good-to-be-true, which is the whole point of the exercise.
 
 ---
 
+## Decisions
+
+Settled up front so no phase stalls on them. Each is threaded into the phase it
+affects; this table is the index.
+
+| # | Decision | Rationale | Phase |
+|---|---|---|---|
+| 1 | Product **Meridian**, repo **`meridian-fleet`** | Geographic root suits a territory/geofence platform; the suffix makes it scannable in a repo list | 0 |
+| 2 | **Never deploy the Terraform** | `infra/` is read-only demonstration material. Nothing in this plan needs a live account, and the cost risk drops to zero. Stated in the README as a choice, not an omission | 10 |
+| 3 | **Unpublished until Phase 12, then squash and publish** | NetPulse cannot be removed from history while it is still the code. Migrate first, squash the pre-migration run into one commit, publish from there. Real history accumulates after | 12 |
+| 4 | **Platform primitives are injected** — clock, crypto, runbook loading | One pattern fixes determinism *and* unblocks the in-browser frontend. See below | 1 |
+| 5 | **No basemap** — dark canvas, polygons, pins | Fully offline, no key, no attribution, no tile blob in the repo. A dark ops console is also the better look | 9 |
+| 6 | **Aurora pgvector**, not OpenSearch Serverless | The KB module's own comments already recommend it; removes the largest cost trap even if someone deploys | 10 |
+| 7 | **Fixtures modelled from published API references** | Individual developers cannot get Samsara / Motive / Lytx sandbox access. The current header says "capture one true response per vendor" — that instruction cannot be followed and implies it was | 4 |
+| 8 | **GPS traces follow hand-drawn polylines** | 3–4 per district, interpolated along. Removes the "drivers crossing rivers" tell anyone with fleet experience spots instantly | 4 |
+| 9 | **Frontend steps 1–2 in scope, step 3 optional** | Board is the portfolio screenshot; the agent-trace panel is the differentiator. Time controls are droppable polish | 9 |
+
+### Decision 4, in full — injected platform primitives
+
+Three problems share one solution:
+
+```
+src/platform/
+├── clock.ts            now()              → Node: Date  │ Browser: Date
+│                                            demos + tests: fixed epoch
+├── crypto.ts           sha256(), uuid()   → Node: node:crypto
+│                                            Browser: bundled sync sha256
+│                                                    + crypto.randomUUID()
+└── runbook-loader.ts   load()             → Node: node:fs
+                                             Browser: Vite raw glob
+```
+
+What this buys:
+
+- **Determinism.** 20 `new Date()` / `Date.now()` calls currently make every run
+  produce different output — unnarratable, unscreenshottable, and unassertable
+  in the Phase 11 scenario tests.
+- **The browser transport.** Five files import Node builtins
+  (`knowledge-base.ts`, `cognito-jwt-verifier.ts`, `aws/bedrock.ts`, `aws/s3.ts`,
+  `platform/ids.ts`). None of them exist in a browser, which would otherwise
+  block Phase 9 outright. The nasty specific: `createHash` is **synchronous**
+  and the browser's SubtleCrypto is **async-only**, so naively porting it would
+  force `signalId = sha256(...)` async and ripple through the entire pipeline.
+  A bundled sync sha256 (~40 lines) avoids that. Worth writing properly rather
+  than substituting a cheaper hash — content-hash idempotency is one of the
+  repo's headline arguments.
+- **An honest architectural claim.** *Platform primitives are injected, so the
+  same domain code runs on Lambda and in a browser.* `src/platform/` already
+  exists as exactly this boundary, so this is consistent with the design rather
+  than a workaround bolted on to make a demo run.
+
+Lands in **Phase 1**, while `types.ts` is being rewritten anyway. Retrofitting it
+at Phase 11 means touching every file a second time.
+
+---
+
 ## The domain spine
 
 Already the right shape. This is a rename, not a restructure:
@@ -118,6 +174,9 @@ a key-value overwrite plus a batched rules pass is routine.
 src/
 ├── platform/
 │   ├── types.ts              ██████████  rewritten — the keystone   (Phase 1)
+│   ├── clock.ts              ██████████  NEW — injected now()       (Phase 1)
+│   ├── crypto.ts             ██████████  NEW — sync sha256 + uuid
+│   ├── runbook-loader.ts     ██████████  NEW — absorbs node:fs
 │   ├── tenancy.ts            ███░░░░░░░  + scope alongside tenantId
 │   └── repository.ts         █████░░░░░  hot-state write path
 ├── integrations/
@@ -162,11 +221,15 @@ drawn in the right places, and it is worth saying out loud when presenting this.
 
 Blocks everything: every subsequent phase writes the name into comments.
 
-- [ ] Decide product name and repo name (repo = product + domain suffix, so it
-      is scannable in a repo list)
-- [ ] Rename the directory; drop `_demo` and the underscore, use kebab-case
-- [ ] Update `package.json`
+Product **Meridian**; repo **`meridian-fleet`** (Decision 1).
+
+- [ ] Rename the directory `agentic_saas_demo` → `meridian-fleet`
+- [ ] `package.json`: `name`, `description`
 - [ ] Replace 90 occurrences of `NetPulse` across 37 files
+- [ ] **Grep string literals separately.** `tsc --noEmit` does not type-check
+      them, so these pass silently while wrong: the EventBridge sources
+      (`'netpulse.ingest'`, `'netpulse.detect'`), DynamoDB key prefixes,
+      GraphQL field names, Terraform tags and resource names
 
 ---
 
@@ -189,6 +252,28 @@ follows from this file, so it lands first and alone.
 
 `Principal.scope` is the only genuinely new field. It is what makes *"no
 function accepts a bare district id"* true rather than asserted.
+
+### Also in this phase: the injected platform primitives
+
+Per Decision 4 — cheap now, expensive later, because both `types.ts` and every
+call site are already open:
+
+- [ ] `src/platform/clock.ts` — `now()`; fixed epoch for demos and tests.
+      Replaces 20 `new Date()` / `Date.now()` calls
+- [ ] `src/platform/crypto.ts` — `sha256()` (sync, ~40 lines in the browser
+      build) and `uuid()`. Absorbs `platform/ids.ts`, `aws/s3.ts`,
+      `aws/bedrock.ts`, `auth/cognito-jwt-verifier.ts`
+- [ ] `src/platform/runbook-loader.ts` — absorbs `node:fs` / `node:path` /
+      `node:url` out of `ai/knowledge-base.ts`
+
+After this phase, no file outside `src/platform/` imports a `node:` builtin.
+That invariant is what makes Phase 9 possible; worth a lint rule or a test.
+
+> **Type-stripping trap.** `node src/demo.ts` runs TypeScript via type-stripping,
+> which does not support `enum`, `namespace`, parameter properties or
+> decorators. Writing `enum Severity { ... }` here would break `npm start` at
+> *runtime* while `tsc --noEmit` stays green. The current union types are correct
+> — keep them.
 
 ---
 
@@ -276,9 +361,18 @@ data a **feature of the demo** rather than an apology for it.
 | Geofences | ~12 | Facilities, customer sites, restricted zones |
 | Route corridors | ~20 | For the route-adherence rule |
 | Telemetry trace | 60 ticks × 60 drivers | 30 minutes at a 30s interval = ~3,600 records |
+| Road polylines | 3–4 per district | Decision 8 — see below |
 
 The telemetry trace is what makes the board *move*. A static map is a
 screenshot; a replayable trace is a product.
+
+**Drivers move along polylines, not by random walk** (Decision 8). Hand-draw
+three or four routes per district and interpolate positions along them. A random
+walk sends drivers diagonally across rivers and through airports — invisible at
+district zoom, glaring the moment anyone zooms in, and instantly recognisable to
+anyone who has worked with fleet data. The cost is an afternoon of clicking
+points on a map; the alternative is a demo that looks wrong to exactly the
+audience you built it for.
 
 ### Scenarios — the part that matters
 
@@ -307,6 +401,28 @@ Geotab's RPC-ish envelope, Motive's HOS log records, Lytx's event payloads.
 That difference *is* the justification for the normalisation layer, which is
 what the current `fixtures.ts` header comment already says. Same argument,
 better data.
+
+### Provenance — fix the comment that cannot be true
+
+`fixtures.ts` currently instructs: *"capture one true response per vendor,
+commit it, and assert the Signal it produces."* That is good advice and it
+cannot be followed here. Samsara, Motive, Lytx, Netradyne, Omnitracs and
+Platform Science all gate API access behind a customer account; an individual
+developer will not get a sandbox. Samsara and Geotab publish usable public
+references, and Geotab offers a demo database — the rest are documentation only.
+
+Leaving the comment as-is implies captured data. Replace it with what is true,
+and cite the source in each connector's header:
+
+```
+Shaped from the published <vendor> API reference (<url>, retrieved <date>).
+Not captured from a live account — see docs/migration-plan.md, Decision 7.
+```
+
+Same point for the vendor names themselves: listing eight real telematics
+vendors implies integration experience with them. The citation line is what
+turns *"I integrated Samsara"* into *"I modelled Samsara's documented payload
+shape"* — which is both accurate and still demonstrates the skill that matters.
 
 ---
 
@@ -397,6 +513,7 @@ quietly break the claim — qualify it.
 |---|---|
 | **Vite + React + TypeScript** | Conventional, fast, shares types with the backend directly via workspace import |
 | **MapLibre GL JS** | API-compatible with Mapbox GL JS v1, so it **consumes the style spec `src/geo/mapbox.ts` already emits, unchanged** — and needs no token and no account, which preserves clone-and-run. Swapping to real Mapbox is an import change plus a `pk.*` token |
+| **No basemap** (Decision 5) | MapLibre is a *renderer*, not a data source — it draws nothing without tiles. Rather than a key (breaks clone-and-run) or a self-hosted PMTiles extract (a large binary in the repo), render territory polygons and driver pins on a dark canvas. Fully offline, and a dark ops console is the better look regardless |
 | **Tailwind** | Dark ops-console styling without a component library to explain |
 | No GraphQL client library | The transport boundary below is ~50 lines; Apollo would be more machinery than the MVP needs |
 
@@ -429,6 +546,16 @@ That is not a hack to hide the lack of infrastructure; it makes "the client
 depends on the API contract, not the API implementation" a demonstrated fact
 rather than a claim. Say so in the README.
 
+**It only works if Phase 1 landed properly.** Node builtins do not exist in a
+browser, so the "no `node:` import outside `src/platform/`" invariant from
+Decision 4 is the precondition for this entire phase. Verify it before starting
+here, not after.
+
+One more piece of friction to expect on day one: the backend imports use
+explicit `.ts` extensions (`from '../platform/types.ts'`), which Node's
+type-stripping requires and bundlers do not expect. Set
+`allowImportingTsExtensions` in the web tsconfig.
+
 ### Views
 
 | View | Contents | Why it earns its place |
@@ -447,19 +574,43 @@ This phase can ship incrementally, and should:
 2. Incident detail + agent trace panel — the differentiator
 3. Time controls + subscription inspector — the polish
 
-Stop after step 1 and you still have a portfolio piece. Stop after step 2 and
-you have the best version of it.
+**Steps 1 and 2 are in scope; step 3 is optional** (Decision 9). Stop after
+step 1 and you still have a portfolio piece. Stop after step 2 and you have the
+best version of it.
+
+The failure mode here is not difficulty, it is abandonment — a half-built board
+is worse than no board, because it is the first thing a visitor clicks. Each
+step must be shippable on its own.
 
 ---
 
 ## Phase 10 — Infra, Python, CI
 
+**This infrastructure is never deployed** (Decision 2). It is read-only
+demonstration material: the resource definitions, IAM policies and module
+structure are the artefact, not a running stack. Nothing else in this plan needs
+a live AWS account, and saying so in the README makes it a stated choice rather
+than a gap someone has to notice.
+
 - Terraform: rename tags and resources; add `kinesis` + `firehose` modules so
   the stream-batching argument has something concrete to point at
+- **Switch the Bedrock KB module's default vector store to Aurora pgvector**
+  (Decision 6), demoting the OpenSearch Serverless block to a commented
+  alternative. The module's own comments already recommend this, and it currently
+  carries a `REPLACE_ME` collection ARN so it is not deployable as written
 - `python/` handlers reskin
 - `.github/workflows/` — name changes, plus a `web` build job once Phase 9 lands
 
 Independent of Phases 1–9; can run at any point after Phase 0.
+
+> **If you ever do decide to deploy**, the costs that bill you are idle
+> infrastructure, not traffic: OpenSearch Serverless (~$175–700/mo), Aurora
+> Serverless v2 (~$88/mo per environment, and this module provisions a writer
+> *and* a reader at `min_capacity = 0.5`), and an idle Kinesis stream (~$29/mo).
+> Deploy `dev` only, set an AWS Budgets alert first, and `terraform destroy` the
+> same day. Aurora Data API is already the right call here — it is HTTP, so no
+> VPC and therefore no NAT Gateway. Figures are approximate us-east-1; verify
+> before relying on them.
 
 ---
 
@@ -503,6 +654,22 @@ dropped from the repo.
 - [ ] The nine primers keep their content, lose the JD framing — they become
       "how this stack works," which is portfolio-appropriate
 - [ ] This file is deleted once the migration lands
+
+### Publication — squash, then push (Decision 3)
+
+The repository stays **unpublished until this phase**. Git history is permanent
+and public: `docs/09-interview-cheatsheet.md`, the package name
+`netpulse-agentic-saas-demo` and the *"Where each JD requirement lives"* table
+all live in commit `d21085d`, and deleting the files later does not remove them.
+
+NetPulse cannot be stripped from history while it is still the code, so the
+sequencing is: migrate everything, then squash the entire pre-publication run
+into one commit, then push. Genuine incremental history accumulates from that
+point forward.
+
+- [ ] Squash to a single initial commit under the new name
+- [ ] Confirm no remote was added before this point
+- [ ] Decide the `Co-Authored-By` trailer policy for the commits that follow
 
 ---
 
