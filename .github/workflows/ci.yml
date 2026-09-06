@@ -82,6 +82,25 @@ jobs:
           echo "No node: builtins outside the Node adapter and tests."
 
   # ---------------------------------------------------------------------------
+  web:
+    name: dispatch board
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # The board imports the backend directly and type-checks against it, so
+      # this build fails if a backend change breaks the API the client depends
+      # on - which is the point of the transport boundary being a real
+      # interface rather than a convention.
+      - name: Build
+        run: npm run web:build
+
   terraform:
     name: terraform validate
     runs-on: ubuntu-latest

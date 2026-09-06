@@ -18,14 +18,29 @@
  */
 import { setRunbooks, type RunbookDoc } from '../../../src/platform/runbook-loader.ts';
 
-const FILES = import.meta.glob('../../../src/data/runbooks/*.md', {
-  query: '?raw',
-  import: 'default',
-  eager: true,
-}) as Record<string, string>;
+/**
+ * Called lazily, NOT evaluated at module scope.
+ *
+ * `import.meta.glob` is a Vite compile-time feature, so evaluating it on import
+ * makes this module - and everything that imports it, which is the whole
+ * transport - unloadable anywhere but a Vite build. That cost showed up
+ * immediately: the transport could no longer be exercised under `node --test`,
+ * which is where its scope behaviour is actually pinned.
+ *
+ * Inside a function, Vite still rewrites the call at build time and Node never
+ * reaches it unless the agent is used. Same result in the browser, and the
+ * transport stays testable.
+ */
+function bundledFiles(): Record<string, string> {
+  return import.meta.glob('../../../src/data/runbooks/*.md', {
+    query: '?raw',
+    import: 'default',
+    eager: true,
+  }) as Record<string, string>;
+}
 
 export function loadRunbooksFromBundle(): RunbookDoc[] {
-  const docs: RunbookDoc[] = Object.entries(FILES)
+  const docs: RunbookDoc[] = Object.entries(bundledFiles())
     .map(([path, text]) => ({ source: path.split('/').pop() ?? path, text }))
     // Same deterministic ingestion order as the Node adapter. Chunk ids derive
     // from position, so an unstable order would mean unstable citations.

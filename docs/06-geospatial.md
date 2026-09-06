@@ -91,12 +91,12 @@ lossy — quantisation trades sub-metre precision for bytes.
 
 ### Why a relational database in a serverless stack
 
-DynamoDB cannot answer *"which sites are within 75km of this point"*. Spatial
+DynamoDB cannot answer *"which drivers are within 75km of this point"*. Spatial
 indexes and ad-hoc joins are exactly what Postgres is for.
 
 ```
-DynamoDB — hot, high-volume, known-key reads   (signals, incidents)
-Aurora   — reference data, spatial, analytical (sites, regions, reporting)
+DynamoDB — hot, high-volume, known-key reads   (telemetry, incidents)
+Aurora   — reference data, spatial, analytical (drivers, regions, reporting)
 ```
 
 ### `geometry` vs `geography`
@@ -115,7 +115,7 @@ there.
 ### The index, and how to lose it
 
 ```sql
-CREATE INDEX sites_location_gix ON sites USING GIST (location);
+CREATE INDEX sites_location_gix ON drivers USING GIST (location);
 ```
 
 GiST is a general-purpose tree for types with no natural linear order.
@@ -143,9 +143,9 @@ SELECT json_build_object(
   'features', json_agg(json_build_object(
     'type', 'Feature',
     'geometry', ST_AsGeoJSON(s.location)::json,
-    'properties', json_build_object('siteId', s.site_id, 'severity', i.severity)
+    'properties', json_build_object('driverId', s.driver_id, 'severity', i.severity)
   ))
-) FROM incidents i JOIN sites s ON …
+) FROM incidents i JOIN drivers s ON …
 ```
 
 Postgres hands you a FeatureCollection the map can render with **zero**
@@ -178,13 +178,13 @@ Postgres connection per request, and Postgres dies in the low hundreds.
 
 The back-end's four jobs (the front-end does the rendering):
 
-1. **Geocoding** — address → `[lon, lat]` when a site is created. Always check
+1. **Geocoding** — address → `[lon, lat]` when a driver is created. Always check
    the `relevance` score; a low score means MapBox guessed, and silently saving a
-   guessed coordinate puts a site in the wrong state.
+   guessed coordinate puts a driver in the wrong state.
 2. **Isochrones** — "everywhere reachable in 30 minutes by car", for
    field-engineer dispatch. This is the thing MapBox does that PostGIS cannot.
    It returns GeoJSON polygons you can feed straight into `ST_Contains` to ask
-   "which engineers can reach this site inside the SLA?"
+   "which engineers can reach this driver inside the SLA?"
 3. **Directions** — ETA for the nearest engineer.
 4. **The style spec** — the layer JSON the client applies to your data.
 

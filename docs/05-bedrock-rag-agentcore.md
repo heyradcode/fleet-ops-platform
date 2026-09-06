@@ -55,7 +55,7 @@ overlap so a sentence spanning a boundary survives intact.
 
 One trick worth stealing: **prepend the document and section titles into the
 chunk text** before embedding. Then a chunk about "escalate after 15 minutes"
-still matches a query about packet loss, because the topic is inside the
+still matches a query about route deviation, because the topic is inside the
 embedded text.
 → `chunkMarkdown` in `src/ai/knowledge-base.ts`
 
@@ -63,7 +63,7 @@ embedded text.
 
 `overrideSearchType: 'HYBRID'` fuses two different things:
 
-- **Semantic** (embeddings) knows "choppy calls" relates to "packet loss", but
+- **Semantic** (embeddings) knows "choppy calls" relates to "route deviation", but
   is bad at exact tokens — a model number, an error code, "SFP".
 - **Lexical** (BM25) is exactly the opposite.
 
@@ -104,7 +104,7 @@ Answer using ONLY the sources below. Cite them as [1], [2].
 If the sources do not contain the answer, say so plainly.
 
 <sources>
-[1] wan-packet-loss.md — Triage
+[1] wan-route-adherence.md — Triage
 …
 </sources>
 
@@ -149,7 +149,7 @@ API contract.
    spend your money until the Lambda times out.
 2. **Per-tool authorisation, against the caller.** See below.
 3. **Errors returned as `tool_result` content**, not thrown. `ERROR: unknown
-   siteId "xyz-99". Valid ids: dal-01, aus-01, …` lets the model fix its own
+   driverId "xyz-99". Valid ids: dal-01, aus-01, …` lets the model fix its own
    call. A thrown exception just kills the turn.
 4. **A trace.** For debugging, and as a product feature — users trust an agent
    far more when they can see which tools it called.

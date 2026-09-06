@@ -41,11 +41,6 @@ function seed(): void {
   const rng = seededRandom();
   setRandom(rng);
   setUuid(seededUuid(rng));
-  // The browser half of the runbook registry. Without it the knowledge base
-  // throws on first retrieval - deliberately loudly, because a silently empty
-  // knowledge base makes the agent answer "no runbook matched" to everything,
-  // which looks like a retrieval bug and is actually a wiring one.
-  loadRunbooksFromBundle();
 }
 
 let seeded = false;
@@ -111,6 +106,18 @@ let agentReady: Promise<void> | undefined;
 
 function prepareAgent(): Promise<void> {
   agentReady ??= (async () => {
+    // The browser half of the runbook registry, loaded HERE rather than at
+    // startup. Two reasons: the board's first paint should not wait on a
+    // corpus it does not draw, and `import.meta.glob` is a Vite build-time
+    // feature - calling it during seed() made the whole transport unloadable
+    // outside Vite, which cost the ability to test it under `node --test`.
+    //
+    // Without this call the knowledge base throws on first retrieval,
+    // deliberately loudly: a silently empty knowledge base makes the agent
+    // answer "no runbook matched" to everything, which looks like a retrieval
+    // bug and is actually a wiring one.
+    loadRunbooksFromBundle();
+
     const principal = analyst();
     putDrivers(principal, allDrivers(principal));
 

@@ -3,7 +3,7 @@
  * AppSync resolvers
  * ---------------------------------------------------------------------------
  * AppSync gives you three resolver styles. Choosing correctly is most of the
- * skill, and it is a very likely interview question:
+ * skill:
  *
  *   1. UNIT resolver, JS runtime (APPSYNC_JS)
  *      A small request/response module that runs INSIDE AppSync - no Lambda,

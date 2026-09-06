@@ -8,7 +8,7 @@
  *   - you cannot debug a wrong ST_DWithin result if the maths is a black box;
  *   - the coordinate-order trap below is the #1 GIS bug and it is on you.
  *
- * ORDER OF COORDINATES - memorise this, it is a guaranteed interview question:
+ * ORDER OF COORDINATES - the single most common bug in anything spatial:
  *   GeoJSON / PostGIS / MapBox GL : [longitude, latitude]   (x, y)
  *   Leaflet / Google Maps / humans: (latitude, longitude)   (y, x)
  * A silently swapped pair puts Dallas in Antarctica. Name your variables

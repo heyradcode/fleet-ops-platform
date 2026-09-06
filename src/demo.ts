@@ -5,8 +5,8 @@
  *   npm start                 run everything, in order
  *   npm start -- --only=ai    run one section
  *
- * Sections map 1:1 onto the job description. Read the section, then open the
- * files it names.
+ * Each section runs one part of the platform and narrates it. Read the output,
+ * then open the files it names.
  */
 import { section, note, log, setCorrelationId } from './platform/logger.ts';
 import { traceId } from './platform/ids.ts';

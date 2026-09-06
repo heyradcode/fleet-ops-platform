@@ -29,7 +29,7 @@
  * GSI1 flips it so we can ask "all readings for driver drv-0142 across vendors":
  *   GSI1PK = TENANT#acme#DRIVER#drv-0142 , GSI1SK = observedAt
  *
- * The rule to repeat in an interview: *model your access patterns first, then
+ * The rule worth internalising: *model your access patterns first, then
  * derive the keys*. Never the other way round.
  */
 import type { Principal } from '../platform/types.ts';

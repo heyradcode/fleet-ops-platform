@@ -1,162 +1,231 @@
-# Meridian — an agentic SaaS demo on AWS serverless
+# Meridian
 
-A small, heavily-commented reference implementation of **every technology named
-in the job description**, built as one coherent product rather than eight
-disconnected snippets.
+**A real-time fleet dispatch platform on AWS serverless.** Telematics ingest,
+deterministic exception detection, a live dispatch board, and an AI assistant
+that shows its working.
 
-It runs on your machine with **zero dependencies and no AWS account**:
+It runs on your machine with **no AWS account and no network**:
 
 ```bash
-npm start
+npm start        # the backend, narrated, in your terminal
+npm run web      # the dispatch board, at localhost:5173
 ```
 
-<sub>Node 22+ required — the source is TypeScript and Node runs it directly via
-type-stripping, so there is no build step.</sub>
+<sub>Node 22+ for the backend — it is TypeScript and Node runs it directly via
+type-stripping, so there is no build step. The board is a separate workspace
+with its own dependencies.</sub>
 
 ---
 
-## The product, in one paragraph
+## What it is
 
-**Meridian** is a multi-tenant SaaS platform for enterprise network operations.
-It pulls telemetry from eight third-party systems — network gear (Cisco, Juniper,
-HPE Aruba), contact centres (Genesys, Five9, Amazon Connect) and observability
-tools (ThousandEyes, Splunk) — normalises them into one canonical shape,
-enriches it with geospatial data, correlates it into incidents, serves it over
-GraphQL and REST, and lets an AI agent answer *"why is the Dallas site degraded,
-and is it just Dallas?"* by calling tools and citing runbooks.
+Meridian monitors and dispatches a fleet. It pulls telemetry from the vendors a
+carrier actually runs — one GPS unit, one electronic logging device and one
+dashcam per truck — normalises eight different vendor dialects into one shape,
+decides deterministically what deserves a human's attention, and lets a
+dispatcher ask *"this driver is off their route — is it real, and what are my
+options?"*
 
-That is deliberately the JD's own first deliverable: *"integrate a designated
-set of third-party APIs into a centralized reporting view."*
+The architecture is sized for **330,000 drivers**. This repository runs a
+60-driver synthetic fleet offline, so the whole thing fits in a terminal and in
+your head. Where a number is derived from the larger figure rather than
+measured, it says so.
+
+### The constraint everything follows from
+
+```
+330,000 drivers ÷ one ping per 30s   ≈  11,000 readings/sec sustained
+                                        ~950 million/day
+peak (shift change, wave dispatch)   ≈  3-5× that
+```
+
+Three consequences, and most of the design is one of them:
+
+1. **A Lambda per reading is the wrong shape.** Batch from a stream.
+2. **Every reading cannot be a durable operational write.** Current position is
+   overwritten in DynamoDB; history is appended to S3 as Parquet.
+3. **Fan-out must be filtered server-side.** A dispatcher watching one district
+   must not receive — or pay for — 11,000 events/sec of national traffic.
+
+And the decision that falls out of all three: **telemetry does not become
+events. Only exceptions do.** That keeps the event bus and everything
+downstream proportional to *incidents* rather than to *fleet size*.
 
 ---
 
-## Where each JD requirement lives
+## The thing worth looking at first
 
-| JD requirement | Read this | Runnable |
-|---|---|---|
-| AWS Lambda, Step Functions, API Gateway, EventBridge | `src/pipeline/`, `src/aws/` | `npm start -- --only=ingest` |
-| LLM orchestration, AgentCore agent loop | `src/ai/agent-core.ts` | `--only=ai` |
-| Amazon Bedrock RAG | `src/ai/knowledge-base.ts`, `src/ai/bedrock-rag.ts` | `--only=ai` |
-| GraphQL via AppSync (resolvers, caching, subscriptions) | `src/api/schema.graphql`, `src/api/appsync-resolvers.ts`, `src/api/vtl/` | `--only=graphql` |
-| REST via API Gateway | `src/api/rest-handler.ts` | `--only=rest` |
-| Network management integrations | `src/integrations/network/` | `--only=ingest` |
-| Contact centre integrations | `src/integrations/contact-center/` | `--only=ingest` |
-| Observability integrations | `src/integrations/observability/` | `--only=ingest` |
-| Cognito + social + SAML 2.0 / OIDC | `src/auth/` | `--only=auth` |
-| GeoJSON, TopoJSON, PostGIS, MapBox | `src/geo/`, `src/data/schema.sql` | `--only=geo` |
-| DynamoDB / Aurora schema design | `src/aws/dynamodb.ts`, `src/data/schema.sql` | `--only=data` |
-| Terraform, dev/test/stage/prod | `infra/terraform/` | *(read-only)* |
-| GitHub Actions CI/CD | `.github/workflows/` | *(read-only)* |
-| Python | `python/` | *(read-only)* |
+Run `npm start -- --only=scenarios`. Six situations go through the real
+pipeline, and each proves one claim:
+
+```
+Road closure on I-35E, Dallas
+Fourteen affected drivers produce ONE incident, not fourteen pages
+    42 readings   28 exceptions   1 incidents
+  -> Route deviation affecting 14 drivers in dal
+
+A single GPS spike, Austin
+An uncorroborated deviation raises NO incident - the noise filter working
+     2 readings    1 exceptions   0 incidents
+  -> nothing paged. 1 exception(s) raised, none corroborated.
+```
+
+The second one is the point. Any dashboard can light up. A board that pages a
+dispatcher fourteen times for one road closure, or wakes them for GPS drift, is
+one they learn to ignore — and a board people have learned to ignore is worse
+than no board.
 
 ---
 
-## How to read it
+## How it fits together
 
-You have limited time, so read in this order:
+```
+  Driver app · telematics · ELD · dashcam
+        │
+        │  8 vendor adapters, one normalise() each; a carrier runs 2-3
+        ▼
+  Kinesis ──▶ batched consumer ──┬──▶ DynamoDB   current position, overwritten
+  (by driverId)                  ├──▶ S3         history, append-only, Parquet
+                                 └──▶ rules ──▶ Exception ──▶ Incident
+                                                                │
+                              only exceptions ──▶ EventBridge ──┤
+                                                                ▼
+                              AppSync subscription, filtered by district
+                                                                │
+                                                                ▼
+                                                     the dispatch board
+```
 
-1. **`docs/01-architecture.md`** — the whole system on one page, and the two
-   request flows that matter.
-2. **Run `npm start`.** Watch the eight sections execute. Each one prints what
-   it is doing and why.
-3. **`src/platform/types.ts`** — the domain model. Everything else is built on
-   these six types.
-4. **One vertical slice end to end:** `src/integrations/network/cisco-meraki.ts`
-   → `src/pipeline/steps.ts` → `src/platform/repository.ts` →
-   `src/api/appsync-resolvers.ts`. That path touches most of the stack.
-5. **`docs/09-interview-cheatsheet.md`** — the questions you are most likely to
-   be asked, with answers, on the day.
+Aurora PostGIS holds territories, geofences and route corridors — the questions
+DynamoDB cannot answer. Cognito carries the district scope in a signed claim.
 
-The comments in the source are the real documentation. They explain *why*, name
-the trade-offs, and flag the mistakes that are easy to make — the things you
-need in your head, not the things you can look up.
+---
 
-### Documentation index
+## Where to look
 
-| Doc | Covers |
+You have limited time, so:
+
+| Read | For |
 |---|---|
-| `docs/00-start-here.md` | The shortest path if you are short on time |
-| `docs/01-architecture.md` | System diagram, request flows, why each service |
-| `docs/02-serverless-primer.md` | Lambda, API Gateway, Step Functions, EventBridge |
-| `docs/03-appsync-graphql.md` | Resolver types, N+1, subscriptions, caching |
-| `docs/04-cognito-federation.md` | OAuth flows, SAML/OIDC, triggers, tenancy |
-| `docs/05-bedrock-rag-agentcore.md` | RAG, chunking, agents, tools, guardrails |
-| `docs/06-geospatial.md` | GeoJSON/TopoJSON, PostGIS, MapBox, the lon/lat trap |
-| `docs/07-data-modelling.md` | DynamoDB single-table, when to use Aurora |
-| `docs/08-terraform-cicd.md` | Modules, environments, state, OIDC deploys |
-| `docs/09-interview-cheatsheet.md` | Likely questions and crisp answers |
+| `src/platform/types.ts` | The domain model. Everything is built on these types |
+| `src/pipeline/steps.ts` | Where readings become exceptions become incidents |
+| `src/data/scenarios.ts` | Six scenarios, each proving one claim about the rules |
+| `src/aws/kinesis.ts` | Batching, sharding, and the poison-record bisect |
+| `web/src/transport/` | Why the whole backend runs inside the browser tab |
+
+One vertical slice, end to end:
+`integrations/telematics/samsara.ts` → `pipeline/steps.ts` →
+`platform/repository.ts` → `api/appsync-resolvers.ts`. That path touches most
+of the stack.
+
+The comments are the documentation. They explain *why*, name the trade-offs,
+and flag the mistakes that are easy to make.
+
+---
+
+## Things worth being able to say out loud
+
+- **Telemetry never reaches the event bus.** Readings are persisted and folded
+  into hot state; only exceptions are published. A test asserts it, because it
+  is the claim most easily broken by a well-meaning edit.
+- **Corroboration means two independent signals, not two vendors.** A truck
+  carries one GPS unit, so a route deviation can never be seen by two
+  telematics vendors — demanding that would make deviations undetectable. What
+  makes one real is *different evidence pointing the same way*: off-route **and**
+  stationary. Hours-of-service and panic are exempt entirely; a regulatory
+  clock is not a sensor to be double-checked.
+- **One road closure is one incident.** Exceptions merge on corridor, 3km and a
+  15-minute window. The site-shaped version of this code merged within 150km,
+  which is wider than a whole district — copied over unchanged it would have
+  collapsed every exception in Dallas into one permanent incident.
+- **Tenancy is a type, not a filter.** Every repository function takes a
+  `Principal` and derives the partition key itself. `dynamodb:LeadingKeys`
+  enforces the same boundary at AWS, and Postgres row-level security enforces
+  it a third time.
+- **Scope is signed, not asserted.** A dispatcher's district is stamped into
+  the token by a Cognito trigger, so it cannot be widened by editing a request.
+  A dispatcher with *no* district gets their own assignments, not the fleet —
+  widening access has to be a deliberate grant.
+- **An agent acts with the caller's permissions, never the platform's.** That
+  one rule is what stops prompt injection from becoming privilege escalation,
+  and the board renders refused tool calls so you can watch it happen.
+- **Platform primitives are injected** — clock, randomness, hashing, runbook
+  loading. That is why two runs produce identical output, and why the same
+  domain code runs on Lambda and in a browser.
+- **`[longitude, latitude]`.** GeoJSON, PostGIS and MapLibre all use x-then-y;
+  humans say the opposite. A swap does not throw — it silently puts Dallas in
+  Antarctica.
+- **`ST_DWithin`, never `ST_Distance(...) < n`.** The first uses the GiST
+  index; the second measures every row in the table.
 
 ---
 
 ## What is real and what is simulated
 
-Being clear about this matters — do not claim more than the code does.
+Being clear about this matters.
 
-**Real:** every design decision, all the AWS resource definitions, the IAM
-policies, the GraphQL schema and resolvers, the SQL, the vendor payload shapes,
-the normalisation logic, the retry/circuit-breaker behaviour, the correlation
-rules, the RAG chunking and hybrid-search maths, the agent loop, and all the
-Terraform and GitHub Actions.
+**Real:** every design decision, the AWS resource definitions, the IAM
+policies, the GraphQL schema and resolvers, the SQL and its row-level security,
+the normalisation logic, the retry and circuit-breaker behaviour, the
+corroboration and merge rules, the RAG chunking and hybrid-search maths, the
+agent loop, and all the Terraform and GitHub Actions.
 
-**Simulated, so it runs offline:** `src/aws/` contains ~500 lines standing in
-for DynamoDB, S3, EventBridge, Step Functions and Bedrock. Each fake mirrors the
-real SDK's method names and shapes, and each file's header comment shows the
-real call it replaces. The vendor HTTP calls return fixtures from
-`src/integrations/fixtures.ts` instead of hitting the network.
+**Simulated, so it runs offline:** `src/aws/` stands in for DynamoDB, S3,
+EventBridge, Step Functions, Kinesis and Bedrock. Each fake mirrors the real
+SDK's method names, and each file's header shows the call it replaces. Vendor
+HTTP calls return fixtures instead of hitting the network.
 
-The offline "model" in `src/aws/bedrock.ts` is scripted, not intelligent. It
+**Synthetic, deliberately:** every driver, position and reading is generated
+from a seed. Real driver telemetry is a location trace of an identifiable
+person and has no business in a public repository. Vendor payload shapes are
+**modelled from published API references, not captured from live accounts** —
+Samsara, Motive, Lytx and the rest gate API access behind a customer contract.
+
+**Never deployed:** `infra/` is read-only demonstration material. Nothing here
+needs an AWS account.
+
+The offline model in `src/aws/bedrock.ts` is scripted, not intelligent. It
 reproduces the one behaviour that matters for understanding agents: emit a
-`tool_use` block, receive a `tool_result`, repeat, then answer. The **embeddings
-are genuinely computed** (a hashing bag-of-words embedding), so the vector
-search in the RAG section really does retrieve — you can watch the scores move.
+`tool_use` block, receive a `tool_result`, repeat, then answer. The
+**embeddings are genuinely computed**, so RAG retrieval really does retrieve —
+you can watch the scores move.
 
 ---
 
 ## Commands
 
 ```bash
-npm start                      # everything, in order
-npm start -- --only=auth       # auth | ingest | data | events
-npm start -- --only=graphql    # graphql | rest | geo | ai
+npm start                          # every section, in order
+npm start -- --only=scenarios      # the six scenarios — start here
+npm start -- --only=ingest         # auth | ingest | scenarios | data | events
+npm start -- --only=ai             # graphql | rest | geo | ai
 
-npm test                       # 40 tests, no network
-npm run typecheck              # tsc --noEmit
+npm test                           # 89 tests, no network
+npm run typecheck
+
+npm run web                        # the dispatch board
+npm run web:build
 ```
 
-The tests are worth reading on their own — they document the behaviours that
-are easiest to get wrong (idempotent ingest, cross-tenant denial, the lon/lat
-swap, an agent refused a write tool).
+Two runs of `npm start` produce identical output apart from wall-clock
+durations — CI asserts it. Everything is seeded and the clock is injected, so a
+screenshot reproduces and a real change is distinguishable from noise.
 
 ---
 
-## Things worth being able to say out loud
+## Repository
 
-These are the specific, non-obvious points this codebase is built around. If you
-can explain these, you can hold a conversation about the whole stack.
-
-- **Tenancy is a type, not a filter.** Every repository function takes a
-  `Principal` and derives the partition key itself, so there is no code path
-  that *can* forget the tenant. IAM `dynamodb:LeadingKeys` enforces the same
-  boundary a second time, at AWS. (`src/platform/tenancy.ts`)
-- **Normalise once, at the edge.** Eight vendors, one `Signal` type. Everything
-  downstream — the map, the agent, the alerting — understands exactly one
-  schema. Adding a ninth vendor is a new file, not a new architecture.
-- **Archive raw before you transform.** The untouched payload goes to S3 first.
-  When you find a mapping bug you replay history instead of asking the vendor
-  for last month's data.
-- **Idempotency by content hash.** `signalId = sha256(provider|ref|timestamp)`,
-  so at-least-once delivery becomes exactly-once storage for free.
-- **Detection is deterministic; explanation is AI.** Rules decide what is real —
-  they must be testable and explainable at 3am. The LLM's job starts afterwards.
-- **An agent acts with the caller's permissions, never the Lambda's.** That one
-  rule is what stops prompt injection from becoming privilege escalation.
-  (`src/ai/guardrails.ts`, and the test that proves it)
-- **The tenant filter on RAG retrieval is not optional.** A knowledge base is
-  shared infrastructure; a missing metadata filter is a cross-tenant data leak.
-- **`[longitude, latitude]`.** GeoJSON, PostGIS and MapBox all use x-then-y;
-  humans and Google Maps say the opposite. A swap does not throw — it silently
-  puts Dallas in Antarctica.
-- **`ST_DWithin`, never `ST_Distance(...) < n`.** The first uses the GiST index;
-  the second computes a spherical distance for every row in the table.
-- **Don't put a Lambda behind a resolver that only reads DynamoDB.** AppSync
-  direct resolvers have no cold start and no per-invocation charge.
+```
+src/          the platform. Zero runtime dependencies.
+  platform/     domain model, and the injected primitives
+  integrations/ 8 vendor connectors, 3 families
+  pipeline/     collect → normalise → resolve → evaluate → detect → publish
+  geo/          spatial maths, PostGIS queries, GeoJSON/TopoJSON
+  ai/           RAG, the agent loop, guardrails
+  aws/          local stand-ins for six AWS services
+  data/         seeded generator, road corridors, scenarios, runbooks
+web/          the dispatch board. React + MapLibre, its own dependencies.
+infra/        Terraform. Read-only.
+python/       the same designs as Lambdas, with real boto3 calls.
+docs/         how each part of the stack works.
+```

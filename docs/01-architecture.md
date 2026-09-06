@@ -33,31 +33,41 @@
                                                    └──────────────────┘
    ═══════════════════════════ ingest side ═══════════════════════════
 
-   EventBridge Scheduler (rate: 5 min)
-              │
+   Samsara ──┐  telematics       (GPS, speed, engine)
+   Geotab    │
+   Verizon  ─┤
+   Motive   ─┐  ELD / hours-of-service
+   Omnitracs │
+   PlatformSc┤       A carrier runs ONE of each per truck, not all eight.
+   Lytx     ─┐  video safety     Which two or three is per-tenant config.
+   Netradyne │
+             │
+             ▼
+   ┌──────────────────────┐
+   │ Kinesis Data Streams │  partitioned by driverId - ordering where it
+   │                      │  matters, parallelism everywhere else
+   └──────────┬───────────┘
+              │  BATCHED. 500 records per invocation, not one.
+              │  bisect_batch_on_function_error, or one poison record
+              │  stalls the shard and the backlog grows silently.
               ▼
-   ┌──────────────────────── Step Functions ────────────────────────┐
-   │  Map(concurrency 4)   Task        Task      Choice      Task   │
-   │  ┌───────────────┐  ┌────────┐ ┌────────┐          ┌────────┐ │
-   │  │ collect × 8   │─▶│normalise│▶│ enrich │────────▶ │ detect │ │
-   │  │ (per vendor)  │  └────────┘ └────────┘          └───┬────┘ │
-   │  └───────┬───────┘                                     │      │
-   └──────────┼─────────────────────────────────────────────┼──────┘
-              │ raw payload                                 ▼
-              ▼                                        ┌─────────┐
-        ┌──────────┐                                   │ publish │
-        │ S3 (raw) │                                   └────┬────┘
-        │ bronze   │                                        │
-        └──────────┘                                        ▼
-                                              ┌──────────────────────┐
-   Cisco Meraki ─┐                            │     EventBridge      │
-   Juniper Mist  │  network                   │   custom event bus   │
-   HPE Aruba    ─┤                            └──┬────────┬──────┬───┘
-   Genesys      ─┐                               │        │      │
-   Five9         │  contact centre            pager    AI agent  Firehose
-   Amazon Connect┤                          (critical) (summary) (analytics)
-   ThousandEyes ─┐                                            └──▶ DLQ
-   Splunk        │  observability
+   ┌────────────────────── batched consumer ───────────────────────┐
+   │                                                               │
+   │  putCurrentPosition ──▶ DynamoDB   1 item/driver, OVERWRITTEN │
+   │  appendHistory ───────▶ Firehose ──▶ S3 Parquet, append-only  │
+   │  resolveTerritory ────▶ district + geofences, bbox then exact │
+   │  evaluate ────────────▶ Exception[]  per-driver rules         │
+   │  detect ──────────────▶ Incident[]   corroborated + merged    │
+   └───────────────────────────────┬───────────────────────────────┘
+                                   │
+                    ONLY EXCEPTIONS. Never telemetry.
+                                   ▼
+                       ┌──────────────────────┐
+                       │     EventBridge      │
+                       └──┬────────┬──────┬───┘
+                          │        │      │
+                       safety  dispatch  on-call
+                              (Step Functions saga)
 ```
 
 ---
@@ -74,9 +84,9 @@ than being able to name them.
 | **EventBridge** | Producers do not know consumers. Adding "also post to Slack" is a *rule*, not a code change. Content-based filtering happens in the bus, so you never pay to start a Lambda that immediately decides the event was not for it. |
 | **AppSync** | A dashboard fetches ten related things; GraphQL makes that one round trip. The decisive feature is **managed subscriptions** — real-time push with server-side filtering, with no WebSocket infrastructure of your own. |
 | **API Gateway** | Webhooks and health checks. Third parties cannot speak GraphQL. HTTP API over REST API: ~70% cheaper and lower latency. |
-| **Cognito** | Five identity providers, one issuer. Your API trusts exactly one token format no matter how the user signed in. |
-| **DynamoDB** | Signals are high-volume, write-heavy, and always read by known key. Single-digit-millisecond reads at any scale, no capacity planning on PAY_PER_REQUEST. |
-| **Aurora + PostGIS** | DynamoDB cannot answer "which sites are within 75km of this point". Spatial indexes and ad-hoc joins are what a relational engine is for. Serverless v2 scales to zero in dev. |
+| **Cognito** | five identity providers, one issuer. Your API trusts exactly one token format no matter how the user signed in. |
+| **DynamoDB** | Position is written constantly and always read by known key. Single-digit-millisecond reads at any scale, no capacity planning on PAY_PER_REQUEST. |
+| **Aurora + PostGIS** | DynamoDB cannot answer "which drivers are within 75km of this point". Spatial indexes and ad-hoc joins are what a relational engine is for. Serverless v2 scales to zero in dev. |
 | **S3** | The raw archive. Cheap, durable, and it makes replay possible when a mapping bug is found. |
 | **Bedrock** | Managed model access with an IAM-shaped security story, plus Knowledge Bases and Guardrails. No API keys to rotate, and the data does not leave your account boundary. |
 
@@ -91,7 +101,7 @@ than being able to name them.
    Authorization: <access token>
 
    query Dashboard {
-     incidents(status: open) { incidentId title severity sites { name } }
+     incidents(status: open) { incidentId title severity drivers { name } }
      mapLayer { featureCollection bbox }
    }
 
@@ -101,7 +111,7 @@ than being able to name them.
 4. Per field, AppSync picks a resolver:
      incidents  -> Lambda data source  (needs joins + Aurora)
      mapLayer   -> Lambda data source  (needs PostGIS)
-     Site.name  -> already in the parent object, no resolver at all
+     Driver.name  -> already in the parent object, no resolver at all
 
 5. The Lambda receives event.identity.claims — already verified — and builds a
    Principal. Every repository call takes that Principal and derives the
@@ -111,11 +121,11 @@ than being able to name them.
 6. One response, one round trip, exactly the fields asked for.
 ```
 
-**The trap in step 4:** `sites { signals { ... } }` invokes `Site.signals` once
-per site — the N+1 problem. Fixes in order of preference: a BatchInvoke resolver
+**The trap in step 4:** `drivers { telemetry { ... } }` invokes `Driver.telemetry` once
+per driver — the N+1 problem. Fixes in order of preference: a BatchInvoke resolver
 (AppSync hands the Lambda an array of up to 2000 events, you do one Query per
-partition), per-resolver caching, or denormalising the top few signals onto the
-Site item at write time.
+partition), per-resolver caching, or denormalising the top few telemetry onto the
+Driver item at write time.
 
 ---
 
@@ -131,22 +141,22 @@ Site item at write time.
    Partial data beats no data in an ops dashboard.
 
 3. collect: fetch, then archive the untouched payload to
-   s3://…/raw/tenant=acme/provider=cisco-meraki/dt=2026-09-04/hh=10/….json
+   s3://…/raw/tenant=acme-freight-freight/provider=samsara/dt=2026-09-08/hh=14/….json
    Archive BEFORE normalising. Normalisation is code, code has bugs, and when
    you fix the bug you want to replay rather than beg the vendor for history.
 
-4. normalise: vendor JSON -> Signal[]. A pure function, so it is trivially
-   testable and safely replayable. signalId is a CONTENT HASH, which makes the
+4. normalise: vendor JSON -> Telemetry[]. A pure function, so it is trivially
+   testable and safely replayable. telemetryId is a CONTENT HASH, which makes the
    at-least-once pipeline idempotent at rest.
 
-5. enrich: join site coordinates from Aurora. Best-effort — a signal without a
-   location is still a valid signal, so this step Catches and continues.
+5. enrich: join driver coordinates from Aurora. Best-effort — a reading without a
+   location is still a valid reading, so this step Catches and continues.
 
 6. detect: deterministic correlation.
-     a) group non-OK signals by site
+     a) group non-OK telemetry by driver
      b) require 2+ INDEPENDENT providers agreeing before opening an incident
         (cross-vendor agreement is the cheapest noise filter there is)
-     c) merge affected sites within 150km into ONE regional incident
+     c) merge affected drivers within 150km into ONE regional incident
         (eleven pages for one carrier fault is how on-call teams learn to
          ignore pages)
    No LLM here, on purpose. Detection must be explainable and testable.
@@ -195,10 +205,12 @@ Lambda's role permits it, it happens.
 
 ## What is deliberately NOT here
 
-Knowing what you left out — and why — is as much a signal as what you built.
+Knowing what you left out — and why — is as much a reading as what you built.
 
-- **A front-end.** The JD is back-end. The API returns MapBox style JSON so the
-  client is a thin renderer.
+- **A production front-end.** `web/` is the dispatch board and it is real code,
+  but it is one board rather than a product: no auth flow, no settings, no
+  admin. The board proves the API contract is usable, not that the product is
+  finished.
 - **VPC networking detail.** Only Aurora needs a VPC; Lambdas that touch only
   DynamoDB, S3 and Bedrock are better off outside one (no ENI cold-start
   penalty, no NAT gateway bill).

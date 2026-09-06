@@ -2,10 +2,11 @@
  * ---------------------------------------------------------------------------
  * Cognito identity federation: social + enterprise SSO
  * ---------------------------------------------------------------------------
- * The JD asks for social providers (Google, Facebook, Apple) AND enterprise SSO
- * (SAML 2.0, OIDC). Cognito handles all of them the same way: each is an
- * "identity provider" attached to the user pool, and each needs an ATTRIBUTE
- * MAPPING from the provider's claim names to your user pool's attributes.
+ * A fleet platform needs social providers (Google, Apple) for owner-operators
+ * AND enterprise SSO (SAML 2.0, OIDC) for the carriers. Cognito handles all of
+ * them the same way: each is an "identity provider" attached to the user pool,
+ * and each needs an ATTRIBUTE MAPPING from the provider's claim names to your
+ * user pool's attributes.
  *
  * THE FLOW (authorization code + PKCE - the only correct choice for a SPA;
  * the implicit flow is deprecated and leaks tokens in the URL fragment):

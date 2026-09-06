@@ -3,13 +3,13 @@
 ## The split
 
 ```
-DynamoDB — signals, incidents      high volume, write-heavy, known-key reads
-Aurora   — sites, regions, reports spatial, ad-hoc, joins and aggregates
+DynamoDB — telemetry, incidents      high volume, write-heavy, known-key reads
+Aurora   — drivers, regions, reports spatial, ad-hoc, joins and aggregates
 S3       — raw vendor payloads     cheap, durable, replayable
 ```
 
 Using one for the other's job is the mistake. DynamoDB cannot answer "which
-sites are within 75km"; Aurora cannot absorb a million writes a minute without
+drivers are within 75km"; Aurora cannot absorb a million writes a minute without
 becoming a project.
 
 ---
@@ -25,12 +25,12 @@ key prefix.
 
 ```
 PK                       SK                          entity
-TENANT#acme#SITE         SITE#dal-01                 Site
-TENANT#acme#SIGNAL       2026-09-04T10:00:00Z#a3f…   Signal
+TENANT#acme#DRIVER         DRIVER#dal-01                 Driver
+TENANT#acme#TELEMETRY       2026-09-04T10:00:00Z#a3f…   Telemetry
 TENANT#acme#INCIDENT     2026-09-04T10:02:00Z#inc_7f Incident
 ```
 
-Because the SK **starts with an ISO-8601 timestamp**, "this tenant's signals
+Because the SK **starts with an ISO-8601 timestamp**, "this tenant's telemetry
 from the last hour, newest first" is one Query with a range condition and
 `ScanIndexForward: false`. No scan, no filter, no sorting in application code —
 ever.
@@ -42,13 +42,13 @@ ever.
 
 | Pattern | How |
 |---|---|
-| Recent signals for a tenant | Query `PK = TENANT#<t>#SIGNAL`, descending, limit |
-| Signals for one site | Query **GSI1** `GSI1PK = TENANT#<t>#SITE#<site>` |
+| Recent telemetry for a tenant | Query `PK = TENANT#<t>#TELEMETRY`, descending, limit |
+| Signals for one driver | Query **GSI1** `GSI1PK = TENANT#<t>#DRIVER#<driver>` |
 | Open incidents | Query `PK = TENANT#<t>#INCIDENT`, descending |
-| One site by id | GetItem `PK = TENANT#<t>#SITE`, `SK = SITE#<id>` |
+| One driver by id | GetItem `PK = TENANT#<t>#DRIVER`, `SK = DRIVER#<id>` |
 
 GSI1 flips the access direction — that is what a secondary index is *for*.
-Without it, "all signals for dal-01" would mean reading every signal for the
+Without it, "all telemetry for dal-01" would mean reading every reading for the
 tenant and filtering, which costs read units proportional to your **data**
 rather than to your **answer**.
 
@@ -98,9 +98,9 @@ do you guarantee the event and the write cannot diverge?"
 ### Hot partitions
 
 DynamoDB spreads load across partitions by key. A key like
-`PK = TENANT#acme#SIGNAL` puts one tenant's entire write volume on one
+`PK = TENANT#acme#TELEMETRY` puts one tenant's entire write volume on one
 partition. Adaptive capacity absorbs a lot of this now, but if a single tenant
-outgrows it, **write-shard**: `TENANT#acme#SIGNAL#<0-9>` and scatter-gather on
+outgrows it, **write-shard**: `TENANT#acme#TELEMETRY#<0-9>` and scatter-gather on
 read. Know the technique; don't apply it pre-emptively.
 
 → `src/aws/dynamodb.ts`, `src/platform/repository.ts`
@@ -124,7 +124,7 @@ must not have a privileged back door into the data.
 
 ## Aurora PostgreSQL
 
-Used for sites, service regions and reporting. Serverless v2 scales capacity
+Used for drivers, service regions and reporting. Serverless v2 scales capacity
 continuously and, in non-prod, **to zero** after 15 minutes idle — which takes a
 dev database bill to nearly nothing overnight. Never enable auto-pause in prod;
 cold resume costs ~15 seconds.
@@ -154,7 +154,7 @@ Schema highlights (`src/data/schema.sql`):
 Hive-partitioned so Athena/Glue can prune by date:
 
 ```
-raw/tenant=acme/provider=cisco-meraki/dt=2026-09-04/hh=10/<uuid>.json
+raw/tenant=acme-freight/provider=samsara/dt=2026-09-08/hh=14/<uuid>.json
 ```
 
 **Archive before you normalise.** Normalisation is code, code has bugs, and when
@@ -180,7 +180,7 @@ The pipeline is at-least-once: EventBridge and Step Functions both retry. So
 make the **write** idempotent rather than trying to make delivery exactly-once.
 
 ```ts
-signalId = sha256(`${provider}|${sourceRef}|${observedAt}`).slice(0, 24)
+telemetryId = sha256(`${provider}|${sourceRef}|${observedAt}`).slice(0, 24)
 ```
 
 The same vendor reading always produces the same id, so a duplicate `PutItem`
