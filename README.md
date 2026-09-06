@@ -219,6 +219,19 @@ Two runs of `pnpm start` produce identical output apart from wall-clock
 durations — CI asserts it. Everything is seeded and the clock is injected, so a
 screenshot reproduces and a real change is distinguishable from noise.
 
+### Hosting
+
+The board is a static site, and the backend runs inside it — the in-process
+transport imports the resolvers directly, so deploying `web/` deploys
+everything. `vercel.json` at the root builds it with `pnpm web:build` and
+serves `web/dist`; the same three settings work on Netlify or Cloudflare
+Pages. Import the repo, keep the root directory at the repo root (the build
+reaches into `src/`), and enable Corepack so the pinned pnpm is used.
+
+There is no separately hostable API yet. `src/api/` holds the Lambda handlers
+and `infra/` the Terraform that would run them on AWS — read-only material, and
+not free to deploy.
+
 ---
 
 ## Repository
