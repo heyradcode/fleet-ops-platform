@@ -11,3 +11,6 @@ web/dist
 # Lambda bundles, produced by `pnpm build:lambda` and zipped by Terraform.
 infra/terraform/auth/.build/
 infra/terraform/modules/lambda/.build/
+
+# Temp files left behind when terraform init is interrupted mid-write.
+.terraform.lock.hcl[0-9]*

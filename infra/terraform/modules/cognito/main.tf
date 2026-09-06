@@ -312,13 +312,25 @@ resource "aws_cognito_user_pool_domain" "main" {
   user_pool_id = aws_cognito_user_pool.main.id
 }
 
-# Groups become the `cognito:groups` claim, which the code maps to roles.
+# Groups become the `cognito:groups` claim, which mapGroupsToRoles() in
+# auth/cognito-jwt-verifier.ts maps to roles - and this list has to BE that
+# list. It carried an "operator" group the platform has never heard of, and
+# omitted dispatcher, safety and driver, which it uses constantly. The trigger
+# overrides the claim on every login so nothing was visibly broken, which is
+# exactly why it survived: a pool advertising roles the code cannot map, and
+# missing the ones it can.
+#
+# An unmapped group degrades to `viewer` rather than crashing, so the failure
+# mode of getting this wrong is silent under-permissioning.
 resource "aws_cognito_user_group" "roles" {
-  for_each = toset(["admin", "operator", "viewer"])
+  for_each = toset(["admin", "safety", "dispatcher", "driver", "viewer"])
 
   name         = each.key
   user_pool_id = aws_cognito_user_pool.main.id
-  precedence   = each.key == "admin" ? 1 : each.key == "operator" ? 2 : 3
+
+  # Lower is higher priority. Cognito puts the lowest-precedence group first in
+  # the claim, which matters when a user is in more than one.
+  precedence = index(["admin", "safety", "dispatcher", "driver", "viewer"], each.key) + 1
 }
 
 # -----------------------------------------------------------------------------
