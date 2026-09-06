@@ -1,0 +1,14 @@
+# Copy to terraform.tfvars and fill in. That file is gitignored; this one is
+# the committed record of what has to be supplied.
+
+# Origins the board is served from, WITHOUT a trailing slash. Cognito matches
+# redirect URIs exactly. http://localhost:5180 is added for you, so an empty
+# list is valid while the site is not deployed yet.
+app_urls = ["https://your-app.vercel.app"]
+
+# Where the budget alarm goes. Required - see the note on the budget resource.
+alert_email = "you@example.com"
+
+# The hosted UI domain prefix is globally unique across every AWS account, so
+# a good name is probably taken. Empty derives it from the env name.
+# domain_prefix = "meridian-something-yours"

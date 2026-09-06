@@ -38,10 +38,31 @@ one for a personal account. Confirm it works before touching Terraform, because
 aws sts get-caller-identity
 ```
 
-The identity needs to create Cognito pools, Lambda functions, IAM roles, log
-groups and budgets. On a personal account `AdministratorAccess` is the usual
-choice; on anything shared it should be scoped, because a role that can create
-IAM roles can create one more privileged than itself.
+### What the identity must be allowed to do
+
+Cognito pools, Lambda functions, IAM roles, log groups and budgets. A typical
+developer group covers Lambda, IAM and CloudWatch but **not** the two that are
+unusual, and the apply gets far enough to create the Lambda before failing on
+them - a half-built stack and two `AccessDeniedException`s:
+
+```bash
+# Cognito. cognito-idp:*, so it covers destroy as well as apply.
+aws iam attach-user-policy --user-name YOUR_USER \n  --policy-arn arn:aws:iam::aws:policy/AmazonCognitoPowerUser
+
+# Budgets is account-scoped and no managed policy grants creating one.
+aws iam put-user-policy --user-name YOUR_USER \n  --policy-name MeridianBudgets \n  --policy-document file://deploy-policy.json
+```
+
+`deploy-policy.json` sits beside this file; change the account id in it if you
+are deploying elsewhere. Attach both to the **user**, not to a shared group -
+nobody else needs Cognito because of this.
+
+To undo afterwards: `detach-user-policy` and `delete-user-policy` with the same
+names.
+
+On a personal account `AdministratorAccess` instead of both is the pragmatic
+choice. On anything shared it should stay scoped, because an identity that can
+create IAM roles can create one more privileged than itself.
 
 ## Apply it
 

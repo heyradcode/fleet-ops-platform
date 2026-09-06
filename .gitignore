@@ -14,3 +14,8 @@ infra/terraform/modules/lambda/.build/
 
 # Temp files left behind when terraform init is interrupted mid-write.
 .terraform.lock.hcl[0-9]*
+
+# Real variable values - emails, deployment URLs, anything an operator filled in.
+# terraform.tfvars.example is the committed record of what is needed.
+*.tfvars
+!*.tfvars.example
