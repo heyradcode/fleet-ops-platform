@@ -9,6 +9,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { DispatchMap } from './DispatchMap.tsx';
 import { DriverPanel } from './DriverPanel.tsx';
 import { inProcessTransport } from './transport/in-process.ts';
+import { SignIn } from './SignIn.tsx';
+import { useRestoredSession } from './auth/useSession.ts';
+import { localAuth } from './auth/local.ts';
+import type { Session } from './auth/index.ts';
 import type { BoardSnapshot, Driver, Exception } from './transport/index.ts';
 
 /** 11 hours is the US federal daily driving limit. The strip is scaled to it. */
@@ -25,8 +29,39 @@ const DISTRICTS = [
   { id: 'phx', name: 'Phoenix' },
 ];
 
+/**
+ * The shell. Sign-in gates everything, so there is no render path that reads
+ * fleet data without a verified token behind it.
+ */
 export function App() {
-  const [districtId, setDistrictId] = useState<string | undefined>('dal');
+  const [session, setSession] = useRestoredSession();
+
+  // Install the session before the board mounts, not inside it - the transport
+  // throws without one, deliberately.
+  useEffect(() => {
+    inProcessTransport.setSession(session?.principal ?? null);
+  }, [session]);
+
+  if (!session) return <SignIn onSignedIn={setSession} />;
+
+  return (
+    <Board
+      key={session.principal.sub}
+      session={session}
+      onSignOut={() => { localAuth.signOut(); setSession(null); }}
+    />
+  );
+}
+
+function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) {
+  const scope = session.principal.scope;
+
+  // A dispatcher opens on their own district and has no other option. An ops
+  // lead opens tenant-wide. The board does not offer what the token forbids -
+  // showing tabs that return nothing would read as a bug rather than a rule.
+  const [districtId, setDistrictId] = useState<string | undefined>(
+    scope.kind === 'district' ? scope.districtId : undefined,
+  );
   const [board, setBoard] = useState<BoardSnapshot | null>(null);
   const [selected, setSelected] = useState<string | undefined>();
   const [live, setLive] = useState<Exception[]>([]);
@@ -64,6 +99,14 @@ export function App() {
     return all.sort((a, b) => Date.parse(b.raisedAt) - Date.parse(a.raisedAt));
   }, [board]);
 
+  // Which tabs this token permits. Tenant scope sees all of them; a district
+  // dispatcher sees exactly one, so the row becomes a label rather than a
+  // control - which is the honest rendering of a permission.
+  const visibleDistricts = scope.kind === 'district'
+    ? DISTRICTS.filter((d) => d.id === scope.districtId)
+    : DISTRICTS;
+  const canSeeAll = scope.kind === 'tenant' || scope.kind === 'region';
+
   const criticalCount = board?.incidents.filter((i) => i.severity === 'critical').length ?? 0;
   const heldCount = board?.heldBack.length ?? 0;
 
@@ -79,7 +122,7 @@ export function App() {
         </div>
 
         <nav className="districts" aria-label="District">
-          {DISTRICTS.map((d) => (
+          {visibleDistricts.map((d) => (
             <button
               key={d.id}
               className="district"
@@ -90,16 +133,18 @@ export function App() {
               {districtId === d.id && <span className="count">{drivers.length}</span>}
             </button>
           ))}
-          {/* Not a sixth district - a different ROLE. A dispatcher is scoped
-              to one board; seeing the whole carrier takes an ops lead. */}
-          <button
-            className="district is-lead"
-            aria-pressed={districtId === undefined}
-            onClick={() => { setDistrictId(undefined); setSelected(undefined); }}
-            title="Operations lead view - tenant-wide scope"
-          >
-            all
-          </button>
+          {/* Not a sixth district - a different ROLE, and only offered to a
+              token that carries it. */}
+          {canSeeAll && (
+            <button
+              className="district is-lead"
+              aria-pressed={districtId === undefined}
+              onClick={() => { setDistrictId(undefined); setSelected(undefined); }}
+              title="Tenant-wide scope, granted by the admin role"
+            >
+              all
+            </button>
+          )}
         </nav>
 
         <div className="statusbar-spacer" />
@@ -114,6 +159,12 @@ export function App() {
           <span className="pulse" aria-hidden="true" />
           <span>14:30:00Z</span>
         </div>
+
+        <div className="whoami">
+          <span className="whoami-email mono">{session.principal.email}</span>
+          <span className="whoami-scope">{describeScope(scope)}</span>
+        </div>
+        <button className="signout" onClick={onSignOut}>Sign out</button>
       </header>
 
       <div className={`body ${selectedDriver ? 'has-panel' : ''}`}>
@@ -288,6 +339,16 @@ function ExceptionRow({ exception, paged, onSelect }: {
 }
 
 /* -------------------------------------------------------------------------- */
+
+/** The caller's reach, in the words a dispatcher would use. */
+function describeScope(scope: Session['principal']['scope']): string {
+  switch (scope.kind) {
+    case 'tenant': return 'whole carrier';
+    case 'region': return scope.region;
+    case 'district': return scope.districtId.toUpperCase() + ' only';
+    case 'driver': return 'own assignments';
+  }
+}
 
 function hosLevel(minutes: number): 'warning' | 'critical' | null {
   if (minutes <= HOS_CRITICAL) return 'critical';

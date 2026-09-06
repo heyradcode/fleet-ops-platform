@@ -46,30 +46,42 @@ function seed(): void {
 let seeded = false;
 
 /**
- * Who is looking at the board.
+ * The signed-in principal.
  *
- * WITH a district: a dispatcher, scoped to that board.
- * WITHOUT one: an operations lead, whose admin role is what grants tenant-wide
- * scope. This is not a detail - it is the rule working. A dispatcher with no
- * district claim does NOT get the whole fleet; scopeFromClaims() gives them
- * driver scope, because widening access has to be a deliberate grant rather
- * than the accident of a missing field. Building the board is how that got
- * proved: the all-districts view came back empty until it signed in as someone
- * actually entitled to it.
+ * Null until sign-in completes, and the board does not render before then -
+ * so there is no path that reads fleet data without a verified token behind it.
  */
-function principalFor(districtId?: string): Principal {
-  return verifyToken(signDemoToken({
-    sub: 'u-board',
-    email: districtId ? 'dispatcher@acme-freight.com' : 'lead@meridian.io',
-    'custom:tenantId': 'acme-freight',
-    'cognito:groups': districtId ? ['dispatcher'] : ['admin'],
-    ...(districtId ? { 'custom:district': districtId } : {}),
-  }));
+let session: Principal | null = null;
+
+/**
+ * The caller. Comes from the signed-in session, never from the UI.
+ *
+ * Before sign-in existed this was fabricated here, which meant the board's
+ * scope was asserted rather than demonstrated. Now a Dallas dispatcher cannot
+ * reach Phoenix because their TOKEN does not say they may, and the same
+ * withinScope() the GraphQL resolver applies is what enforces it.
+ */
+function caller(): Principal {
+  if (!session) {
+    throw new Error('No session. The board must not render before sign-in.');
+  }
+  return session;
 }
 
-/** The tenant-wide principal used to compute what the RULES decided. */
+/**
+ * A tenant-wide principal, used only to compute what the RULES decided across
+ * the whole fleet before the caller's scope narrows it.
+ *
+ * Deriving it from the session's own tenant rather than hard-coding one keeps
+ * the tenant boundary intact: a Northstar user computes Northstar's exceptions.
+ */
 function analyst(): Principal {
-  return principalFor(undefined);
+  return verifyToken(signDemoToken({
+    sub: 'rules-evaluator',
+    email: 'rules@' + caller().tenantId,
+    'custom:tenantId': caller().tenantId,
+    'cognito:groups': ['admin'],
+  }));
 }
 
 /** Run every scenario through the real pipeline and collect what it decided. */
@@ -134,22 +146,34 @@ function prepareAgent(): Promise<void> {
 }
 
 export const inProcessTransport: Transport = {
+  setSession(principal) {
+    session = principal;
+  },
+
   async loadBoard(districtId) {
     if (!seeded) { seed(); seeded = true; }
 
-    const principal = principalFor(districtId);
+    const principal = caller();
     const { exceptions, incidents, heldBack } = runScenarios(analyst());
 
-    const inScope = (e: { districtId: string }) => !districtId || e.districtId === districtId;
+    // TWO STEPS, and both are needed. withinScope() is the BOUNDARY, derived
+    // from the token; districtId is the caller's chosen VIEW. Applying only
+    // the first meant a Dallas dispatcher who asked for Phoenix got Dallas's
+    // sixteen drivers rendered under a Phoenix heading - not a leak, since
+    // scope had already excluded Phoenix, but wrong in a way that would make
+    // someone distrust the board the moment they noticed.
+    //
+    // Query.drivers in the GraphQL resolver does exactly this pair. Every
+    // entry point to the same data has to, which is the argument for both
+    // living behind the same two functions rather than being reimplemented.
+    const inDistrict = (d: { districtId: string }) => !districtId || d.districtId === districtId;
 
     return {
-      // withinScope is the boundary, not the filter - the same function the
-      // GraphQL resolver applies, for the same reason.
-      drivers: withinScope(principal, allDrivers(principal)),
+      drivers: withinScope(principal, allDrivers(principal)).filter(inDistrict),
       territories: allDistricts(principal),
-      exceptions: exceptions.filter(inScope),
-      incidents: incidents.filter(inScope),
-      heldBack: heldBack.filter(inScope),
+      exceptions: exceptions.filter(inDistrict),
+      incidents: incidents.filter(inDistrict),
+      heldBack: heldBack.filter(inDistrict),
     } satisfies BoardSnapshot;
   },
 
@@ -162,7 +186,7 @@ export const inProcessTransport: Transport = {
     // tools enforce that themselves rather than trusting the prompt.
     return runAgent({
       question,
-      principal: principalFor(districtId),
+      principal: caller(),
       tools: TOOL_SPECS,
     });
   },

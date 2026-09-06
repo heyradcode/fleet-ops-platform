@@ -21,7 +21,9 @@
  * than an architectural claim. The board cannot reach around the contract
  * because there is nothing behind it to reach for.
  */
-import type { Driver, Exception, Incident, Territory } from '../../../src/platform/types.ts';
+import type {
+  Driver, Exception, Incident, Principal, Territory,
+} from '../../../src/platform/types.ts';
 import type { AgentResult } from '../../../src/ai/agent-core.ts';
 
 export type BoardSnapshot = {
@@ -34,6 +36,17 @@ export type BoardSnapshot = {
 };
 
 export type Transport = {
+  /**
+   * Install the signed-in session.
+   *
+   * A real GraphQL client does exactly this once, in an auth link, and every
+   * request afterwards carries the token. Here it means the board reasons
+   * about the principal the VERIFIER produced rather than one the UI made up -
+   * which is what turns "a Dallas dispatcher cannot see Phoenix" from a claim
+   * into something you demonstrate by signing in as one.
+   */
+  setSession(principal: Principal | null): void;
+
   /** The board's first load, scoped to the caller's district. */
   loadBoard(districtId?: string): Promise<BoardSnapshot>;
 
@@ -64,4 +77,4 @@ export type Transport = {
 export type { AgentResult };
 export type { AgentTrace } from '../../../src/ai/agent-core.ts';
 
-export type { Driver, Exception, Incident, Territory };
+export type { Driver, Exception, Incident, Principal, Territory };

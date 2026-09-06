@@ -741,3 +741,220 @@ button {
   .body.has-panel { grid-template-columns: 300px 1fr; }
   .panel { display: none; }
 }
+
+/* ==========================================================================
+   Sign in
+   ==========================================================================
+   The one screen that is not a dense grid. It is also the only place the
+   product introduces itself, so it gets room - but stays in the same
+   vocabulary: hairlines, condensed caps, one amber accent.
+   ========================================================================== */
+
+.gate {
+  display: grid;
+  place-items: center;
+  min-height: 100%;
+  padding: 32px 20px;
+  background:
+    radial-gradient(1100px 520px at 50% -8%, #161d27 0%, transparent 62%),
+    var(--ground);
+}
+
+.gate-panel {
+  width: 100%;
+  max-width: 400px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  padding: 24px;
+}
+
+.gate-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 16px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.gate-tag {
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-left: auto;
+}
+
+.gate-form { display: flex; flex-direction: column; gap: 12px; }
+
+.field { display: flex; flex-direction: column; gap: 5px; }
+
+.field-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.field-input {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-strong);
+  background: var(--ground);
+  border: 1px solid var(--line-bright);
+  padding: 8px 10px;
+}
+
+.field-input:focus {
+  outline: none;
+  border-color: var(--amber);
+}
+
+select.field-input { cursor: pointer; }
+
+/* Home-realm discovery, resolving as you type. The colour says which KIND of
+   provider answered, so the routing is legible rather than just stated. */
+.realm {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  padding: 7px 9px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--dim);
+  background: var(--ground);
+  border-left: 2px solid var(--line-bright);
+}
+
+.realm-kind {
+  font-family: var(--data);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  flex: none;
+}
+
+.realm.is-saml { border-left-color: var(--amber); }
+.realm.is-saml .realm-kind { color: var(--amber); }
+.realm.is-oidc { border-left-color: var(--on-break); }
+.realm.is-oidc .realm-kind { color: var(--on-break); }
+.realm.is-cognito .realm-kind { color: var(--faint); }
+
+.gate-submit {
+  width: 100%;
+  padding: 9px;
+  margin-top: 2px;
+}
+
+.gate-submit:disabled {
+  background: var(--line-bright);
+  color: var(--dim);
+  cursor: not-allowed;
+}
+
+.gate-error {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  background: rgba(229, 72, 77, 0.09);
+  border-left: 2px solid var(--critical);
+}
+
+.gate-demo {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.gate-note {
+  margin: 0 0 12px;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--dim);
+}
+
+.demo-account {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  padding: 9px 10px;
+  margin-bottom: 6px;
+  text-align: left;
+  border: 1px solid var(--line);
+  background: var(--ground);
+  transition: border-color 120ms;
+}
+
+.demo-account:hover:not(:disabled) { border-color: var(--amber); }
+.demo-account:disabled { opacity: 0.5; cursor: default; }
+
+.demo-name {
+  font-family: var(--sign);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-strong);
+}
+
+.demo-email { font-size: 10px; color: var(--faint); }
+
+.demo-shows {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--dim);
+  margin-top: 3px;
+}
+
+.gate-switch {
+  margin: 18px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--dim);
+}
+
+.linkish {
+  color: var(--amber);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  padding: 0;
+}
+
+.gate-back { margin-top: 2px; font-size: 11px; }
+
+/* --- Who is signed in, in the status bar ---------------------------------- */
+
+.whoami {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0;
+  padding: 0 14px;
+  border-right: 1px solid var(--line);
+  line-height: 1.25;
+}
+
+.whoami-email { font-size: 10px; color: var(--text); }
+
+.whoami-scope {
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--amber);
+}
+
+.signout {
+  padding: 0 14px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.signout:hover { color: var(--text-strong); }

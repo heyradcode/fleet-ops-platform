@@ -40,6 +40,7 @@
 import { b64urlDecode, b64urlDecodeText, b64urlEncode, hmacSha256, timingSafeEqual } from '../platform/crypto.ts';
 import type { Principal, TenantId } from '../platform/types.ts';
 import { env } from '../platform/env.ts';
+import { now as clockNow } from '../platform/clock.ts';
 
 const DEMO_SECRET = 'demo-only-not-a-real-signing-key';
 const ISSUER = env('COGNITO_ISSUER', 'https://cognito-idp.us-east-1.amazonaws.com/us-east-1_ABC123DEF');
@@ -76,7 +77,9 @@ const unb64url = b64urlDecode;
 
 /** Demo-only token minting. Cognito does this for you at the hosted UI. */
 export function signDemoToken(claims: Partial<CognitoClaims> & { sub: string }): string {
-  const now = Math.floor(Date.now() / 1000);
+  // The injected clock, not Date.now(). Both sides of this file read it, so
+  // a demo running on a fixed clock mints tokens that same clock accepts.
+  const now = Math.floor(clockNow() / 1000);
   const header = { alg: 'HS256', typ: 'JWT', kid: 'demo-key-1' };
   const payload: CognitoClaims = {
     iss: ISSUER,
@@ -117,7 +120,7 @@ export function verifyToken(token: string): Principal {
   }
 
   const claims = JSON.parse(b64urlDecodeText(payloadB64)) as CognitoClaims;
-  const now = Math.floor(Date.now() / 1000);
+  const now = Math.floor(clockNow() / 1000);
 
   if (claims.iss !== ISSUER) throw new TokenVerificationError('wrong issuer');                    // 2
   if (claims.client_id !== CLIENT_ID) throw new TokenVerificationError('wrong client_id');        // 3
@@ -161,7 +164,13 @@ function mapGroupsToRoles(groups: string[]): Principal['roles'] {
  */
 function scopeFromClaims(claims: CognitoClaims): Principal['scope'] {
   const roles = mapGroupsToRoles(claims['cognito:groups'] ?? []);
-  if (roles.includes('admin')) return { kind: 'tenant' };
+
+  // SCOPE IS NOT PERMISSION, and conflating them is how safety teams end up
+  // unable to do their job. A safety reviewer has to read the whole carrier -
+  // a harsh-braking pattern is only visible across districts - but must not be
+  // able to move a load. Scope answers "what may they SEE"; requireRole() and
+  // canUseTool() answer "what may they DO", and they answer it separately.
+  if (roles.includes('admin') || roles.includes('safety')) return { kind: 'tenant' };
 
   const district = claims['custom:district'];
   if (district) return { kind: 'district', districtId: district };
