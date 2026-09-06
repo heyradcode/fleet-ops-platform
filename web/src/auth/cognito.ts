@@ -1,9 +1,9 @@
 /**
  * The real Cognito provider: hosted UI, authorization code + PKCE.
  *
- * Unused offline - there is no user pool - and present so the swap is a
- * configuration change rather than a rewrite. Everything above the
- * AuthProvider interface stays exactly as it is.
+ * Selected by provider.ts when VITE_COGNITO_DOMAIN and VITE_COGNITO_CLIENT_ID
+ * are set; otherwise the local issuer runs. Everything above the AuthProvider
+ * interface stays exactly as it is either way.
  *
  * WHY AUTHORIZATION CODE + PKCE, and not the alternatives:
  *
@@ -25,11 +25,26 @@ import { verifyToken } from '../../../src/auth/cognito-jwt-verifier.ts';
 import { authorizeUrl, resolveIdpForEmail } from '../../../src/auth/providers.ts';
 import { sha256Bytes, b64urlEncode, uuid } from '../../../src/platform/crypto.ts';
 
-const DOMAIN = 'meridian-prod.auth.us-east-1.amazoncognito.com';
-const CLIENT_ID = '1h57kf5cpq17m0eml12EXAMPLE';
-const REDIRECT_URI = globalThis.location?.origin
-  ? `${globalThis.location.origin}/callback`
-  : 'https://app.meridian.example.com/callback';
+/**
+ * The pool this build talks to, from Vite's build-time environment.
+ *
+ * Read lazily rather than at module scope: this module is imported whether or
+ * not Cognito is configured, and a missing variable must be a clear message at
+ * sign-in time, not a crash while the bundle evaluates.
+ */
+function config(): { domain: string; clientId: string; redirectUri: string } {
+  const domain = import.meta.env?.VITE_COGNITO_DOMAIN as string | undefined;
+  const clientId = import.meta.env?.VITE_COGNITO_CLIENT_ID as string | undefined;
+  if (!domain || !clientId) {
+    throw new AuthError('Cognito is not configured for this build - see web/src/auth/provider.ts.');
+  }
+  return { domain, clientId, redirectUri: `${globalThis.location.origin}/callback` };
+}
+
+/** True when both variables are present. Decides which provider the UI gets. */
+export function cognitoConfigured(): boolean {
+  return Boolean(import.meta.env?.VITE_COGNITO_DOMAIN && import.meta.env?.VITE_COGNITO_CLIENT_ID);
+}
 
 const VERIFIER_KEY = 'meridian.pkce.verifier';
 const STATE_KEY = 'meridian.pkce.state';
@@ -75,6 +90,7 @@ export const cognitoAuth: AuthProvider = {
   },
 
   async signInWith(provider) {
+    const { domain, clientId, redirectUri } = config();
     const { verifier, challenge } = createPkcePair();
     // `state` is CSRF protection, not decoration: on the way back it is
     // compared against what was stored, so a redirect the user did not start
@@ -85,9 +101,9 @@ export const cognitoAuth: AuthProvider = {
     sessionStorage.setItem(STATE_KEY, state);
 
     globalThis.location.assign(authorizeUrl({
-      domain: DOMAIN,
-      clientId: CLIENT_ID,
-      redirectUri: REDIRECT_URI,
+      domain,
+      clientId,
+      redirectUri,
       identityProvider: provider,
       codeChallenge: challenge,
       state,
@@ -110,8 +126,9 @@ export const cognitoAuth: AuthProvider = {
     // Clearing local state is not signing out. The Cognito session cookie is
     // still live, so the next /authorize returns a token without prompting -
     // which looks exactly like the sign-out having failed. Hit /logout too.
+    const { domain, clientId } = config();
     globalThis.location.assign(
-      `https://${DOMAIN}/logout?client_id=${CLIENT_ID}` +
+      `https://${domain}/logout?client_id=${clientId}` +
       `&logout_uri=${encodeURIComponent(globalThis.location.origin)}`,
     );
   },
@@ -120,20 +137,13 @@ export const cognitoAuth: AuthProvider = {
 /**
  * Complete the redirect: exchange the code for tokens.
  *
- * Called from the /callback route. The token endpoint is a POST with the
- * verifier - no client secret, because a SPA cannot hold one.
+ * Called by useRestoredSession when the page loads with a code in the URL.
+ * The token endpoint is a POST with the verifier - no client secret, because
+ * a SPA cannot hold one.
  *
- *   const res = await fetch(`https://${DOMAIN}/oauth2/token`, {
- *     method: 'POST',
- *     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
- *     body: new URLSearchParams({
- *       grant_type: 'authorization_code',
- *       client_id: CLIENT_ID,
- *       code,
- *       redirect_uri: REDIRECT_URI,
- *       code_verifier: verifier,
- *     }),
- *   });
+ * What stops short of a real deployment is the last line: verifyToken() is the
+ * offline verifier, HMAC against a demo secret. A pool signs RS256, so the
+ * swap there is a JWKS fetch - see the note at the top of auth/index.ts.
  */
 export async function completeRedirect(searchParams: URLSearchParams): Promise<Session> {
   const code = searchParams.get('code');
@@ -154,8 +164,27 @@ export async function completeRedirect(searchParams: URLSearchParams): Promise<S
   const verifier = sessionStorage.getItem(VERIFIER_KEY);
   if (!verifier) throw new AuthError('Sign-in expired. Start again.');
 
-  throw new AuthError(
-    'Token exchange needs a deployed user pool. This build uses the offline ' +
-    'provider — see web/src/auth/local.ts.',
-  );
+  // Both are single-use. Removing them BEFORE the exchange means a retry of
+  // the same URL fails the state check above instead of replaying the code.
+  sessionStorage.removeItem(STATE_KEY);
+  sessionStorage.removeItem(VERIFIER_KEY);
+
+  const { domain, clientId, redirectUri } = config();
+  const res = await fetch(`https://${domain}/oauth2/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code',
+      client_id: clientId,
+      code,
+      redirect_uri: redirectUri,
+      code_verifier: verifier,
+    }),
+  });
+  if (!res.ok) throw new AuthError('The identity provider rejected the sign-in. Start again.');
+
+  const { access_token: token } = await res.json() as { access_token: string };
+  const session = { token, principal: verifyToken(token) };
+  sessionStorage.setItem(TOKEN_KEY, token);
+  return session;
 }

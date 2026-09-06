@@ -21,6 +21,10 @@ pnpm start
 pnpm web
 ```
 
+The board opens on a sign-in page. Pick one of the four demo accounts — there
+are no passwords — and notice that what each one can see is decided by the
+token it was issued, not by anything on the page.
+
 ## 2. Read in this order (2-3 hours)
 
 | Order | What | Why |
@@ -35,9 +39,9 @@ pnpm web
 
 ## 3. If you only have an hour
 
-Read the "Things worth being able to say out loud" section of the root
-`README.md`, then `src/pipeline/steps.ts`. Between them they cover the
-decisions the rest of the codebase exists to serve.
+Read the "Design decisions" section of the root `README.md`, then
+`src/pipeline/steps.ts`. Between them they cover the decisions the rest of the
+codebase exists to serve.
 
 ## 4. What is real here
 

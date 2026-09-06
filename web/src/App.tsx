@@ -18,23 +18,11 @@ import { DriverPanel } from './DriverPanel.tsx';
 import { inProcessTransport } from './transport/in-process.ts';
 import { SignIn } from './SignIn.tsx';
 import { useRestoredSession } from './auth/useSession.ts';
-import { localAuth } from './auth/local.ts';
+import { auth } from './auth/provider.ts';
+import { HOS_MAX_MINUTES, formatHours, hosLevel, type HosLevel } from './format.ts';
+import { DISTRICTS } from '../../src/data/districts.ts';
 import type { Session } from './auth/index.ts';
 import type { BoardSnapshot, Driver, Exception, PositionTick } from './transport/index.ts';
-
-/** 11 hours is the US federal daily driving limit. The strip is scaled to it. */
-const HOS_MAX_MINUTES = 660;
-/** The same thresholds the detection rules use. They must not diverge. */
-const HOS_WARNING = 60;
-const HOS_CRITICAL = 40;
-
-const DISTRICTS = [
-  { id: 'dal', name: 'Dallas' },
-  { id: 'aus', name: 'Austin' },
-  { id: 'den', name: 'Denver' },
-  { id: 'chi', name: 'Chicago' },
-  { id: 'phx', name: 'Phoenix' },
-];
 
 /**
  * The shell. Sign-in gates everything, so there is no render path that reads
@@ -43,15 +31,15 @@ const DISTRICTS = [
  * see that file for why the order matters.
  */
 export function App() {
-  const [session, setSession] = useRestoredSession();
+  const [session, setSession, restoreError] = useRestoredSession();
 
-  if (!session) return <SignIn onSignedIn={setSession} />;
+  if (!session) return <SignIn onSignedIn={setSession} initialError={restoreError} />;
 
   return (
     <Board
       key={session.principal.sub}
       session={session}
-      onSignOut={() => { localAuth.signOut(); setSession(null); }}
+      onSignOut={() => { auth.signOut(); setSession(null); }}
     />
   );
 }
@@ -134,10 +122,12 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
 
   // Which tabs this token permits. Tenant scope sees all of them; a district
   // dispatcher sees exactly one, so the row becomes a label rather than a
-  // control - which is the honest rendering of a permission.
+  // control - which is the honest rendering of a permission. Driver scope
+  // sees none: their assignments are not a district, and five tabs that each
+  // return nothing would read as a bug rather than a rule.
   const visibleDistricts = scope.kind === 'district'
-    ? DISTRICTS.filter((d) => d.id === scope.districtId)
-    : DISTRICTS;
+    ? DISTRICTS.filter((d) => d.districtId === scope.districtId)
+    : scope.kind === 'driver' ? [] : DISTRICTS;
   const canSeeAll = scope.kind === 'tenant' || scope.kind === 'region';
 
   const criticalCount = board?.incidents.filter((i) => i.severity === 'critical').length ?? 0;
@@ -159,13 +149,14 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
         <nav className="districts" aria-label="District">
           {visibleDistricts.map((d) => (
             <button
-              key={d.id}
+              key={d.districtId}
               className="district"
-              aria-pressed={districtId === d.id}
-              onClick={() => { setDistrictId(d.id); setSelected(undefined); }}
+              title={d.name}
+              aria-pressed={districtId === d.districtId}
+              onClick={() => { setDistrictId(d.districtId); setSelected(undefined); }}
             >
-              {d.id}
-              {districtId === d.id && <span className="count">{drivers.length}</span>}
+              {d.districtId}
+              {districtId === d.districtId && <span className="count">{drivers.length}</span>}
             </button>
           ))}
           {/* Not a sixth district - a different ROLE, and only offered to a
@@ -320,7 +311,6 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
             key={selectedDriver.driverId}
             driver={selectedDriver}
             exceptions={selectedExceptions}
-            districtId={districtId}
             onClose={() => setSelected(undefined)}
           />
         )}
@@ -367,10 +357,7 @@ function DriverRow({ driver, flagged, selected, onSelect }: {
  * fill turns amber then red at exactly the thresholds the detection rules use,
  * so the strip and the alert are reading the same number and cannot disagree.
  */
-function HoursOfServiceStrip({ minutes, level }: {
-  minutes: number;
-  level: 'warning' | 'critical' | null;
-}) {
+function HoursOfServiceStrip({ minutes, level }: { minutes: number; level: HosLevel }) {
   const pct = Math.max(0, Math.min(100, (minutes / HOS_MAX_MINUTES) * 100));
   return (
     <span
@@ -423,17 +410,4 @@ function describeScope(scope: Session['principal']['scope']): string {
     case 'district': return scope.districtId.toUpperCase() + ' only';
     case 'driver': return 'own assignments';
   }
-}
-
-function hosLevel(minutes: number): 'warning' | 'critical' | null {
-  if (minutes <= HOS_CRITICAL) return 'critical';
-  if (minutes <= HOS_WARNING) return 'warning';
-  return null;
-}
-
-/** 128 -> "2h08". Hours and minutes, because that is how a shift is discussed. */
-function formatHours(minutes: number): string {
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  return `${h}h${String(m).padStart(2, '0')}`;
 }

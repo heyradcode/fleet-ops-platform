@@ -207,10 +207,11 @@ Lambda's role permits it, it happens.
 
 Knowing what you left out — and why — is as much a reading as what you built.
 
-- **A production front-end.** `web/` is the dispatch board and it is real code,
-  but it is one board rather than a product: no auth flow, no settings, no
-  admin. The board proves the API contract is usable, not that the product is
-  finished.
+- **A production front-end.** `web/` is the dispatch board and it is real code
+  — sign-in included, with the district scope coming off a verified token —
+  but it is one board rather than a product: no settings, no admin, no
+  reporting. The board proves the API contract is usable, not that the product
+  is finished.
 - **VPC networking detail.** Only Aurora needs a VPC; Lambdas that touch only
   DynamoDB, S3 and Bedrock are better off outside one (no ENI cold-start
   penalty, no NAT gateway bill).

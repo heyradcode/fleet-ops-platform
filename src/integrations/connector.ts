@@ -146,6 +146,18 @@ export class CircuitBreaker {
  * is what makes a single cross-vendor reporting view meaningful rather than a
  * pile of incomparable colours.
  */
+/**
+ * The hours-of-service thresholds, in minutes of legal drive time REMAINING.
+ *
+ * Exported because three other places have to agree with the rule: the
+ * reassignment guard in the tools and the resolver (a driver under the warning
+ * line is not offered a load) and the board's hours-of-service strip, which
+ * turns amber and red at exactly these values. One constant, so they cannot
+ * drift - a strip that goes amber at 60 while the rule fires at 45 is a board
+ * nobody trusts.
+ */
+export const HOS_THRESHOLD_MINUTES = { warning: 60, critical: 40 } as const;
+
 export function severityFor(kind: Telemetry['kind'], value: number): Telemetry['severity'] {
   // [warning, critical]. Tuned so the demo fixtures land where the narrative
   // needs them; real thresholds come from the safety team, not from a developer.
@@ -154,7 +166,7 @@ export function severityFor(kind: Telemetry['kind'], value: number): Telemetry['
     'speeding': [10, 25],              // kph over the posted limit
     'harsh-brake': [0.35, 0.55],       // g
     'idle': [15, 30],                  // minutes
-    'hos-remaining': [60, 40],         // INVERTED: fewer minutes left is worse
+    'hos-remaining': [HOS_THRESHOLD_MINUTES.warning, HOS_THRESHOLD_MINUTES.critical], // INVERTED: fewer minutes left is worse
     'route-adherence': [400, 1_000],   // metres off the corridor
     'geofence-state': [1, 1],          // boolean; breach handled by the rule
     'panic': [1, 1],                   // any panic is critical

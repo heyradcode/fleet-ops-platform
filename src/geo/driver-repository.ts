@@ -37,10 +37,6 @@ export function allDistricts(principal: Principal): Territory[] {
   return DISTRICTS.map((t) => ({ ...t, tenantId: principal.tenantId }));
 }
 
-export function getDistrict(principal: Principal, districtId: string): Territory | undefined {
-  return allDistricts(principal).find((t) => t.districtId === districtId);
-}
-
 /**
  * Stands in for SQL.driversWithinRadius.
  *
@@ -93,7 +89,7 @@ export function regionContaining(point: { lon: number; lat: number }): string | 
  *
  * Nearest-depot is a stand-in for real territory polygons; the production query
  * is `ST_Contains(territory.boundary, point)` against the districts table.
- * Phase 4 of the migration supplies the polygons.
+ * The polygons themselves are a data-loading job, not a code change.
  */
 export function districtContaining(
   principal: Principal,

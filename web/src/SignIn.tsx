@@ -17,21 +17,26 @@
  * say they may.
  */
 import { useMemo, useState } from 'react';
-import { localAuth, DEMO_ACCOUNTS } from './auth/local.ts';
+import { auth, usingCognito } from './auth/provider.ts';
+import { DEMO_ACCOUNTS } from './auth/local.ts';
 import { AuthError, type Realm, type Session } from './auth/index.ts';
 
-type Props = { onSignedIn(session: Session): void };
+type Props = {
+  onSignedIn(session: Session): void;
+  /** Why the page arrived signed out - a failed redirect, an expired token. */
+  initialError?: string | null;
+};
 
-export function SignIn({ onSignedIn }: Props) {
+export function SignIn({ onSignedIn, initialError = null }: Props) {
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(initialError);
   const [mode, setMode] = useState<'in' | 'up'>('in');
 
   // Discovery runs as you type. It costs nothing, and watching the provider
   // resolve is the clearest way to show what the lookup does.
   const realm: Realm | null = useMemo(
-    () => (email.includes('@') && email.split('@')[1] ? localAuth.discover(email) : null),
+    () => (email.includes('@') && email.split('@')[1] ? auth.discover(email) : null),
     [email],
   );
 
@@ -40,7 +45,7 @@ export function SignIn({ onSignedIn }: Props) {
     setBusy(true);
     setError(null);
     try {
-      onSignedIn(await localAuth.signIn(email.trim()));
+      onSignedIn(await auth.signIn(email.trim()));
     } catch (err) {
       setError(err instanceof AuthError ? err.message : 'Sign-in failed. Try again.');
     } finally {
@@ -53,7 +58,7 @@ export function SignIn({ onSignedIn }: Props) {
     setBusy(true);
     setError(null);
     try {
-      onSignedIn(await localAuth.signIn(address));
+      onSignedIn(await auth.signIn(address));
     } catch (err) {
       setError(err instanceof AuthError ? err.message : 'Sign-in failed. Try again.');
     } finally {
@@ -103,7 +108,8 @@ export function SignIn({ onSignedIn }: Props) {
               </button>
             </form>
 
-            <section className="gate-demo">
+            {/* Only the local issuer can honour a click on one of these. */}
+            {!usingCognito && <section className="gate-demo">
               <h2 className="panel-h">Or sign in as</h2>
               <p className="gate-note">
                 Four accounts, each showing a different scope. There are no
@@ -122,7 +128,7 @@ export function SignIn({ onSignedIn }: Props) {
                   <span className="demo-shows">{a.shows}</span>
                 </button>
               ))}
-            </section>
+            </section>}
 
             <p className="gate-switch">
               New carrier?{' '}
@@ -163,7 +169,7 @@ function SignUp({ onBack }: { onBack(): void }) {
     setBusy(true);
     setError(null);
     try {
-      const { message } = await localAuth.signUp({ email: email.trim(), carrierName, fleetSize });
+      const { message } = await auth.signUp({ email: email.trim(), carrierName, fleetSize });
       setDone(message);
     } catch (err) {
       setError(err instanceof AuthError ? err.message : 'Registration failed. Try again.');

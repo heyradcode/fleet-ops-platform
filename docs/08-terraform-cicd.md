@@ -262,16 +262,17 @@ Driven off `var.env` rather than duplicated config:
 ### CI — on every push and PR
 
 ```
-app        npm ci → typecheck → test → npm start (the demo IS a smoke test)
+app        pnpm install --frozen-lockfile → typecheck → test → pnpm start (the demo IS a smoke test)
+web        pnpm web:build — the board type-checks against the backend it imports
 terraform  fmt -check → init -backend=false → validate   (matrix × 4 envs)
-security   Trivy config scan → SARIF to the Security tab → npm audit
+security   Trivy config scan → SARIF to the Security tab → pnpm audit
 ```
 
 `-backend=false` means validation needs **no AWS credentials**, which matters
 because a PR from a fork must never have access to your cloud account.
 
-`npm ci`, not `npm install`: it installs exactly the lockfile and fails if
-`package.json` and the lock have drifted.
+`--frozen-lockfile`: install exactly the lockfile and fail if `package.json`
+and the lock have drifted. Non-negotiable in CI.
 
 ### Deploy — dev → test → stage → prod
 

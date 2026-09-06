@@ -2,8 +2,8 @@
  * ---------------------------------------------------------------------------
  * Meridian - the whole platform, running in your terminal
  * ---------------------------------------------------------------------------
- *   npm start                 run everything, in order
- *   npm start -- --only=ai    run one section
+ *   pnpm start                run everything, in order
+ *   pnpm start --only=ai      run one section
  *
  * Each section runs one part of the platform and narrates it. Read the output,
  * then open the files it names.
@@ -35,7 +35,9 @@ import {
 import { mainTable } from './aws/dynamodb.ts';
 import { bus } from './aws/eventbridge.ts';
 
-import { recentTelemetry, openIncidents, telemetryForDriver } from './platform/repository.ts';
+import {
+  recentTelemetry, openIncidents, telemetryForDriver, driversInDistrict,
+} from './platform/repository.ts';
 import { handler as graphqlHandler, type AppSyncEvent } from './api/appsync-resolvers.ts';
 import { subscribe, subscriberCount } from './api/subscriptions.ts';
 import { handler as restHandler, eventFor } from './api/rest-handler.ts';
@@ -55,7 +57,7 @@ import { TOOL_SPECS, READ_ONLY_TOOL_SPECS } from './ai/tools.ts';
 import { usage as bedrockUsage, MODELS } from './aws/bedrock.ts';
 import { checkInput, canUseTool } from './ai/guardrails.ts';
 import { b64urlEncode, b64urlDecodeText, setUuid, seededUuid } from './platform/crypto.ts';
-import { setClock, fixedClock } from './platform/clock.ts';
+import { setClock, fixedClock, now } from './platform/clock.ts';
 import { setRandom, seededRandom } from './platform/random.ts';
 import { loadRunbooksFromDisk } from './platform/runbook-loader.node.ts';
 
@@ -281,7 +283,7 @@ async function sectionIngest() {
   note('');
   note('Injecting 2 upstream 503s to exercise retry + circuit breaker...');
 
-  const since = new Date(Date.now() - 6 * 3600_000).toISOString();
+  const since = new Date(now() - 6 * 3600_000).toISOString();
   const workflow = buildIngestWorkflow(operator, since);
   const result = await workflow.start({ tenantId: operator.tenantId, since });
 
@@ -353,6 +355,12 @@ function sectionData() {
   const dallas = telemetryForDriver(operator, 'drv-1000');
   process.stdout.write('   ' + dallas.length + ' readings for drv-1000 from ' +
     new Set(dallas.map((s) => s.provider)).size + ' providers, one Query\n');
+
+  note('');
+  note('And the flip the board depends on - GSI1 (PK=TENANT#acme-freight#DISTRICT#dal):');
+  const dal = driversInDistrict(operator, 'dal');
+  process.stdout.write('   ' + dal.length + ' drivers in dal, one Query. The base table is keyed by driver;\n' +
+    '   the index is keyed by district. Same items, opposite access direction.\n');
 
   note('');
   note('Now the wrong way, for contrast:');
@@ -825,7 +833,7 @@ async function ensureData() {
   ensurePrincipals();
   if (mainTable.size() > 0) return;
 
-  const since = new Date(Date.now() - 6 * 3600_000).toISOString();
+  const since = new Date(now() - 6 * 3600_000).toISOString();
   await buildIngestWorkflow(operator, since).start({ tenantId: operator.tenantId, since });
 }
 
@@ -850,7 +858,7 @@ function summary() {
     '   Bedrock  : ' + bedrockUsage.calls + ' model calls, ' + bedrockUsage.embeddings + ' embeddings, ' +
     bedrockUsage.inputTokens + ' in / ' + bedrockUsage.outputTokens + ' out\n' +
     '\n\x1b[90m   docs/  for the written explanations   infra/terraform/  for the IaC\n' +
-    '   npm start -- --only=<auth|ingest|scenarios|data|events|graphql|rest|geo|ai>\x1b[0m\n\n',
+    '   pnpm start --only=<auth|ingest|scenarios|data|events|graphql|rest|geo|ai>\x1b[0m\n\n',
   );
 }
 

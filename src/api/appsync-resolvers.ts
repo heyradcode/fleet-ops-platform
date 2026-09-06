@@ -49,6 +49,7 @@ import { incidentId as newIncidentId } from '../platform/ids.ts';
 import { bus } from '../aws/eventbridge.ts';
 import { publishToSubscribers } from './subscriptions.ts';
 import { b64urlEncode } from '../platform/crypto.ts';
+import { HOS_THRESHOLD_MINUTES } from '../integrations/connector.ts';
 
 /**
  * The AppSync Lambda event. `identity` is populated from the verified Cognito
@@ -267,7 +268,7 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
       requireRole(principal, 'admin', 'dispatcher');
       const to = getDriver(principal, String((args.input as { toDriverId: string }).toDriverId));
       if (!to) throw new Error('unknown driver');
-      if (to.hosRemainingMinutes < 60) {
+      if (to.hosRemainingMinutes <= HOS_THRESHOLD_MINUTES.warning) {
         // A regulatory refusal, not a preference. Enforced here as well as in
         // the tool, because both are entry points to the same action.
         throw new Error(

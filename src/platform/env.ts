@@ -16,8 +16,8 @@
  * ReferenceError in the console, pointing at a line that looks completely
  * ordinary.
  *
- * This is the same class of problem as the `node:` imports that Phase 1 moved
- * behind `src/platform/` - code that is invisible to the type checker, fine
+ * This is the same class of problem as the `node:` imports that live behind
+ * `src/platform/` - code that is invisible to the type checker, fine
  * under Node, and fatal in a browser - and it is worth noting that it slipped
  * past the CI check written for exactly that class, because that check looked
  * for imports and this is a bare global. The check now looks for both.

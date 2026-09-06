@@ -17,12 +17,21 @@
  *    By the time anything renders with a session, the transport already has it.
  */
 import { useCallback, useEffect, useState } from 'react';
-import { localAuth } from './local.ts';
+import { auth, usingCognito } from './provider.ts';
+import { completeRedirect } from './cognito.ts';
 import { inProcessTransport } from '../transport/in-process.ts';
 import type { Session } from './index.ts';
 
-export function useRestoredSession(): [Session | null, (s: Session | null) => void] {
+type Restored = [
+  session: Session | null,
+  setSession: (s: Session | null) => void,
+  /** Why the page arrived signed out, when there is a reason worth showing. */
+  restoreError: string | null,
+];
+
+export function useRestoredSession(): Restored {
   const [session, setState] = useState<Session | null>(null);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
 
   // Transport first, React second. Never the other way round - see above.
   const setSession = useCallback((s: Session | null) => {
@@ -30,9 +39,27 @@ export function useRestoredSession(): [Session | null, (s: Session | null) => vo
     setState(s);
   }, []);
 
-  // Restore on load, so a refresh does not sign you out. Re-verified rather
-  // than trusted - see localAuth.restore().
-  useEffect(() => { setSession(localAuth.restore()); }, [setSession]);
+  useEffect(() => {
+    const params = new URLSearchParams(globalThis.location?.search ?? '');
 
-  return [session, setSession];
+    // Back from the hosted UI. The code in the URL is single-use and must not
+    // survive a refresh, so it is exchanged and then scrubbed from history.
+    if (usingCognito && (params.has('code') || params.has('error'))) {
+      completeRedirect(params)
+        .then((s) => {
+          globalThis.history.replaceState(null, '', globalThis.location.pathname);
+          setSession(s);
+        })
+        .catch((err: unknown) => {
+          setRestoreError(err instanceof Error ? err.message : 'Sign-in failed. Try again.');
+        });
+      return;
+    }
+
+    // Restore on load, so a refresh does not sign you out. Re-verified rather
+    // than trusted - see localAuth.restore().
+    setSession(auth.restore());
+  }, [setSession]);
+
+  return [session, setSession, restoreError];
 }

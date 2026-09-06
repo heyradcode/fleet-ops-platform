@@ -23,7 +23,7 @@
  */
 import type { Driver, DriverStatus, Telemetry } from '../platform/types.ts';
 import { DISTRICTS } from './districts.ts';
-import { CORRIDORS, corridorsFor, pointAlong, type Corridor } from './polylines.ts';
+import { CORRIDORS, corridorsFor, pointAlong } from './polylines.ts';
 import { seededRandom, DEMO_SEED, type Random } from '../platform/random.ts';
 import { DEMO_EPOCH } from '../platform/clock.ts';
 import { telemetryId } from '../platform/ids.ts';
@@ -214,8 +214,4 @@ export function fleetAsDrivers(tenantId: string, seed = DEMO_SEED): Driver[] {
     tenantId,
     ...driver,
   }));
-}
-
-export function corridorFor(driver: GeneratedDriver): Corridor | undefined {
-  return CORRIDORS.find((c) => c.corridorId === driver.corridorId);
 }

@@ -12,6 +12,10 @@ pnpm start       # the backend, narrated, in your terminal
 pnpm web         # the dispatch board, at localhost:5180
 ```
 
+The board opens on a sign-in page. Four demo accounts, no passwords: a district
+dispatcher, a safety reviewer, an operations lead and a user from a different
+carrier. What each one sees is decided by the token they are issued.
+
 <sub>Node 22+ for the backend — it is TypeScript and Node runs it directly via
 type-stripping, so there is no build step. The board is a separate workspace
 with its own dependencies.</sub>
@@ -124,7 +128,7 @@ and flag the mistakes that are easy to make.
 
 ---
 
-## Things worth being able to say out loud
+## Design decisions
 
 - **Telemetry never reaches the event bus.** Readings are persisted and folded
   into hot state; only exceptions are published. A test asserts it, because it
@@ -136,9 +140,9 @@ and flag the mistakes that are easy to make.
   stationary. Hours-of-service and panic are exempt entirely; a regulatory
   clock is not a sensor to be double-checked.
 - **One road closure is one incident.** Exceptions merge on corridor, 3km and a
-  15-minute window. The site-shaped version of this code merged within 150km,
-  which is wider than a whole district — copied over unchanged it would have
-  collapsed every exception in Dallas into one permanent incident.
+  15-minute window. An earlier cut of this rule merged within 150km, which is
+  wider than a whole district — it would have collapsed every exception in
+  Dallas into one permanent incident.
 - **Tenancy is a type, not a filter.** Every repository function takes a
   `Principal` and derives the partition key itself. `dynamodb:LeadingKeys`
   enforces the same boundary at AWS, and Postgres row-level security enforces
@@ -202,7 +206,7 @@ pnpm start --only=ingest           # auth | ingest | scenarios | data | events
 pnpm start --only=ai               # graphql | rest | geo | ai
 pnpm dev                           # the same, restarting on every save
 
-pnpm test                          # 90 tests, no network
+pnpm test                          # 96 tests, no network
 pnpm typecheck
 
 pnpm web                           # the dispatch board
@@ -229,6 +233,8 @@ src/          the platform. Zero runtime dependencies.
   aws/          local stand-ins for six AWS services
   data/         seeded generator, road corridors, scenarios, runbooks
 web/          the dispatch board. React + MapLibre, its own dependencies.
+  auth/         sign-in: home-realm discovery, the token trigger, the verifier
+  transport/    the boundary that lets the backend run in the browser tab
 infra/        Terraform. Read-only.
 python/       the same designs as Lambdas, with real boto3 calls.
 docs/         how each part of the stack works.

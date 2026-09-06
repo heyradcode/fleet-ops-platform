@@ -27,8 +27,10 @@ export function buildIngestWorkflow(principal: Principal, since: string) {
     },
     {
       // Fan-out. In ASL this is a Map state with ItemsPath and MaxConcurrency.
-      // Concurrency 4 keeps us well inside every vendor's rate limit while
-      // still cutting wall-clock time by roughly 4x.
+      // Each iterator is a DIFFERENT vendor, so no single vendor's rate limit
+      // is in play here; the cap bounds our own concurrency (and the Lambda
+      // account limit it draws on), not theirs. Per-vendor limits belong in
+      // the connector, where the retry and breaker already live.
       type: 'Map',
       name: 'CollectFromProviders',
       items: (cs) => cs,

@@ -18,7 +18,7 @@
 import type {
   Driver, Exception, Incident, Principal, RawRecord, Telemetry,
 } from '../platform/types.ts';
-import { connectorsFor, breakers, safeConcurrency } from '../integrations/registry.ts';
+import { connectorsFor, breakers } from '../integrations/registry.ts';
 import { withRetry, severityFor, type Connector } from '../integrations/connector.ts';
 import { archiveRaw, appendHistory } from '../aws/s3.ts';
 import { telemetryStream, type Batch, type BatchResult } from '../aws/kinesis.ts';
@@ -73,23 +73,6 @@ export async function collectOne(args: {
     log.error('collector failed, continuing', { provider: connector.provider, error: message });
     return { failed: connector.provider };
   }
-}
-
-/**
- * The full fan-out, respecting each vendor's rate limit.
- *
- * Note `connectorsFor(principal)`: a carrier runs the two or three vendors it
- * actually bought, not all eight. See integrations/registry.ts.
- */
-export async function collectAll(input: PipelineInput) {
-  const results = [];
-  for (const connector of connectorsFor(input.principal)) {
-    // safeConcurrency() would cap parallelism per vendor in a Map state; here
-    // the loop is sequential-per-vendor for readable, deterministic output.
-    void safeConcurrency(connector);
-    results.push(await collectOne({ connector, input }));
-  }
-  return results;
 }
 
 // ---------------------------------------------------------------------------

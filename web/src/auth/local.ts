@@ -55,9 +55,7 @@ export const DEMO_ACCOUNTS = [
 ] as const;
 
 function labelFor(idp: string): string {
-  if (idp === 'COGNITO') return 'Continue with email';
-  const provider = IDENTITY_PROVIDERS.find((p) => p.name === idp);
-  return provider ? `Continue with ${idp}` : `Continue with ${idp}`;
+  return idp === 'COGNITO' ? 'Continue with email' : `Continue with ${idp}`;
 }
 
 function kindFor(idp: string): Realm['kind'] {

@@ -11,7 +11,7 @@ the ones that run offline.
 | `geospatial/postgis_lambda.py` | Aurora Data API, `ST_DWithin` / `ST_AsGeoJSON` / `ST_ClusterDBSCAN`, coordinate validation, MapBox style expressions |
 
 **These are read-only reference.** They need `boto3` and real AWS credentials.
-The runnable demo is the TypeScript one - `npm start` from the repo root - which
+The runnable demo is the TypeScript one - `pnpm start` from the repo root - which
 executes the same architecture end to end with zero dependencies and no AWS
 account.
 

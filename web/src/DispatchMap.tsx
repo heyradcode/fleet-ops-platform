@@ -145,8 +145,8 @@ export function DispatchMap({ drivers, flagged, selectedId, onSelect, onBasemap,
       m?.remove();
       map.current = null;
     };
-    // Recreated only when the basemap mode is forced to change.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Recreated only when the basemap mode is forced to change. The other
+    // props are read through `latest`, so they are deliberately not deps.
   }, [basemap]);
 
   // --- Update the fleet without touching the map --------------------------
@@ -165,7 +165,6 @@ export function DispatchMap({ drivers, flagged, selectedId, onSelect, onBasemap,
     for (const d of drivers) bounds.extend([d.lon, d.lat]);
     m.fitBounds(bounds, { padding: { top: 60, right: 60, bottom: 60, left: 60 }, maxZoom: 10, duration: 600 });
     // fleetKey, not drivers: a position tick must not yank the viewport.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, fleetKey]);
 
   return <div className="map" ref={container} />;

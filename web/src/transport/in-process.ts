@@ -178,7 +178,7 @@ export const inProcessTransport: Transport = {
     } satisfies BoardSnapshot;
   },
 
-  async askAgent(question, districtId) {
+  async askAgent(question) {
     if (!seeded) { seed(); seeded = true; }
     await prepareAgent();
 

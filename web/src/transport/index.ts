@@ -12,9 +12,9 @@
  *
  * The in-process implementation works because `src/aws/` is already a set of
  * local stand-ins for DynamoDB, S3, EventBridge, Step Functions and Bedrock,
- * and because Phase 1 of the migration removed every `node:` import from the
- * shared module graph. Neither of those was done for the front end - they were
- * done because they were right - and this falls out of them.
+ * and because the shared module graph contains no `node:` import. Neither of
+ * those was done for the front end - they were done because they were right -
+ * and this falls out of them.
  *
  * What that buys, beyond "the demo runs offline": it makes "the client depends
  * on the API contract, not the API implementation" a demonstrated fact rather
@@ -87,13 +87,17 @@ export type Transport = {
   /**
    * Ask the assistant about a driver.
    *
+   * No district argument, deliberately. The agent's reach comes from the
+   * caller's TOKEN and the tools enforce it; a view parameter here would look
+   * like it narrowed something when it could not.
+   *
    * Returns the full trace, not just the answer, and that is a product
    * decision as much as a debugging one: a dispatcher trusts a recommendation
    * far more when they can see which tools produced it and which runbook it
    * came from. An answer with no visible provenance is a thing to be sceptical
    * of, and it should be.
    */
-  askAgent(question: string, districtId?: string): Promise<AgentResult>;
+  askAgent(question: string): Promise<AgentResult>;
 };
 
 export type { AgentResult };

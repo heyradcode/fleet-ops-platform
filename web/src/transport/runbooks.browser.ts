@@ -5,8 +5,8 @@
  * files with `readdirSync`. Neither knows about the other; both fill the same
  * registry, and `knowledge-base.ts` never learns which one it got.
  *
- * This is the payoff for the shape chosen in Phase 1. Had the knowledge base
- * imported `node:fs` directly - the obvious way to write it - the front end
+ * This is the payoff for keeping `node:fs` out of the shared graph. Had the
+ * knowledge base imported it directly - the obvious way to write it - the front end
  * would have needed either a server in front of the agent or a second copy of
  * the runbooks. Bundlers resolve imports whether or not the code path runs, so
  * a single static `node:fs` anywhere in the graph would have made this

@@ -87,18 +87,3 @@ export function connectorsFor(principal: Principal): Connector[] {
 export const breakers = new Map<ProviderId, CircuitBreaker>(
   connectors.map((c) => [c.provider, new CircuitBreaker(c.provider)]),
 );
-
-export function connectorFor(provider: ProviderId): Connector {
-  const found = connectors.find((c) => c.provider === provider);
-  if (!found) throw new Error('no connector registered for ' + provider);
-  return found;
-}
-
-/**
- * How many of a vendor's calls we are willing to have in flight at once.
- * Feeds the Step Functions Map state's maxConcurrency so our own fan-out
- * cannot rate-limit us.
- */
-export function safeConcurrency(c: Connector): number {
-  return Math.max(1, Math.min(8, Math.floor(c.rateLimitPerMin / 60)));
-}

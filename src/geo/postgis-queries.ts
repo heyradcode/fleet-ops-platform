@@ -216,4 +216,3 @@ export const SQL = {
  * Row-level security in schema.sql enforces the same boundary a second time, so
  * even a query that forgot its tenant filter returns nothing.
  */
-export const AURORA_DATA_API_EXAMPLE = SQL.availableDriversNear;

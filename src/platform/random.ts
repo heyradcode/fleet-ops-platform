@@ -53,11 +53,6 @@ export function setRandom(r: Random): void { current = r; }
 /** The function the rest of the codebase calls instead of Math.random. */
 export function random(): number { return current(); }
 
-/** Convenience: an integer in [min, max]. */
-export function randomInt(min: number, max: number): number {
-  return min + Math.floor(random() * (max - min + 1));
-}
-
 /** Convenience: pick one element. Returns undefined for an empty array. */
 export function pick<T>(items: readonly T[]): T | undefined {
   return items.length === 0 ? undefined : items[Math.floor(random() * items.length)];

@@ -28,6 +28,7 @@ import { knowledgeBase } from './knowledge-base.ts';
 import { incidentId } from '../platform/ids.ts';
 import { now, nowIso } from '../platform/clock.ts';
 import { canUseTool } from './guardrails.ts';
+import { HOS_THRESHOLD_MINUTES } from '../integrations/connector.ts';
 
 export type ToolExecutor = (
   input: Record<string, unknown>,
@@ -235,7 +236,7 @@ export const TOOLS: Tool[] = [
 
       const to = getDriver(principal, String(input.toDriverId));
       if (!to) return 'ERROR: unknown toDriverId "' + input.toDriverId + '".';
-      if (to.hosRemainingMinutes < 60) {
+      if (to.hosRemainingMinutes <= HOS_THRESHOLD_MINUTES.warning) {
         // Refusing here rather than in the prompt matters: dispatching a driver
         // with no legal hours left is a regulatory violation, and it must be
         // impossible regardless of how convincingly the model was asked.

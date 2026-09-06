@@ -16,16 +16,16 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { inProcessTransport } from './transport/in-process.ts';
+import { formatHours, hosLevel } from './format.ts';
 import type { AgentResult, AgentTrace, Driver, Exception } from './transport/index.ts';
 
 type Props = {
   driver: Driver;
   exceptions: Exception[];
-  districtId?: string;
   onClose(): void;
 };
 
-export function DriverPanel({ driver, exceptions, districtId, onClose }: Props) {
+export function DriverPanel({ driver, exceptions, onClose }: Props) {
   const [asking, setAsking] = useState(false);
   const [result, setResult] = useState<AgentResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -45,7 +45,7 @@ export function DriverPanel({ driver, exceptions, districtId, onClose }: Props) 
     setAsking(true);
     setError(null);
     try {
-      setResult(await inProcessTransport.askAgent(question, districtId));
+      setResult(await inProcessTransport.askAgent(question));
     } catch (e) {
       // Errors state what happened and what to do, in the interface's voice.
       setError(e instanceof Error ? e.message : 'The assistant did not respond.');
@@ -77,9 +77,7 @@ export function DriverPanel({ driver, exceptions, districtId, onClose }: Props) 
             label="Drive time"
             value={formatHours(driver.hosRemainingMinutes)}
             mono
-            tone={driver.hosRemainingMinutes <= 40
-              ? 'critical'
-              : driver.hosRemainingMinutes <= 60 ? 'warning' : undefined}
+            tone={hosLevel(driver.hosRemainingMinutes) ?? undefined}
           />
           <Fact label="Position" value={`${driver.lat.toFixed(4)}, ${driver.lon.toFixed(4)}`} mono />
         </dl>
@@ -222,9 +220,4 @@ function questionFor(driver: Driver, exceptions: Exception[]): string {
         ? `${id} is low on drive time. Can they finish the run?`
         : `Is there anything I should know about ${id}?`;
   }
-}
-
-function formatHours(minutes: number): string {
-  const h = Math.floor(minutes / 60);
-  return `${h}h${String(minutes % 60).padStart(2, '0')}`;
 }

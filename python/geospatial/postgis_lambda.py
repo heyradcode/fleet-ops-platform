@@ -20,8 +20,8 @@ SQL does:
   What you must NOT do is open a raw psycopg connection per invocation. A
   thousand concurrent Lambdas means a thousand Postgres connections, and
   Postgres falls over in the low hundreds. This is the classic
-  serverless-meets-relational failure, and "we used RDS Proxy" is the answer
-  interviewers are listening for.
+  serverless-meets-relational failure, and RDS Proxy or the Data API is the
+  fix - pick one before the first load test, not after.
 """
 
 from __future__ import annotations

@@ -47,12 +47,6 @@ export function putDrivers(principal: Principal, drivers: Driver[]): void {
   })));
 }
 
-export function allDriverItems(principal: Principal, limit = 500): Driver[] {
-  return mainTable
-    .query({ pk: 'TENANT#' + principal.tenantId + '#DRIVER', limit })
-    .map(strip<Driver>);
-}
-
 /**
  * "Every driver in this district" - one Query on GSI1.
  *

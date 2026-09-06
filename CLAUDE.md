@@ -15,7 +15,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 90 tests, no network. Picks up web/ tests too.
+pnpm test                       # 96 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # dispatch board, http://localhost:5180
 pnpm web:build                  # typechecks web/ AND builds it
@@ -72,9 +72,9 @@ one, change the test deliberately rather than making it pass.
   deviations permanently undetectable. A second vendor OR a different kind of
   evidence for the same driver counts. `panic` and `hos-risk` are exempt — a
   regulatory clock is not a sensor to be double-checked.
-- **The merge radius is 3km / 15 minutes, on the same corridor.** The
-  site-shaped ancestor of this code used 150km, which is wider than a district
-  and would collapse everything in Dallas into one permanent incident.
+- **The merge radius is 3km / 15 minutes, on the same corridor.** An earlier
+  cut used 150km, which is wider than a district and would collapse everything
+  in Dallas into one permanent incident.
 - **Only `LOCATION_CAUSED` exception kinds merge with each other.** A road
   closure fires both `route-deviation` and `prolonged-idle`; merging only
   same-kind would page twice for one event.
@@ -104,6 +104,11 @@ real belongs in this repo.
   was a blank page. Configuration goes through `platform/env.ts`. This is the
   bug that motivated the browser-contract test, which loads the whole graph
   with `process` and `Buffer` deleted.
+- **Shared thresholds live in one place.** `HOS_THRESHOLD_MINUTES` in
+  `integrations/connector.ts` drives the detection rule, the reassignment
+  guard AND the board's hours-of-service strip. It used to be typed three
+  times; an amber strip that disagreed with the rule would have been the
+  symptom.
 - **`crypto.randomUUID()` is secure-context only.** Undefined over plain http
   on a LAN address, which is how the board is reached behind a VPN that
   intercepts loopback. `platform/crypto.ts` falls back to `getRandomValues`.
@@ -143,5 +148,5 @@ src/ai/          RAG, agent loop, guardrails
 src/aws/         local stand-ins for 6 AWS services
 src/data/        generator, corridors, scenarios, runbooks, schema.sql
 web/src/transport/  the boundary that lets the backend run in the browser
-docs/migration-plan.md   how this repo became a fleet platform, and why
+web/src/auth/    sign-in: the same Cognito logic the Lambdas run, local issuer
 ```
