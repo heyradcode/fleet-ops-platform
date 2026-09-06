@@ -256,8 +256,9 @@ function synthesise(messages: Message[]): string {
     'Root-cause summary, grounded in ' + results.length + ' tool call(s):',
     ...results.map((r) => '  - ' + oneLine(r)),
     '',
-    'Recommended action: follow the retrieved runbook - start with the WAN',
-    'circuit check, then escalate to the carrier if loss persists past 15 min.',
+    'Recommended action: follow the retrieved runbook - work its triage steps',
+    'in order, and confirm the driver is safe before deciding anything about',
+    'the load.',
   ].join('\n');
 }
 

@@ -3,8 +3,18 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
-  // The board imports the backend directly from ../src, so Vite has to be
-  // allowed to serve files from above the web/ root.
-  server: { fs: { allow: ['..'] } },
+  server: {
+    // Bind all interfaces rather than loopback only. A VPN client that proxies
+    // or rewrites localhost will otherwise make the dev server unreachable on
+    // the very machine running it - the failure looks like the server being
+    // down rather than a name-resolution problem.
+    //
+    // This does expose the dev server to your local network while it runs.
+    // Fine for a dev server on a trusted network; do not do it on a hostile one.
+    host: true,
+    // The board imports the backend directly from ../src, so Vite has to be
+    // allowed to serve files from above the web/ root.
+    fs: { allow: ['..'] },
+  },
   build: { outDir: 'dist', sourcemap: true },
 });
