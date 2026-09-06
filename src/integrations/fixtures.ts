@@ -44,6 +44,7 @@ export const samsaraVehicleStats = {
         reverseGeo: { formattedLocation: 'I-35E S, Dallas, TX' },
       },
       engineStates: { time: T, value: 'On' },
+      idleMinutes: 0,
       // Samsara reports harsh events on the vehicle stats feed as well as via
       // webhooks. This is the same physical event Lytx also sees.
       harshEvent: { time: T, behaviourLabel: 'Harsh Braking', downloadForwardVideoUrl: null, gForce: 0.62 },
@@ -58,6 +59,7 @@ export const samsaraVehicleStats = {
         reverseGeo: { formattedLocation: 'Depot, Austin, TX' },
       },
       engineStates: { time: T, value: 'Idle' },
+      idleMinutes: 23,
       harshEvent: null,
     },
   ],
@@ -178,7 +180,7 @@ export const lytxEvents = {
       behaviors: [
         { id: 41, name: 'Braking - Hard', severity: 'High' },
         { id: 12, name: 'Following Distance', severity: 'Low' },
-      ],
+      ] as Array<{ id: number; name: string; severity: string }>,
       // Lytx reports peak g-force on the trigger.
       triggerGForce: 0.59,
       status: 'Reviewed',

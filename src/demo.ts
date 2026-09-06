@@ -24,6 +24,14 @@ import { connectors, connectorsFor, breakers } from './integrations/registry.ts'
 import { chaos } from './integrations/fixtures.ts';
 import { rawBucket, historyBucket } from './aws/s3.ts';
 import { telemetryStream } from './aws/kinesis.ts';
+import { SCENARIOS } from './data/scenarios.ts';
+import { generateFleet, generateTrace } from './data/generate.ts';
+import { CORRIDORS } from './data/polylines.ts';
+import {
+  normaliseAll as normaliseScenario, resolveTerritory as resolveScenario,
+  deriveRouteAdherence, evaluate as evaluateScenario,
+  detectIncidents as detectScenario,
+} from './pipeline/steps.ts';
 import { mainTable } from './aws/dynamodb.ts';
 import { bus } from './aws/eventbridge.ts';
 
@@ -79,6 +87,7 @@ async function main() {
 
   if (wants('auth')) await sectionAuth();
   if (wants('ingest')) await sectionIngest();
+  if (wants('scenarios')) await sectionScenarios();
   if (wants('data')) { await ensureData(); sectionData(); }
   if (wants('events')) await sectionEvents();
   if (wants('graphql')) { await ensureData(); await sectionGraphql(); }
@@ -202,6 +211,54 @@ async function sectionAuth() {
 // ===========================================================================
 // 2. INGEST
 // ===========================================================================
+
+/**
+ * Six scripted situations, each proving one claim about how the platform
+ * behaves. This is the section that turns the architecture's assertions into
+ * things you can watch happen.
+ */
+async function sectionScenarios() {
+  section('2b', 'Scenarios: what the rules actually decide');
+
+  ensurePrincipals();
+  const fleet = generateFleet();
+  const trace = generateTrace({ tenantId: operator.tenantId, ticks: 60 });
+
+  note(fleet.length + ' synthetic drivers across 5 districts, on ' + CORRIDORS.length +
+    ' road corridors.');
+  note(trace.length + ' ticks x ' + trace[0].readings.length + ' drivers = ' +
+    trace.length * trace[0].readings.length + ' position readings, all from one seed.');
+  note('Every driver, position and reading here is generated. Real driver');
+  note('telemetry is a location trace of an identifiable person.');
+  note('');
+
+  for (const scenario of SCENARIOS) {
+    const collected = scenario.build(operator.tenantId).map((raw) => ({ raw }));
+    const readings = deriveRouteAdherence(
+      resolveScenario(operator, normaliseScenario(operator, collected)),
+    );
+    const exceptions = evaluateScenario(operator, readings);
+    const incidents = detectScenario(operator, exceptions);
+
+    process.stdout.write('   \x1b[1m' + scenario.title + '\x1b[0m\n');
+    process.stdout.write('   \x1b[90m' + scenario.proves + '\x1b[0m\n');
+    process.stdout.write('     ' + String(readings.length).padStart(3) + ' readings  ' +
+      String(exceptions.length).padStart(3) + ' exceptions  ' +
+      String(incidents.length).padStart(2) + ' incidents\n');
+
+    for (const i of incidents) {
+      process.stdout.write('     \x1b[31m-> ' + i.title + '\x1b[0m\n');
+    }
+    if (incidents.length === 0 && exceptions.length > 0) {
+      process.stdout.write('     \x1b[32m-> nothing paged. ' + exceptions.length +
+        ' exception(s) raised, none corroborated.\x1b[0m\n');
+    }
+    process.stdout.write('\n');
+  }
+
+  note('The second one is the one worth dwelling on. Any dashboard can light');
+  note('up; a board that has learned to cry wolf is worse than no board at all.');
+}
 
 async function sectionIngest() {
   section('2', 'Step Functions: fan out to this carrier vendors, normalise, correlate');
@@ -734,7 +791,7 @@ function summary() {
     '   Bedrock  : ' + bedrockUsage.calls + ' model calls, ' + bedrockUsage.embeddings + ' embeddings, ' +
     bedrockUsage.inputTokens + ' in / ' + bedrockUsage.outputTokens + ' out\n' +
     '\n\x1b[90m   docs/  for the written explanations   infra/terraform/  for the IaC\n' +
-    '   npm start -- --only=<auth|ingest|data|events|graphql|rest|geo|ai>\x1b[0m\n\n',
+    '   npm start -- --only=<auth|ingest|scenarios|data|events|graphql|rest|geo|ai>\x1b[0m\n\n',
   );
 }
 

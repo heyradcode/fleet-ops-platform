@@ -9,7 +9,8 @@ import { StateMachine, type State } from '../aws/stepfunctions.ts';
 import { connectorsFor } from '../integrations/registry.ts';
 import type { Driver, Exception, Principal, Telemetry } from '../platform/types.ts';
 import {
-  collectOne, normaliseAll, streamAndCollect, resolveTerritory, foldDriverState,
+  collectOne, normaliseAll, streamAndCollect, resolveTerritory, deriveRouteAdherence,
+  foldDriverState,
   evaluate, detectIncidents, publish,
   type PipelineInput,
 } from './steps.ts';
@@ -54,7 +55,7 @@ export function buildIngestWorkflow(principal: Principal, since: string) {
     {
       type: 'Task',
       name: 'ResolveTerritory',
-      fn: (readings) => resolveTerritory(principal, readings),
+      fn: (readings) => deriveRouteAdherence(resolveTerritory(principal, readings)),
       // Resolution is a nice-to-have: a reading with no district is still a
       // valid reading, and an ELD never has coordinates at all. Catch and
       // continue rather than fail the execution.

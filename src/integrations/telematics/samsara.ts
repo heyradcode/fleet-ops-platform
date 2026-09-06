@@ -75,6 +75,25 @@ export const samsara: Connector = {
         },
       });
 
+      // Samsara reports engine state, and an idling truck is the second kind
+      // of evidence that turns a route deviation from GPS noise into something
+      // real. A truck carries one GPS unit, so this is where corroboration for
+      // a deviation has to come from - not from a second telematics vendor.
+      if (v.engineStates.value === 'Idle') {
+        const idleMinutes = Number(v.idleMinutes ?? 0);
+        out.push({
+          tenantId: raw.tenantId,
+          telemetryId: telemetryId('samsara', v.id + ':idle', v.engineStates.time),
+          provider: 'samsara', domain: 'telematics', kind: 'idle',
+          driverId, sourceRef: v.id,
+          value: idleMinutes, unit: 'minutes',
+          severity: severityFor('idle', idleMinutes),
+          observedAt: v.engineStates.time,
+          location: { lon: v.gps.longitude, lat: v.gps.latitude, district: '' },
+          attributes: { vehicleName: v.name, engineState: v.engineStates.value },
+        });
+      }
+
       if (v.harshEvent) {
         out.push({
           tenantId: raw.tenantId,

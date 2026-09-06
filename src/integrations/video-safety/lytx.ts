@@ -54,6 +54,25 @@ export const lytx: Connector = {
       // kinds - adding a TelemetryKind is a schema change every consumer sees,
       // and should be a deliberate decision, not a side effect of one vendor
       // having a richer taxonomy than the others.
+      // The panic button is physically on the dashcam, so it arrives here.
+      // It is the one reading that must never wait for a batch window or a
+      // second opinion - see NEEDS_NO_CORROBORATION in pipeline/steps.ts.
+      const panic = e.behaviors.find((b) => b.name === 'Panic Button');
+      if (panic) {
+        out.push({
+          tenantId: raw.tenantId,
+          telemetryId: telemetryId('lytx', e.eventId, e.recordDateTime),
+          provider: 'lytx', domain: 'video-safety', kind: 'panic',
+          driverId: e.driverId, sourceRef: e.vehicleId,
+          value: 1, unit: 'boolean',
+          severity: 'critical',
+          observedAt: e.recordDateTime,
+          location: { lon: e.longitude, lat: e.latitude, district: '' },
+          attributes: { behaviour: panic.name, reviewStatus: e.status },
+        });
+        continue;
+      }
+
       const braking = e.behaviors.find((b) => b.name.startsWith('Braking'));
       if (!braking) continue;
 

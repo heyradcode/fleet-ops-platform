@@ -19,14 +19,15 @@ import type {
   Driver, Exception, Incident, Principal, RawRecord, Telemetry,
 } from '../platform/types.ts';
 import { connectorsFor, breakers, safeConcurrency } from '../integrations/registry.ts';
-import { withRetry, type Connector } from '../integrations/connector.ts';
+import { withRetry, severityFor, type Connector } from '../integrations/connector.ts';
 import { archiveRaw, appendHistory } from '../aws/s3.ts';
 import { telemetryStream, type Batch, type BatchResult } from '../aws/kinesis.ts';
 import { bus } from '../aws/eventbridge.ts';
 import { putTelemetry, putDrivers, putExceptions, putIncident } from '../platform/repository.ts';
 import { allDrivers, districtContaining, locationOf } from '../geo/driver-repository.ts';
 import { haversineKm } from '../geo/spatial.ts';
-import { exceptionId, incidentId } from '../platform/ids.ts';
+import { nearestCorridor } from '../data/polylines.ts';
+import { exceptionId, incidentId, telemetryId } from '../platform/ids.ts';
 import { nowIso } from '../platform/clock.ts';
 import { log } from '../platform/logger.ts';
 
@@ -231,6 +232,46 @@ export function resolveTerritory(principal: Principal, readings: Telemetry[]): T
 }
 
 /**
+ * Derive route adherence: how far off the planned corridor is this driver?
+ *
+ * DERIVED, not reported. No vendor knows your route plan - they know where the
+ * truck is. Distance from the corridor is something the platform computes, and
+ * that is exactly why a route deviation can never be corroborated by "a second
+ * telematics vendor": there is only one position, and only one derivation from
+ * it. What corroborates a deviation is a DIFFERENT KIND of evidence - the
+ * vehicle also being stationary, a missed stop - which is the rule
+ * isCorroborated() implements.
+ *
+ * Emitted as its own reading rather than an attribute on the position, so it
+ * gets its own threshold, its own severity, and its own place in the timeline.
+ */
+export function deriveRouteAdherence(readings: Telemetry[]): Telemetry[] {
+  const derived: Telemetry[] = [];
+
+  for (const t of readings) {
+    if (t.kind !== 'position' || !t.location) continue;
+
+    const nearest = nearestCorridor(t.location, t.location.district);
+    if (!nearest) continue;
+
+    derived.push({
+      ...t,
+      telemetryId: telemetryId(t.provider, t.sourceRef + ':adherence', t.observedAt),
+      kind: 'route-adherence',
+      value: nearest.metres,
+      unit: 'metres',
+      severity: severityFor('route-adherence', nearest.metres),
+      attributes: {
+        corridorId: nearest.corridor.corridorId,
+        corridorName: nearest.corridor.name,
+      },
+    });
+  }
+
+  return [...readings, ...derived];
+}
+
+/**
  * Fold the newest reading for each driver into the hot-state item.
  *
  * OVERWRITE, never append. This is the write that keeps the operational store
@@ -341,6 +382,24 @@ function worst(readings: Telemetry[]): Exception['severity'] {
 // 5. DETECT - corroborate and merge exceptions into incidents
 // ---------------------------------------------------------------------------
 
+/**
+ * Exception kinds caused by WHERE the driver is.
+ *
+ * These merge with each other, because one external cause produces several of
+ * them at once: a closed road makes drivers leave the corridor AND sit still.
+ * Raising "route deviation affecting 14" and "prolonged idle affecting 14" as
+ * two separate pages for one closure is the same double-paging the merge rule
+ * exists to prevent, one level up.
+ *
+ * Everything else - hours-of-service, panic - is about that DRIVER rather than
+ * that place, and never merges with anything. A driver running out of legal
+ * hours next to a pile-up has two unrelated problems, and a dispatcher needs to
+ * see both.
+ */
+const LOCATION_CAUSED = new Set<Exception['kind']>([
+  'route-deviation', 'prolonged-idle', 'geofence-breach', 'harsh-braking',
+]);
+
 /** How close two exceptions must be to be the same event. */
 const MERGE_RADIUS_KM = 3;
 /** And how close in time. Drivers move; sites do not. */
@@ -349,11 +408,10 @@ const MERGE_WINDOW_MS = 15 * 60 * 1000;
 /**
  * Correlation, kept deliberately simple and explainable:
  *
- *   a) an exception seen by 2+ INDEPENDENT vendors is real; one seen by a
- *      single vendor is a candidate, not an incident. Agreement across
- *      independent hardware is the cheapest noise filter there is - a GPS drift
- *      spike that looks like a route deviation, corroborated by nothing, is
- *      noise. The same deviation plus a stationary vehicle is real.
+ *   a) an exception needs a SECOND INDEPENDENT SIGNAL before it becomes a
+ *      page - either a second vendor, or a different kind of evidence for the
+ *      same driver at the same moment. See isCorroborated() for why "a second
+ *      vendor" alone is too narrow a rule.
  *   b) exceptions close in SPACE and TIME are one incident. A road closure
  *      affecting fourteen drivers is one page, not fourteen.
  *
@@ -365,13 +423,60 @@ const MERGE_WINDOW_MS = 15 * 60 * 1000;
  * is needed for the same reason: two drivers passing the same point an hour
  * apart are two events, not one.
  *
- * Panic is deliberately exempt from corroboration. Waiting for a second opinion
- * before escalating a panic button would be an indefensible design.
+ * Panic and hours-of-service are exempt - see NEEDS_NO_CORROBORATION.
  */
+/**
+ * Exception kinds that do NOT need a second opinion.
+ *
+ * Both come from authoritative sources rather than noisy sensors:
+ *
+ *   panic     a person pressed a button. Waiting for corroboration before
+ *             escalating that would be indefensible.
+ *   hos-risk  the hours-of-service clock is a legally mandated, tamper-evident
+ *             device, and a truck carries exactly one. There is no second ELD
+ *             to agree with it, and treating a compliance record as a sensor
+ *             reading to be double-checked misunderstands what it is.
+ *
+ * Everything else is a sensor and must be corroborated.
+ */
+const NEEDS_NO_CORROBORATION = new Set<Exception['kind']>(['panic', 'hos-risk']);
+
+/** How close two exceptions must be to count as evidence of the same thing. */
+const CORROBORATION_WINDOW_MS = 5 * 60 * 1000;
+
+/**
+ * Is there independent evidence for this exception?
+ *
+ * TWO INDEPENDENT SIGNALS, and it matters that "independent" is broader than
+ * "a second vendor". A truck carries one GPS unit, so a route deviation can
+ * never be witnessed by two telematics vendors - demanding that would make
+ * route deviations permanently undetectable. What makes a deviation real is
+ * different evidence pointing the same way:
+ *
+ *   deviation alone                       -> GPS drift. Noise.
+ *   deviation + the vehicle is stationary -> something actually happened.
+ *   hard braking on the accelerometer AND on the dashcam -> two devices agree.
+ *
+ * So: two distinct vendors, OR a second exception of a different kind for the
+ * same driver at the same time. Either one is a second witness.
+ */
+function isCorroborated(exception: Exception, all: Exception[]): boolean {
+  if (NEEDS_NO_CORROBORATION.has(exception.kind)) return true;
+
+  // Two independent vendors saw the same thing.
+  if (exception.providers.length >= 2) return true;
+
+  // Or a different kind of evidence for the same driver, at the same moment.
+  const at = Date.parse(exception.raisedAt);
+  return all.some((other) =>
+    other.exceptionId !== exception.exceptionId &&
+    other.driverId === exception.driverId &&
+    other.kind !== exception.kind &&
+    Math.abs(Date.parse(other.raisedAt) - at) <= CORROBORATION_WINDOW_MS);
+}
+
 export function detectIncidents(principal: Principal, exceptions: Exception[]): Incident[] {
-  const corroborated = exceptions.filter(
-    (e) => e.kind === 'panic' || e.providers.length >= 2,
-  );
+  const corroborated = exceptions.filter((e) => isCorroborated(e, exceptions));
 
   const incidents: Incident[] = [];
   const claimed = new Set<string>();
@@ -380,9 +485,13 @@ export function detectIncidents(principal: Principal, exceptions: Exception[]): 
     if (claimed.has(seed.exceptionId)) continue;
 
     const seedTime = Date.parse(seed.raisedAt);
+    const mergeable = LOCATION_CAUSED.has(seed.kind);
+
     const merged = corroborated.filter((e) => {
       if (claimed.has(e.exceptionId)) return false;
-      if (e.kind !== seed.kind) return false;
+      if (e.exceptionId === seed.exceptionId) return true;
+      // A driver-specific exception is an incident of its own, always.
+      if (!mergeable || !LOCATION_CAUSED.has(e.kind)) return false;
       if (e.districtId !== seed.districtId) return false;
       if (Math.abs(Date.parse(e.raisedAt) - seedTime) > MERGE_WINDOW_MS) return false;
       return haversineKm(seed.location, e.location) <= MERGE_RADIUS_KM;
@@ -394,9 +503,12 @@ export function detectIncidents(principal: Principal, exceptions: Exception[]): 
     incidents.push({
       tenantId: principal.tenantId,
       incidentId: incidentId(),
+      // Name the incident after the most severe kind in it, not the seed - the
+      // seed is just whichever exception happened to be first in the list.
       title: driverIds.length > 1
-        ? titleFor(seed.kind) + ' affecting ' + driverIds.length + ' drivers in ' + seed.districtId
-        : titleFor(seed.kind) + ' - driver ' + driverIds[0],
+        ? titleFor(dominantKind(merged)) + ' affecting ' + driverIds.length +
+          ' drivers in ' + seed.districtId
+        : titleFor(dominantKind(merged)) + ' - driver ' + driverIds[0],
       severity: worstException(merged),
       status: 'open',
       districtId: seed.districtId,
@@ -407,6 +519,25 @@ export function detectIncidents(principal: Principal, exceptions: Exception[]): 
   }
 
   return incidents;
+}
+
+/**
+ * Which kind names a merged incident.
+ *
+ * Ordered by how much it tells the dispatcher. "Route deviation affecting 14
+ * drivers" is actionable; "prolonged idle affecting 14 drivers" describes the
+ * same closure far less usefully.
+ */
+const KIND_PRIORITY: Exception['kind'][] = [
+  'panic', 'harsh-braking', 'route-deviation', 'geofence-breach',
+  'hos-risk', 'prolonged-idle',
+];
+
+function dominantKind(exceptions: Exception[]): Exception['kind'] {
+  for (const kind of KIND_PRIORITY) {
+    if (exceptions.some((e) => e.kind === kind)) return kind;
+  }
+  return exceptions[0].kind;
 }
 
 function titleFor(kind: Exception['kind']): string {
