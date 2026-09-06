@@ -6,6 +6,12 @@ variable "name_prefix" { type = string }
 variable "env" { type = string }
 variable "embedding_model_arn" { type = string }
 
+# The Aurora cluster the vector store lives in. Reusing the cluster that already
+# holds the spatial data is what makes pgvector the cheap option - no new
+# service, no standing per-hour floor cost.
+variable "aurora_cluster_arn" { type = string }
+variable "aurora_secret_arn" { type = string }
+
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
@@ -107,14 +113,40 @@ resource "aws_s3_bucket_public_access_block" "runbooks" {
 # -----------------------------------------------------------------------------
 # Bedrock Knowledge Base
 # -----------------------------------------------------------------------------
-# The vector store is OpenSearch Serverless here. Alternatives, and when:
-#   Aurora pgvector  - you already run Aurora; cheapest at small scale, and it
-#                      lets you JOIN embeddings against relational data.
-#   OpenSearch Svls  - best hybrid (semantic + BM25) search; higher floor cost.
-#   Pinecone/Redis   - managed third party; fine, but another vendor.
+# CHOOSING THE VECTOR STORE, and this is the most expensive decision in the
+# module by a wide margin:
 #
-# The collection and index are omitted for brevity - see
-# aws_opensearchserverless_collection and the vector index mapping.
+#   Aurora pgvector  You already run Aurora for the spatial data, so the
+#                    marginal cost is a table and an index. It also lets you
+#                    JOIN embeddings against relational data, which the others
+#                    cannot. THIS IS THE DEFAULT HERE.
+#   OpenSearch Svls  Better hybrid (semantic + BM25) search out of the box, but
+#                    it bills a MINIMUM number of OCUs whether or not anyone
+#                    queries it - a standing monthly cost in the hundreds for a
+#                    knowledge base of four runbooks. It is the single largest
+#                    cost trap in this stack, and the one people enable without
+#                    noticing.
+#   Pinecone/Redis   Managed third party. Fine, but another vendor, another
+#                    contract, and another place tenant data lives.
+#
+# Pick OpenSearch Serverless when hybrid search quality is measurably better on
+# YOUR eval set and the volume justifies the floor. Not before.
+
+# The pgvector table the knowledge base writes into. Bedrock requires the
+# schema to exist before CreateKnowledgeBase succeeds:
+#
+#   CREATE EXTENSION IF NOT EXISTS vector;
+#   CREATE TABLE bedrock_kb (
+#       id          uuid PRIMARY KEY,
+#       embedding   vector(1024),          -- must match the embedding model
+#       chunks      text,
+#       metadata    jsonb
+#   );
+#   CREATE INDEX ON bedrock_kb USING hnsw (embedding vector_cosine_ops);
+#
+# HNSW, not IVFFlat: it needs no training step, so it works on an empty table
+# and stays good as documents are added. IVFFlat is faster to build and worse
+# until you reindex, which nobody remembers to do.
 
 resource "aws_bedrockagent_knowledge_base" "runbooks" {
   name     = "${var.name_prefix}-runbooks"
@@ -129,20 +161,24 @@ resource "aws_bedrockagent_knowledge_base" "runbooks" {
   }
 
   storage_configuration {
-    type = "OPENSEARCH_SERVERLESS"
+    type = "RDS"
 
-    opensearch_serverless_configuration {
-      collection_arn    = "arn:aws:aoss:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:collection/REPLACE_ME"
-      vector_index_name = "meridian-runbooks"
+    rds_configuration {
+      resource_arn           = var.aurora_cluster_arn
+      credentials_secret_arn = var.aurora_secret_arn
+      database_name          = "meridian"
+      table_name             = "bedrock_kb"
 
       field_mapping {
-        vector_field   = "embedding"
-        text_field     = "text"
+        primary_key_field = "id"
+        vector_field      = "embedding"
+        text_field        = "chunks"
         # THE field that makes multi-tenant RAG safe. Retrieval requests pass a
         # filter on metadata, so tenant A cannot retrieve tenant B's documents.
         # Without it, a knowledge base is a cross-tenant data leak waiting to
-        # happen - the RAG equivalent of a missing WHERE clause.
-        metadata_field = "metadata"
+        # happen - the RAG equivalent of a missing WHERE clause, except that
+        # nothing errors and the wrong answer looks completely plausible.
+        metadata_field    = "metadata"
       }
     }
   }
@@ -287,6 +323,52 @@ resource "aws_iam_role_policy" "kb" {
   })
 }
 
+# ---------------------------------------------------------------------------
+# The cold path bucket: position history
+# ---------------------------------------------------------------------------
+# Separate from the raw bucket on purpose. They have different lifecycles,
+# different consumers and different retention arguments: raw payloads exist so
+# a mapping bug is replayable and can age out in weeks, while position history
+# is a safety-review asset and a privacy liability that outlives them by years.
+resource "aws_s3_bucket" "history" {
+  bucket = "${var.name_prefix}-history-${data.aws_caller_identity.current.account_id}"
+  tags   = { Purpose = "telemetry-history" }
+}
+
+resource "aws_s3_bucket_public_access_block" "history" {
+  bucket                  = aws_s3_bucket.history.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "history" {
+  bucket = aws_s3_bucket.history.id
+  rule {
+    apply_server_side_encryption_by_default { sse_algorithm = "aws:kms" }
+    bucket_key_enabled = true
+  }
+}
+
+resource "aws_iam_role" "firehose" {
+  name = "${var.name_prefix}-firehose"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "firehose.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+      Condition = {
+        StringEquals = { "sts:ExternalId" = data.aws_caller_identity.current.account_id }
+      }
+    }]
+  })
+}
+
+output "history_bucket" { value = aws_s3_bucket.history.bucket }
+output "history_bucket_arn" { value = aws_s3_bucket.history.arn }
+output "firehose_role_arn" { value = aws_iam_role.firehose.arn }
 output "raw_bucket" { value = aws_s3_bucket.raw.bucket }
 output "raw_bucket_arn" { value = aws_s3_bucket.raw.arn }
 output "runbooks_bucket" { value = aws_s3_bucket.runbooks.bucket }

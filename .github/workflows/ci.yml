@@ -50,6 +50,37 @@ jobs:
       - name: End-to-end smoke run
         run: npm start
 
+      # The demo is seeded and clock-injected, so two runs must produce
+      # identical output apart from wall-clock durations. This catches
+      # accidental Math.random() or new Date() creeping back in, which would
+      # otherwise only show up as a screenshot that will not reproduce.
+      - name: Determinism check
+        run: |
+          npm start > /tmp/run-a.txt 2>&1
+          npm start > /tmp/run-b.txt 2>&1
+          if diff /tmp/run-a.txt /tmp/run-b.txt              | grep '^[<>]' | grep -viE 'retryInMs|[0-9]+ms' | grep -q .; then
+            echo "Demo output is not reproducible between runs:"
+            diff /tmp/run-a.txt /tmp/run-b.txt | head -40
+            exit 1
+          fi
+          echo "Two runs matched apart from timings."
+
+      # Nothing outside src/platform/runbook-loader.node.ts and the tests may
+      # import a node: builtin. That invariant is what lets the whole backend
+      # run inside the browser for the dispatch board - and a bundler will not
+      # tell you it broke until the build fails, so check it here.
+      - name: Browser-portability invariant
+        run: |
+          # Anchored to a real import statement, so the explanatory comment
+          # in runbook-loader.ts does not trip it.
+          PATTERN="^[[:space:]]*import .*from '(node:|.*/runbook-loader.node)"
+          if grep -rnE "$PATTERN" src/ --include="*.ts"              | grep -v 'runbook-loader.node.ts' | grep -v '.test.ts' | grep -q .; then
+            echo "A node: builtin leaked into the shared module graph:"
+            grep -rnE "$PATTERN" src/ --include="*.ts"               | grep -v 'runbook-loader.node.ts' | grep -v '.test.ts'
+            exit 1
+          fi
+          echo "No node: builtins outside the Node adapter and tests."
+
   # ---------------------------------------------------------------------------
   terraform:
     name: terraform validate

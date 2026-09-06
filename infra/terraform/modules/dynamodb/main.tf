@@ -40,7 +40,7 @@ resource "aws_dynamodb_table" "main" {
     type = "S"
   }
 
-  # GSI1 serves the "all signals for one site, newest first" access pattern.
+  # GSI1 serves the "all readings for one driver, newest first" access pattern.
   #
   # A GSI is a full, eventually-consistent copy of the projected attributes,
   # with its own throughput. Two consequences worth stating out loud:
@@ -56,7 +56,7 @@ resource "aws_dynamodb_table" "main" {
     # Project only what the query needs. ALL doubles your storage and write
     # cost; KEYS_ONLY forces a second read per item. INCLUDE is usually right.
     non_key_attributes = [
-      "signalId", "provider", "kind", "value", "unit", "severity", "observedAt", "siteId",
+      "telemetryId", "provider", "kind", "value", "unit", "severity", "observedAt", "driverId",
     ]
   }
 
@@ -66,7 +66,7 @@ resource "aws_dynamodb_table" "main" {
   stream_enabled   = true
   stream_view_type = "NEW_AND_OLD_IMAGES"
 
-  # Automatic expiry for raw signals. Set `expiresAt` (epoch seconds) on write
+  # Automatic expiry for raw telemetry. Set `expiresAt` (epoch seconds) on write
   # and DynamoDB deletes the item within ~48h, free. Far cheaper than a
   # scheduled cleanup job, and it keeps hot partitions small.
   ttl {

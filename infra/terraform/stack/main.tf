@@ -107,10 +107,41 @@ module "dynamodb" {
 }
 
 module "storage" {
-  source              = "../../modules/s3-bedrock-kb"
-  name_prefix         = local.name_prefix
-  env                 = var.env
+  source      = "../../modules/s3-bedrock-kb"
+  name_prefix = local.name_prefix
+  env         = var.env
+
   embedding_model_arn = "arn:aws:bedrock:${var.aws_region}::foundation-model/amazon.titan-embed-text-v2:0"
+
+  # The knowledge base stores its vectors in the Aurora cluster that already
+  # holds the spatial data. See the module header for why that beats
+  # OpenSearch Serverless on cost for a corpus this size.
+  aurora_cluster_arn = module.aurora.cluster_arn
+  aurora_secret_arn  = module.aurora.secret_arn
+}
+
+# ---------------------------------------------------------------------------
+# Telemetry ingest: the stream, and the cold path it feeds
+# ---------------------------------------------------------------------------
+module "kinesis" {
+  source = "../../modules/kinesis"
+  name   = local.name_prefix
+  env    = var.env
+  tags   = local.tags
+
+  consumer_function_arn = module.lambda["evaluate"].alias_arn
+  on_failure_arn        = module.events.dlq_arn
+}
+
+module "firehose" {
+  source = "../../modules/firehose"
+  name   = local.name_prefix
+  tags   = local.tags
+
+  source_stream_arn  = module.kinesis.stream_arn
+  history_bucket_arn = module.storage.history_bucket_arn
+  glue_table_arn     = "arn:aws:glue:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/meridian/telemetry_history"
+  role_arn           = module.storage.firehose_role_arn
 }
 
 module "aurora" {

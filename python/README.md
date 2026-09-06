@@ -1,9 +1,9 @@
 # Python reference implementations
 
-The JD lists **Python and/or TypeScript**, and in practice AWS AI/ML and
-geospatial Lambdas are usually Python. These two files show the same designs as
-`src/ai/` and `src/geo/`, written the way you would actually deploy them: real
-`boto3` calls, no local fakes.
+AWS AI/ML and geospatial Lambdas are usually Python. These two files show the
+same designs as `src/ai/` and `src/geo/`, written the way they would actually be
+deployed: real `boto3` calls, no local stand-ins. The TypeScript versions are
+the ones that run offline.
 
 | File | Covers |
 |---|---|

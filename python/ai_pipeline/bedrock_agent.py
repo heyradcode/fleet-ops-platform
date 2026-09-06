@@ -2,9 +2,9 @@
 ===============================================================================
 Bedrock RAG + agent loop, as a Python Lambda
 ===============================================================================
-The JD lists Python first, and in practice AWS AI/ML Lambdas are usually
-Python. This is the same design as src/ai/ in TypeScript, written the way you
-would actually deploy it: boto3, real API calls, no local fakes.
+AWS AI/ML Lambdas are usually Python, so the agent loop is written here the way
+it would actually be deployed: boto3, real API calls, no local stand-ins. Same
+design as src/ai/ in TypeScript, which is the version that runs offline.
 
 READ-ONLY REFERENCE. It needs boto3 and real AWS credentials to run; the
 TypeScript demo is the part that executes offline.
@@ -303,7 +303,7 @@ Rules:
   the situation, say so rather than improvising a procedure.
 - Check telemetry before explaining a cause. Do not speculate from the question.
 - Before claiming a problem is regional, verify it with a spatial query.
-- Cite the site ids and providers your conclusion rests on.
+- Cite the driver ids and vendors your conclusion rests on.
 - Never claim to have taken an action you did not take via a tool."""
 
 

@@ -2,10 +2,10 @@
 # Aurora PostgreSQL Serverless v2 + PostGIS
 # =============================================================================
 # Why a relational database at all in a serverless stack? Because DynamoDB
-# cannot answer "which sites are within 75km of this point". Spatial indexes,
+# cannot answer "which drivers are within 75km of this point". Spatial indexes,
 # ad-hoc joins and aggregate reporting are exactly what Postgres is for.
 #
-#   DynamoDB - hot, high-volume, known-key reads (signals, incidents)
+#   DynamoDB - hot, high-volume, known-key reads (driver position, telemetry)
 #   Aurora   - reference data, spatial queries, analytics
 
 variable "name_prefix" { type = string }

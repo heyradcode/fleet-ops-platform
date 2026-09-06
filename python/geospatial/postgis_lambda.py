@@ -82,16 +82,16 @@ def _param(name: str, value: Any) -> dict[str, Any]:
     return {"name": name, "value": {"stringValue": str(value)}}
 
 
-SITES_WITHIN_RADIUS = """
+DRIVERS_WITHIN_RADIUS = """
     SELECT
-        site_id,
+        driver_id,
         name,
         region,
         headcount,
         ST_X(location::geometry) AS lon,
         ST_Y(location::geometry) AS lat,
         ROUND((ST_Distance(location, ST_MakePoint(:lon, :lat)::geography) / 1000)::numeric, 2) AS distance_km
-    FROM sites
+    FROM drivers
     WHERE tenant_id = :tenant_id
       AND ST_DWithin(location, ST_MakePoint(:lon, :lat)::geography, :radius_m)
     ORDER BY location <-> ST_MakePoint(:lon, :lat)::geography
@@ -114,10 +114,10 @@ INCIDENTS_AS_GEOJSON = """
         'features', COALESCE(json_agg(
             json_build_object(
                 'type', 'Feature',
-                'id', s.site_id,
+                'id', d.driver_id,
                 'geometry', ST_AsGeoJSON(s.location)::json,
                 'properties', json_build_object(
-                    'siteId',   s.site_id,
+                    'driverId',   d.driver_id,
                     'name',     s.name,
                     'severity', i.severity,
                     'title',    i.title,
@@ -127,7 +127,7 @@ INCIDENTS_AS_GEOJSON = """
         ), '[]'::json)
     ) AS geojson
     FROM incidents i
-    JOIN sites s ON s.site_id = ANY(i.site_ids) AND s.tenant_id = i.tenant_id
+    JOIN drivers d ON d.driver_id = ANY(i.driver_ids) AND s.tenant_id = i.tenant_id
     WHERE i.tenant_id = :tenant_id
       AND i.status <> 'resolved';
 """
@@ -139,9 +139,9 @@ INCIDENTS_AS_GEOJSON = """
 CLUSTER_INCIDENTS = """
     SELECT
         ST_ClusterDBSCAN(location::geometry, eps := :eps_degrees, minpoints := 2) OVER () AS cluster_id,
-        site_id,
+        driver_id,
         ST_AsGeoJSON(location)::json AS geometry
-    FROM sites
+    FROM drivers
     WHERE tenant_id = :tenant_id;
 """
 # DBSCAN turns "eleven alerts" into "one regional outage" on a zoomed-out map.
@@ -176,7 +176,7 @@ def haversine_km(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
 
     Implemented here for the times you need a distance in a Lambda without a
     database round trip. ~0.5% error against a true ellipsoid (Vincenty) -
-    fine for "which sites are near the outage", not fine for surveying.
+    fine for "which drivers are near the breakdown", not fine for surveying.
     """
     r = 6371.0
     d_lat = math.radians(lat2 - lat1)
@@ -203,7 +203,7 @@ def severity_layer_style(source_id: str) -> dict[str, Any]:
     the map recolours itself.
     """
     return {
-        "id": "sites-circles",
+        "id": "drivers-circles",
         "type": "circle",
         "source": source_id,
         "paint": {
@@ -231,7 +231,7 @@ def severity_layer_style(source_id: str) -> dict[str, Any]:
 
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
-    """AppSync resolver for Query.sitesNear and Query.mapLayer."""
+    """AppSync resolver for Query.driversNear and Query.mapLayer."""
     field = event["info"]["fieldName"]
     claims = event["identity"]["claims"]
 
@@ -242,7 +242,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     args = event.get("arguments", {})
 
-    if field == "sitesNear":
+    if field == "driversNear":
         lon, lat = float(args["lon"]), float(args["lat"])
         validate_lon_lat(lon, lat)
 
@@ -252,7 +252,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
         return {
             "items": execute(
-                SITES_WITHIN_RADIUS,
+                DRIVERS_WITHIN_RADIUS,
                 {
                     "tenant_id": tenant_id,
                     "lon": lon,
@@ -269,7 +269,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
         return {
             "featureCollection": json.dumps(feature_collection),
-            "layers": [severity_layer_style("meridian-sites")],
+            "layers": [severity_layer_style("meridian-drivers")],
         }
 
     raise ValueError(f"no resolver for {field}")

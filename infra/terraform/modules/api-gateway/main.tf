@@ -20,7 +20,7 @@ resource "aws_apigatewayv2_api" "main" {
 
   cors_configuration {
     # Never "*" together with credentials - browsers reject it, and if they did
-    # not it would let any site read authenticated responses.
+    # not it would let any origin read authenticated responses.
     allow_origins     = var.cors_origins
     allow_methods     = ["GET", "POST", "OPTIONS"]
     allow_headers     = ["authorization", "content-type", "x-webhook-signature"]
@@ -83,10 +83,10 @@ locals {
   # route => whether it needs auth
   routes = {
     "GET /health"               = false
-    "GET /sites"                = true
-    "GET /sites/{siteId}"       = true
-    "GET /sites/near"           = true
-    "GET /signals"              = true
+    "GET /drivers"              = true
+    "GET /drivers/{driverId}"   = true
+    "GET /drivers/near"         = true
+    "GET /telemetry"            = true
     "GET /incidents"            = true
     "GET /map"                  = true
     "POST /ask"                 = true
