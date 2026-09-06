@@ -6,8 +6,7 @@
  * two side by side and see that `ST_DWithin` really is "bbox filter, then exact
  * distance, then sort".
  *
- * Note what changed when this stopped being a site repository: sites do not
- * move, drivers do. `allDrivers` is a snapshot of hot state, not a slowly
+ * Note what a fleet changes about this: the things being queried MOVE. `allDrivers` is a snapshot of hot state, not a slowly
  * changing dimension - which is why the real thing reads from DynamoDB rather
  * than Aurora, and why position history lives in S3.
  */

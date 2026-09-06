@@ -3,7 +3,7 @@
  * MapBox integration
  * ---------------------------------------------------------------------------
  * Backend responsibilities (the front-end does the rendering):
- *   1. Geocoding    - "1 Main St, Dallas" -> [lon, lat], when a site is created.
+ *   1. Geocoding    - "1 Main St, Dallas" -> [lon, lat], for a new facility.
  *   2. Isochrones   - "everywhere reachable in 30 min" for field-engineer
  *                     dispatch. This is the one MapBox does that PostGIS cannot.
  *   3. Directions   - ETA for the nearest engineer to a failed site.

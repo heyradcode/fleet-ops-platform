@@ -56,8 +56,8 @@ export type AgentResult = {
 };
 
 const SYSTEM_PROMPT = [
-  'You are Meridian, an operations assistant for enterprise network and',
-  'contact-centre teams.',
+  'You are Meridian, a dispatch assistant for enterprise fleet operations.',
+  'You are talking to a dispatcher who is watching a live board.',
   '',
   'Rules:',
   '- Ground every recommendation in a runbook you retrieved. If no runbook',
@@ -75,7 +75,15 @@ export async function runAgent(opts: {
   tools: ToolSpec[];
   maxIterations?: number;
 }): Promise<AgentResult> {
-  const maxIterations = opts.maxIterations ?? 6;
+  // The budget has to leave room for a FINAL ANSWER after the tools, so it is
+  // one more than the number of tools the agent might reasonably chain. Set it
+  // too low and the agent stops mid-investigation with nothing to show; too
+  // high and a confused loop burns tokens before anyone notices.
+  //
+  // This bit us once already: adding a sixth tool made a budget of 6 too small,
+  // and the failure looked like the model misbehaving rather than a budget the
+  // tool count had outgrown.
+  const maxIterations = opts.maxIterations ?? 8;
   const trace: AgentTrace[] = [];
   const evidence: string[] = [];
   let step = 0;

@@ -11,6 +11,8 @@ import {
   scopeAllowsDistrict, withinScope, OutOfScopeError, assertDistrictInScope,
 } from './tenancy.ts';
 import { putTelemetry, recentTelemetry } from './repository.ts';
+import { handler as preTokenGeneration } from '../auth/pre-token-generation.ts';
+import { resolveIdpForEmail } from '../auth/providers.ts';
 import type { Driver, Principal, Telemetry } from './types.ts';
 
 const acme = verifyToken(signDemoToken({
@@ -146,4 +148,75 @@ test('an admin is tenant-scoped, which is the only way to see everything', () =>
 
   assert.equal(withinScope(admin, fleet).length, 2);
   assert.ok(scopeAllowsDistrict(admin, 'anything'));
+});
+
+// ---------------------------------------------------------------------------
+// Where the scope comes from: the PreTokenGeneration trigger
+// ---------------------------------------------------------------------------
+
+test('the district is stamped into the token, not asserted by the client', async () => {
+  const event = await preTokenGeneration({
+    version: '1', triggerSource: 'TokenGeneration_Authentication',
+    userPoolId: 'us-east-1_TEST', userName: 'd',
+    request: {
+      userAttributes: { email: 'dispatcher@acme-freight.com' },
+      groupConfiguration: { groupsToOverride: [], iamRolesToOverride: [] },
+    },
+    response: {},
+  });
+
+  const claims = event.response.claimsOverrideDetails?.claimsToAddOrOverride ?? {};
+  assert.equal(claims['custom:tenantId'], 'acme-freight');
+  // This is the whole point: the scope arrives SIGNED. A dispatcher cannot
+  // widen their own board by editing a request, because the scope was never in
+  // the request.
+  assert.equal(claims['custom:district'], 'dal');
+  assert.deepEqual(
+    event.response.claimsOverrideDetails?.groupOverrideDetails?.groupsToOverride,
+    ['dispatcher'],
+  );
+});
+
+test('a device-bound driver token carries no district at all', async () => {
+  const event = await preTokenGeneration({
+    version: '1', triggerSource: 'TokenGeneration_Authentication',
+    userPoolId: 'us-east-1_TEST', userName: 'drv',
+    request: {
+      userAttributes: { email: 'dispatcher@acme-freight.com', 'custom:deviceBound': 'true' },
+      groupConfiguration: { groupsToOverride: [], iamRolesToOverride: [] },
+    },
+    response: {},
+  });
+
+  const claims = event.response.claimsOverrideDetails?.claimsToAddOrOverride ?? {};
+  // A driver sees their own assignments, not a board. Handing them a
+  // district-scoped token would show them every other truck in Dallas.
+  assert.equal(claims['custom:district'], undefined);
+  assert.equal(claims['custom:tenantId'], 'acme-freight');
+});
+
+test('an unknown domain gets no tenant - fail closed, not a guess', async () => {
+  const event = await preTokenGeneration({
+    version: '1', triggerSource: 'TokenGeneration_Authentication',
+    userPoolId: 'us-east-1_TEST', userName: 'x',
+    request: {
+      userAttributes: { email: 'someone@unknown.example' },
+      groupConfiguration: { groupsToOverride: [], iamRolesToOverride: [] },
+    },
+    response: {},
+  });
+
+  const claims = event.response.claimsOverrideDetails?.claimsToAddOrOverride ?? {};
+  assert.equal(claims['custom:tenantId'], '');
+  // Every tenant-scoped query rejects an empty tenant, so the failure mode is
+  // "sees nothing" rather than "guessed a tenant".
+  assert.equal(claims['custom:onboarding'], 'pending');
+});
+
+test('home-realm discovery routes each carrier to its own IdP', () => {
+  assert.equal(resolveIdpForEmail('a@acme-freight.com'), 'AcmeSAML');
+  assert.equal(resolveIdpForEmail('b@northstar-logistics.com'), 'OktaOIDC');
+  // An unknown domain falls back to the Cognito-native pool rather than
+  // erroring - a new customer can sign up before their SSO is configured.
+  assert.equal(resolveIdpForEmail('c@example.com'), 'COGNITO');
 });

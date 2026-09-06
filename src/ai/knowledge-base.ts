@@ -86,7 +86,7 @@ export function chunkMarkdown(markdown: string, source: string, tenantId: Tenant
       source,
       // Prepend the document and section titles. This matters: it puts the
       // topic INSIDE the embedded text, so a chunk about "escalate after 15
-      // minutes" still matches a query about packet loss.
+      // minutes" still matches a query about route deviation.
       text: '# ' + docTitle + '\n## ' + heading.trim() + '\n' + text,
       metadata: { tenantId, section: heading.trim(), docTitle },
     });

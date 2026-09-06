@@ -562,7 +562,7 @@ async function sectionRest() {
     ['GET /drivers/near', { query: { lon: '32.7767', lat: '-96.797' } }],   // swapped on purpose
     ['GET /telemetry', { query: { limit: '3' } }],
     ['GET /map', { query: { format: 'topojson' } }],
-    ['POST /webhooks/{provider}', { path: { provider: 'genesys' }, body: { event: 'queue.alert' } }],
+    ['POST /webhooks/{provider}', { path: { provider: 'samsara' }, body: { event: 'harsh.brake' } }],
   ];
 
   for (const [routeKey, opts] of routes) {
@@ -700,13 +700,13 @@ async function sectionAi() {
   process.stdout.write('   knowledge base: ' + knowledgeBase.size + ' chunks indexed\n');
 
   // --- Retrieval -----------------------------------------------------------
-  const question = 'Dallas is dropping calls and users say audio is choppy. What do I do?';
+  const question = 'A driver is 800m off their route and has been stopped 20 minutes. What now?';
   note('');
   note('Q: ' + question);
 
   const rag = await askWithRag(question, operator);
   note('');
-  note('Retrieved (hybrid: 0.7 semantic + 0.3 lexical, filtered to tenant acme):');
+  note('Retrieved (hybrid: 0.7 semantic + 0.3 lexical, filtered to tenant acme-freight):');
   for (const c of rag.citations) {
     process.stdout.write('   ' + String(c.score).padStart(5) + '  ' + c.source + ' [' + c.section + ']\n');
     process.stdout.write('          \x1b[90m' + c.snippet + '\x1b[0m\n');

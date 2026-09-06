@@ -93,11 +93,14 @@ export const IDENTITY_PROVIDERS: Array<SocialProvider | SamlProvider | OidcProvi
   {
     kind: 'saml',
     name: 'AcmeSAML',
-    metadataUrl: 'https://acme.example.com/FederationMetadata/2007-06/FederationMetadata.xml',
+    metadataUrl: 'https://sso.acme-freight.example.com/FederationMetadata/2007-06/FederationMetadata.xml',
     attributeMapping: {
       email: 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress',
-      'custom:tenantId': 'http://schemas.acme.com/claims/tenant',
-      'custom:department': 'http://schemas.xmlsoap.org/claims/Group',
+      'custom:tenantId': 'http://schemas.acme-freight.com/claims/carrier',
+      // The dispatcher's district, straight out of the corporate directory.
+      // Mapping it here means the board's scope is signed by Cognito rather
+      // than asserted by the client.
+      'custom:district': 'http://schemas.acme-freight.com/claims/district',
     },
     notes:
       'SAML claim names are URIs - copy them exactly from the IdP metadata. ' +
@@ -107,11 +110,12 @@ export const IDENTITY_PROVIDERS: Array<SocialProvider | SamlProvider | OidcProvi
   {
     kind: 'oidc',
     name: 'OktaOIDC',
-    issuer: 'https://acme.okta.com/oauth2/default',
+    issuer: 'https://northstar-logistics.okta.com/oauth2/default',
     scopes: ['openid', 'profile', 'email', 'groups'],
     attributeMapping: {
       email: 'email',
       'custom:tenantId': 'org_id',
+      'custom:district': 'district',
       'cognito:groups': 'groups',
     },
     notes:
@@ -128,9 +132,9 @@ export const IDENTITY_PROVIDERS: Array<SocialProvider | SamlProvider | OidcProvi
  * and pass the result as `identity_provider` on the /authorize call.
  */
 const DOMAIN_TO_IDP: Record<string, string> = {
-  'acme.com': 'AcmeSAML',
-  'acme.co.uk': 'AcmeSAML',
-  'globex.com': 'OktaOIDC',
+  'acme-freight.com': 'AcmeSAML',
+  'acme-freight.co.uk': 'AcmeSAML',
+  'northstar-logistics.com': 'OktaOIDC',
 };
 
 export function resolveIdpForEmail(email: string): string {

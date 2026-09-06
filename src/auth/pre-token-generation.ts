@@ -47,15 +47,57 @@ export type PreTokenGenerationEvent = {
   };
 };
 
+type Membership = {
+  tenantId: string;
+  roles: string[];
+  /**
+   * The dispatcher's district, if they have one.
+   *
+   * THIS IS WHY THE TRIGGER MATTERS MORE THAN IT LOOKS. Stamping the district
+   * into the token means it arrives at every downstream service SIGNED. A
+   * dispatcher cannot widen their own board by editing a request, because the
+   * board's scope was never in the request - it was in the token, and the
+   * token's signature covers it.
+   *
+   * Absent means tenant-wide, which is what an admin or a regional manager
+   * gets. That is a deliberate grant, not a default: see scopeFromClaims() in
+   * cognito-jwt-verifier.ts, which only widens for an explicit admin role.
+   */
+  district?: string;
+};
+
 /** Stand-in for a DynamoDB lookup keyed by email domain or federated sub. */
-function lookupTenantMembership(email: string): { tenantId: string; roles: string[] } | undefined {
+function lookupTenantMembership(email: string): Membership | undefined {
   const domain = email.split('@')[1]?.toLowerCase() ?? '';
-  const table: Record<string, { tenantId: string; roles: string[] }> = {
-    'acme.com': { tenantId: 'acme', roles: ['operator'] },
-    'globex.com': { tenantId: 'globex', roles: ['viewer'] },
-    'meridian.io': { tenantId: 'acme', roles: ['admin'] },
+  const table: Record<string, Membership> = {
+    // A dispatcher, scoped to one board.
+    'acme-freight.com': { tenantId: 'acme-freight', roles: ['dispatcher'], district: 'dal' },
+    // Safety reviewers read the whole carrier but cannot move a load.
+    'safety.acme-freight.com': { tenantId: 'acme-freight', roles: ['safety'] },
+    // A different carrier entirely.
+    'northstar-logistics.com': { tenantId: 'northstar-logistics', roles: ['viewer'] },
+    // The platform team.
+    'meridian.io': { tenantId: 'acme-freight', roles: ['admin'] },
   };
   return table[domain];
+}
+
+/**
+ * Drivers authenticate differently from dispatchers, and the difference is
+ * architectural rather than cosmetic:
+ *
+ *                  Drivers                    Dispatchers
+ *   Auth           mobile app, device-bound   enterprise SSO (SAML / OIDC)
+ *   Scope          their own assignments      a district or region
+ *   Token          long refresh, short access short, revocable
+ *   Offline        must keep working          always online
+ *
+ * A driver's token carries no district at all - they see their own work, not a
+ * board. Handing a driver a district-scoped token would show them every other
+ * truck in Dallas, which is neither useful to them nor anyone's intention.
+ */
+function isDriverDevice(event: PreTokenGenerationEvent): boolean {
+  return event.request.userAttributes['custom:deviceBound'] === 'true';
 }
 
 export async function handler(event: PreTokenGenerationEvent): Promise<PreTokenGenerationEvent> {
@@ -76,6 +118,11 @@ export async function handler(event: PreTokenGenerationEvent): Promise<PreTokenG
       'custom:tenantId': membership.tenantId,
       // A stable id the app can send to support without leaking the email.
       'custom:principalRef': b64urlEncode(email).slice(0, 16),
+      // The signed scope. A driver's device-bound token never gets a district;
+      // they see their own assignments and nothing else.
+      ...(membership.district && !isDriverDevice(event)
+        ? { 'custom:district': membership.district }
+        : {}),
     },
     // Suppress claims the API does not need. Smaller tokens, less PII in logs.
     claimsToSuppress: ['given_name', 'family_name', 'phone_number'],
