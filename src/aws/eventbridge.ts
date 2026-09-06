@@ -12,19 +12,19 @@
  *
  * Real call:
  *   await client.send(new PutEventsCommand({ Entries: [{
- *     EventBusName, Source: 'netpulse.ingest', DetailType: 'SignalNormalized',
+ *     EventBusName, Source: 'meridian.ingest', DetailType: 'SignalNormalized',
  *     Detail: JSON.stringify(detail),
  *   }]}));
  *
  * Real rule (see infra/terraform/modules/eventbridge):
- *   { "source": ["netpulse.detect"],
+ *   { "source": ["meridian.detect"],
  *     "detail-type": ["IncidentOpened"],
  *     "detail": { "severity": ["critical"] } }
  */
 import { log } from '../platform/logger.ts';
 
 export type EventEnvelope<T = unknown> = {
-  source: string;          // e.g. 'netpulse.ingest'
+  source: string;          // e.g. 'meridian.ingest'
   detailType: string;      // e.g. 'SignalNormalized'
   detail: T;
   time: string;
@@ -98,4 +98,4 @@ function matchDetail(pattern: Record<string, unknown>, detail: Record<string, un
   });
 }
 
-export const bus = new EventBus(process.env.EVENT_BUS_NAME ?? 'netpulse-dev-bus');
+export const bus = new EventBus(process.env.EVENT_BUS_NAME ?? 'meridian-dev-bus');

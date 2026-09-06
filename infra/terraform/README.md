@@ -37,7 +37,7 @@ an OpenSearch collection ARN. To make it real you would need:
 
 - Four AWS accounts (or one, with four state keys, if you must)
 - An S3 state bucket per account
-- A `netpulse-deploy` IAM role per account trusting your GitHub repo via OIDC
+- A `meridian-deploy` IAM role per account trusting your GitHub repo via OIDC
 - A VPC with private subnets for Aurora
 - An OpenSearch Serverless collection and vector index for the knowledge base
 - Bedrock model access enabled in the region

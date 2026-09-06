@@ -133,7 +133,7 @@ resource "aws_bedrockagent_knowledge_base" "runbooks" {
 
     opensearch_serverless_configuration {
       collection_arn    = "arn:aws:aoss:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:collection/REPLACE_ME"
-      vector_index_name = "netpulse-runbooks"
+      vector_index_name = "meridian-runbooks"
 
       field_mapping {
         vector_field   = "embedding"

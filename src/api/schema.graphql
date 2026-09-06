@@ -1,5 +1,5 @@
 # =============================================================================
-# NetPulse GraphQL API (AWS AppSync)
+# Meridian GraphQL API (AWS AppSync)
 # =============================================================================
 # AppSync-specific things to notice, because they are what separates "I have
 # used GraphQL" from "I have built on AppSync":

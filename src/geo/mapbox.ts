@@ -87,8 +87,8 @@ export function severityLayerStyle(sourceId: string) {
 /** What the /map/sites REST endpoint returns: data plus how to draw it. */
 export function mapPayload(fc: GeoFeatureCollection) {
   return {
-    source: { id: 'netpulse-sites', type: 'geojson', data: fc },
-    layers: [severityLayerStyle('netpulse-sites')],
+    source: { id: 'meridian-sites', type: 'geojson', data: fc },
+    layers: [severityLayerStyle('meridian-sites')],
     // Fit the viewport in one step using the FeatureCollection's own bbox.
     fitBounds: fc.bbox,
   };

@@ -2,7 +2,7 @@
 
 ## Why GraphQL here at all
 
-A NetPulse dashboard shows open incidents, each incident's affected sites, each
+A Meridian dashboard shows open incidents, each incident's affected sites, each
 site's recent signals, and a map layer. Over REST that is four or five round
 trips, or one bespoke `/dashboard` endpoint that you rewrite every time the UI
 changes. Over GraphQL it is one request whose shape the *client* decides.

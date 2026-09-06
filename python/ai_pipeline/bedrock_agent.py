@@ -295,7 +295,7 @@ def _execute_tool(
 
 WRITE_TOOLS = {"openIncident", "acknowledgeIncident", "dispatchEngineer"}
 
-SYSTEM_PROMPT = """You are NetPulse, an operations assistant for enterprise
+SYSTEM_PROMPT = """You are Meridian, an operations assistant for enterprise
 network and contact-centre teams.
 
 Rules:

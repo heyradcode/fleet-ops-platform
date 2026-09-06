@@ -105,7 +105,7 @@ jobs:
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::222233334444:role/netpulse-ci
+          role-to-assume: arn:aws:iam::222233334444:role/meridian-ci
           aws-region: us-east-1
 
       # Hit the real deployed API with a real Cognito token. This is the step
@@ -120,8 +120,8 @@ jobs:
           echo "::warning::integration suite not implemented in this reference repo"
           echo "would sign in to $COGNITO_POOL and exercise $API_ENDPOINT"
         env:
-          API_ENDPOINT: https://test-api.netpulse.example.com
-          COGNITO_POOL: netpulse-test-users
+          API_ENDPOINT: https://test-api.meridian.example.com
+          COGNITO_POOL: meridian-test-users
 
   stage:
     needs: integration-tests

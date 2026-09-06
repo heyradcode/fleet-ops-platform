@@ -23,7 +23,7 @@ data "aws_caller_identity" "current" {}
 
 data "aws_vpc" "main" {
   tags = {
-    Name = "netpulse-${var.env}"
+    Name = "meridian-${var.env}"
   }
 }
 
@@ -43,7 +43,7 @@ data "aws_subnets" "private" {
 # ingress rule references it. Creating it here also means the "which SG may
 # reach the database" question has exactly one answer, in one file.
 resource "aws_security_group" "lambda" {
-  name        = "netpulse-${var.env}-lambda"
+  name        = "meridian-${var.env}-lambda"
   description = "Lambdas that need VPC access (Aurora only)"
   vpc_id      = data.aws_vpc.main.id
 
@@ -61,7 +61,7 @@ resource "aws_security_group" "lambda" {
 }
 
 locals {
-  name_prefix = "netpulse-${var.env}"
+  name_prefix = "meridian-${var.env}"
   src_root    = "${path.module}/../../../src"
 
   # ---------------------------------------------------------------------------

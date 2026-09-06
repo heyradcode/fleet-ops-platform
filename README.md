@@ -1,4 +1,4 @@
-# NetPulse — an agentic SaaS demo on AWS serverless
+# Meridian — an agentic SaaS demo on AWS serverless
 
 A small, heavily-commented reference implementation of **every technology named
 in the job description**, built as one coherent product rather than eight
@@ -17,7 +17,7 @@ type-stripping, so there is no build step.</sub>
 
 ## The product, in one paragraph
 
-**NetPulse** is a multi-tenant SaaS platform for enterprise network operations.
+**Meridian** is a multi-tenant SaaS platform for enterprise network operations.
 It pulls telemetry from eight third-party systems — network gear (Cisco, Juniper,
 HPE Aruba), contact centres (Genesys, Five9, Amazon Connect) and observability
 tools (ThousandEyes, Splunk) — normalises them into one canonical shape,

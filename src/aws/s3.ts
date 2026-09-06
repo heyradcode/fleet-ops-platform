@@ -42,7 +42,7 @@ export class S3Bucket {
   }
 }
 
-export const rawBucket = new S3Bucket(process.env.RAW_BUCKET ?? 'netpulse-dev-raw');
+export const rawBucket = new S3Bucket(process.env.RAW_BUCKET ?? 'meridian-dev-raw');
 
 export function archiveRaw(record: RawRecord): string {
   const d = new Date(record.fetchedAt);

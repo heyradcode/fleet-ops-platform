@@ -147,7 +147,7 @@ resource "aws_cognito_identity_provider" "apple" {
   provider_type = "SignInWithApple"
 
   provider_details = {
-    client_id        = "com.netpulse.web"
+    client_id        = "com.meridian.web"
     team_id          = "ABCDE12345"
     key_id           = "FGHIJ67890"
     private_key      = var.google_client_secret # .p8 contents from Secrets Manager

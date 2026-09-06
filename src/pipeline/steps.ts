@@ -218,7 +218,7 @@ export async function publish(principal: Principal, signals: Signal[], incidents
   for (const incident of incidents) putIncident(principal, incident);
 
   await bus.putEvents({
-    source: 'netpulse.ingest',
+    source: 'meridian.ingest',
     detailType: 'SignalsNormalized',
     detail: {
       tenantId: principal.tenantId,
@@ -229,7 +229,7 @@ export async function publish(principal: Principal, signals: Signal[], incidents
 
   for (const incident of incidents) {
     await bus.putEvents({
-      source: 'netpulse.detect',
+      source: 'meridian.detect',
       detailType: 'IncidentOpened',
       // Put the fields rules will filter on at the TOP level of detail -
       // EventBridge patterns match on structure, and deeply nested fields make

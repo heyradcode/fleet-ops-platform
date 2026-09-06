@@ -31,7 +31,7 @@ terraform {
   # exactly this residue is what Terragrunt's `generate` block is for, and the
   # only reason worth adopting it here.)
   backend "s3" {
-    bucket       = "netpulse-tfstate-222233334444"
+    bucket       = "meridian-tfstate-222233334444"
     key          = "test/terraform.tfstate"
     region       = "us-east-1"
     encrypt      = true
@@ -45,12 +45,12 @@ provider "aws" {
   # CI assumes this role via GitHub OIDC. No long-lived AWS access keys exist
   # anywhere in this repo or in GitHub secrets.
   assume_role {
-    role_arn = "arn:aws:iam::222233334444:role/netpulse-deploy"
+    role_arn = "arn:aws:iam::222233334444:role/meridian-deploy"
   }
 
   default_tags {
     tags = {
-      Project     = "netpulse"
+      Project     = "meridian"
       Environment = "test"
       ManagedBy   = "terraform"
 
@@ -67,7 +67,7 @@ module "stack" {
 
   env        = "test"
   aws_region = "us-east-1"
-  app_origin = "https://test.netpulse.example.com"
+  app_origin = "https://test.meridian.example.com"
 
   # The only true variables. CI exports TF_VAR_google_client_id and
   # TF_VAR_google_client_secret, read from Secrets Manager at apply time.

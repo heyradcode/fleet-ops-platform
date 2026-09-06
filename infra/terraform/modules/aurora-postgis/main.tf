@@ -48,9 +48,9 @@ resource "aws_rds_cluster" "main" {
   engine             = "aurora-postgresql"
   engine_mode        = "provisioned" # required for Serverless v2
   engine_version     = "16.4"
-  database_name      = "netpulse"
+  database_name      = "meridian"
 
-  master_username                     = "netpulse_admin"
+  master_username                     = "meridian_admin"
   manage_master_user_password         = true
   iam_database_authentication_enabled = true
 

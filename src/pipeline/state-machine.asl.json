@@ -1,5 +1,5 @@
 {
-  "Comment": "NetPulse ingest pipeline. The deployable Amazon States Language definition matching src/pipeline/ingest-workflow.ts. Deployed by infra/terraform/modules/step-functions.",
+  "Comment": "Meridian ingest pipeline. The deployable Amazon States Language definition matching src/pipeline/ingest-workflow.ts. Deployed by infra/terraform/modules/step-functions.",
   "StartAt": "PrepareConnectorList",
   "TimeoutSeconds": 900,
   "States": {
@@ -197,7 +197,7 @@
         "Entries": [
           {
             "EventBusName": "${event_bus_name}",
-            "Source": "netpulse.ingest",
+            "Source": "meridian.ingest",
             "DetailType": "IngestFailed",
             "Detail": {
               "executionArn.$": "$$.Execution.Id",

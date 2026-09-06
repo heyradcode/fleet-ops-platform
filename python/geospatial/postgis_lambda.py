@@ -42,7 +42,7 @@ rds_data = boto3.client("rds-data", config=Config(retries={"max_attempts": 3, "m
 
 CLUSTER_ARN = os.environ["AURORA_CLUSTER_ARN"]
 SECRET_ARN = os.environ["AURORA_SECRET_ARN"]
-DATABASE = os.environ.get("AURORA_DATABASE", "netpulse")
+DATABASE = os.environ.get("AURORA_DATABASE", "meridian")
 
 
 # =============================================================================
@@ -269,7 +269,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
         return {
             "featureCollection": json.dumps(feature_collection),
-            "layers": [severity_layer_style("netpulse-sites")],
+            "layers": [severity_layer_style("meridian-sites")],
         }
 
     raise ValueError(f"no resolver for {field}")

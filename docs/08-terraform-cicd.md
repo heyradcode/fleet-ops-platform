@@ -61,7 +61,7 @@ not want an application `destroy` near it. So find it by tag rather than accept
 three more ids:
 
 ```hcl
-data "aws_vpc" "main" { tags = { Name = "netpulse-${var.env}" } }
+data "aws_vpc" "main" { tags = { Name = "meridian-${var.env}" } }
 
 data "aws_subnets" "private" {
   filter { name = "vpc-id", values = [data.aws_vpc.main.id] }
@@ -93,7 +93,7 @@ module "stack" {
 
   env        = "prod"
   aws_region = "us-east-1"
-  app_origin = "https://app.netpulse.example.com"
+  app_origin = "https://app.meridian.example.com"
 
   saml_metadata_url = "https://acme.example.com/FederationMetadata/…"
   oidc_issuer       = "https://acme.okta.com/oauth2/default"
@@ -161,7 +161,7 @@ radius, and per-environment billing for free.
 
 ```hcl
 backend "s3" {
-  bucket       = "netpulse-tfstate-444455556666"
+  bucket       = "meridian-tfstate-444455556666"
   key          = "prod/terraform.tfstate"
   region       = "us-east-1"
   encrypt      = true
@@ -282,7 +282,7 @@ token; AWS trusts it via a role whose trust policy pins the repo **and** the
 environment:
 
 ```json
-"token.actions.githubusercontent.com:sub": "repo:acme/netpulse:environment:prod"
+"token.actions.githubusercontent.com:sub": "repo:acme/meridian:environment:prod"
 ```
 
 A wildcard subject like `repo:acme/*:*` would let any branch of any repo in the

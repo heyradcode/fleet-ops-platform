@@ -122,7 +122,7 @@ export const SQL = {
  *   const res = await new RDSDataClient({}).send(new ExecuteStatementCommand({
  *     resourceArn: process.env.AURORA_CLUSTER_ARN,
  *     secretArn:   process.env.AURORA_SECRET_ARN,
- *     database:    'netpulse',
+ *     database:    'meridian',
  *     sql:         SQL.sitesWithinRadius,
  *     parameters: [
  *       { name: 'tenantId', value: { stringValue: principal.tenantId } },

@@ -1,6 +1,6 @@
 /**
  * ---------------------------------------------------------------------------
- * NetPulse domain model
+ * Meridian domain model
  * ---------------------------------------------------------------------------
  * The whole platform is an ETL + AI loop over one idea:
  *

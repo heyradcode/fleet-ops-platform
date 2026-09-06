@@ -101,16 +101,16 @@ test('a normalise() failure in one vendor does not lose the others', () => {
 
 test('event patterns match on nested detail fields', () => {
   const event = {
-    source: 'netpulse.detect',
+    source: 'meridian.detect',
     detailType: 'IncidentOpened',
     detail: { severity: 'critical', tenantId: 'acme' },
     time: '',
   };
 
-  assert.ok(matches({ source: ['netpulse.detect'] }, event));
+  assert.ok(matches({ source: ['meridian.detect'] }, event));
   assert.ok(matches({ detail: { severity: ['critical', 'warning'] } }, event));
   assert.ok(!matches({ detail: { severity: ['warning'] } }, event));
-  assert.ok(!matches({ source: ['netpulse.ingest'] }, event));
+  assert.ok(!matches({ source: ['meridian.ingest'] }, event));
 });
 
 test('a failing target is dead-lettered without blocking healthy targets', async () => {
@@ -120,7 +120,7 @@ test('a failing target is dead-lettered without blocking healthy targets', async
   bus.rule('broken', { detailType: ['X'] }, () => { throw new Error('boom'); });
   bus.rule('healthy', { detailType: ['X'] }, () => { healthy.push('got it'); });
 
-  await bus.putEvents({ source: 'netpulse.test', detailType: 'X', detail: {} });
+  await bus.putEvents({ source: 'meridian.test', detailType: 'X', detail: {} });
 
   assert.equal(healthy.length, 1);
   assert.equal(bus.deadLetterQueue.length, 1);

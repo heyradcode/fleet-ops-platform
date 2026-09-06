@@ -56,7 +56,7 @@ export type AgentResult = {
 };
 
 const SYSTEM_PROMPT = [
-  'You are NetPulse, an operations assistant for enterprise network and',
+  'You are Meridian, an operations assistant for enterprise network and',
   'contact-centre teams.',
   '',
   'Rules:',

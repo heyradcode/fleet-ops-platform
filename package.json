@@ -1,9 +1,9 @@
 {
-  "name": "netpulse-agentic-saas-demo",
+  "name": "meridian-fleet",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "A readable, runnable reference implementation of every technology in the agentic-SaaS backend JD.",
+  "description": "Meridian - a real-time fleet dispatch platform. MVP-scale reference implementation on AWS serverless, runnable offline.",
   "engines": {
     "node": ">=22.6.0"
   },

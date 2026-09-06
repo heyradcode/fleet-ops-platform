@@ -1,6 +1,6 @@
 /**
  * ---------------------------------------------------------------------------
- * NetPulse - the whole platform, running in your terminal
+ * Meridian - the whole platform, running in your terminal
  * ---------------------------------------------------------------------------
  *   npm start                 run everything, in order
  *   npm start -- --only=ai    run one section
@@ -75,7 +75,7 @@ async function main() {
 
 function banner() {
   process.stdout.write(
-    '\n\x1b[1m\x1b[36mNetPulse\x1b[0m \x1b[90m- multi-tenant agentic SaaS on AWS serverless\x1b[0m\n' +
+    '\n\x1b[1m\x1b[36mMeridian\x1b[0m \x1b[90m- multi-tenant agentic SaaS on AWS serverless\x1b[0m\n' +
     '\x1b[90mCisco/Juniper/Aruba + Genesys/Five9/Connect + ThousandEyes/Splunk\n' +
     '-> Step Functions -> DynamoDB + PostGIS -> AppSync/REST -> Bedrock agent\x1b[0m\n',
   );
@@ -178,7 +178,7 @@ async function sectionAuth() {
       process.stdout.write('   \x1b[32mdenied in code:\x1b[0m ' + err.message + '\n');
     }
   }
-  const policy = tenantScopedSessionPolicy('acme', 'arn:aws:dynamodb:us-east-1:111122223333:table/netpulse-dev-main');
+  const policy = tenantScopedSessionPolicy('acme', 'arn:aws:dynamodb:us-east-1:111122223333:table/meridian-dev-main');
   process.stdout.write('   \x1b[32mdenied in IAM:\x1b[0m dynamodb:LeadingKeys = ' +
     JSON.stringify(policy.Statement[0].Condition['ForAllValues:StringLike']['dynamodb:LeadingKeys']) + '\n');
 }
@@ -288,17 +288,17 @@ function registerEventRules() {
 
   // Rule 1: every critical incident -> pager.
   bus.rule('critical-incidents-to-pager',
-    { source: ['netpulse.detect'], detailType: ['IncidentOpened'], detail: { severity: ['critical'] } },
+    { source: ['meridian.detect'], detailType: ['IncidentOpened'], detail: { severity: ['critical'] } },
     (e) => { delivered.push('pager    <- ' + (e.detail as { incidentId: string }).incidentId); });
 
   // Rule 2: warnings only -> Slack. Same event type, different filter.
   bus.rule('warnings-to-slack',
-    { source: ['netpulse.detect'], detailType: ['IncidentOpened'], detail: { severity: ['warning'] } },
+    { source: ['meridian.detect'], detailType: ['IncidentOpened'], detail: { severity: ['warning'] } },
     (e) => { delivered.push('slack    <- ' + (e.detail as { incidentId: string }).incidentId); });
 
   // Rule 3: everything from ingest -> analytics (Firehose -> S3 -> Athena).
   bus.rule('all-ingest-to-analytics',
-    { source: ['netpulse.ingest'] },
+    { source: ['meridian.ingest'] },
     (e) => { delivered.push('firehose <- ' + e.detailType); });
 
   // Rule 4: a deliberately broken target, to show the DLQ.
@@ -316,9 +316,9 @@ async function sectionEvents() {
   note('4 rules registered before ingest ran, so the events above routed too.');
   note('Publishing 3 more events...');
   await bus.putEvents(
-    { source: 'netpulse.ingest', detailType: 'SignalsNormalized', detail: { tenantId: 'acme', count: 17 } },
-    { source: 'netpulse.detect', detailType: 'IncidentOpened', detail: { incidentId: 'inc_crit', severity: 'critical' } },
-    { source: 'netpulse.detect', detailType: 'IncidentOpened', detail: { incidentId: 'inc_warn', severity: 'warning' } },
+    { source: 'meridian.ingest', detailType: 'SignalsNormalized', detail: { tenantId: 'acme', count: 17 } },
+    { source: 'meridian.detect', detailType: 'IncidentOpened', detail: { incidentId: 'inc_crit', severity: 'critical' } },
+    { source: 'meridian.detect', detailType: 'IncidentOpened', detail: { incidentId: 'inc_warn', severity: 'warning' } },
   );
 
   note('');
@@ -524,7 +524,7 @@ function sectionGeo() {
   // --- MapBox --------------------------------------------------------------
   note('');
   note('MapBox: data-driven styling reads properties.severity straight off the GeoJSON');
-  const style = severityLayerStyle('netpulse-sites');
+  const style = severityLayerStyle('meridian-sites');
   process.stdout.write('   circle-color: ' + JSON.stringify(style.paint['circle-color']) + '\n');
   process.stdout.write('   geocode  : ' + geocodeUrl('1 Main St, Dallas TX', 'pk.REDACTED').slice(0, 96) + '...\n');
   process.stdout.write('   isochrone: ' + isochroneUrl([dallas.lon, dallas.lat], [15, 30], 'pk.REDACTED').slice(0, 96) + '...\n');

@@ -31,7 +31,7 @@ terraform {
   # exactly this residue is what Terragrunt's `generate` block is for, and the
   # only reason worth adopting it here.)
   backend "s3" {
-    bucket       = "netpulse-tfstate-333344445555"
+    bucket       = "meridian-tfstate-333344445555"
     key          = "stage/terraform.tfstate"
     region       = "us-east-1"
     encrypt      = true
@@ -45,12 +45,12 @@ provider "aws" {
   # CI assumes this role via GitHub OIDC. No long-lived AWS access keys exist
   # anywhere in this repo or in GitHub secrets.
   assume_role {
-    role_arn = "arn:aws:iam::333344445555:role/netpulse-deploy"
+    role_arn = "arn:aws:iam::333344445555:role/meridian-deploy"
   }
 
   default_tags {
     tags = {
-      Project     = "netpulse"
+      Project     = "meridian"
       Environment = "stage"
       ManagedBy   = "terraform"
 
@@ -67,7 +67,7 @@ module "stack" {
 
   env        = "stage"
   aws_region = "us-east-1"
-  app_origin = "https://stage.netpulse.example.com"
+  app_origin = "https://stage.meridian.example.com"
 
   # Stage federates against the customer's SSO test tenants, so the enterprise
   # login paths are exercised before prod. dev and test do not - there is no

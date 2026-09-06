@@ -171,7 +171,7 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
       publishToSubscribers('onIncidentOpened', incident);
 
       await bus.putEvents({
-        source: 'netpulse.api',
+        source: 'meridian.api',
         detailType: 'IncidentOpened',
         detail: { tenantId: incident.tenantId, incidentId: incident.incidentId, severity: incident.severity },
       });

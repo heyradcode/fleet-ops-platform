@@ -78,5 +78,5 @@ export function buildIngestWorkflow(principal: Principal, since: string) {
     },
   ];
 
-  return new StateMachine('netpulse-ingest', states);
+  return new StateMachine('meridian-ingest', states);
 }

@@ -313,7 +313,7 @@ at apply time rather than committing them to a tfvars file.
 **How does CI authenticate to AWS?**
 GitHub OIDC. GitHub issues a short-lived token; an IAM role trusts it with the
 subject pinned to the repo *and* environment
-(`repo:acme/netpulse:environment:prod`). No long-lived access keys exist. A
+(`repo:acme/meridian:environment:prod`). No long-lived access keys exist. A
 wildcard subject would let any branch of any repo assume the prod deploy role.
 → `.github/workflows/terraform-apply.yml`
 

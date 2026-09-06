@@ -107,7 +107,7 @@ export class DynamoTable {
   size(): number { return [...this.#items.values()].reduce((n, p) => n + p.size, 0); }
 }
 
-export const mainTable = new DynamoTable(process.env.TABLE_NAME ?? 'netpulse-dev-main');
+export const mainTable = new DynamoTable(process.env.TABLE_NAME ?? 'meridian-dev-main');
 
 /** Key builders live next to the table so the layout is documented in one place. */
 export const keys = {

@@ -52,7 +52,7 @@ function lookupTenantMembership(email: string): { tenantId: string; roles: strin
   const table: Record<string, { tenantId: string; roles: string[] }> = {
     'acme.com': { tenantId: 'acme', roles: ['operator'] },
     'globex.com': { tenantId: 'globex', roles: ['viewer'] },
-    'netpulse.io': { tenantId: 'acme', roles: ['admin'] },
+    'meridian.io': { tenantId: 'acme', roles: ['admin'] },
   };
   return table[domain];
 }

@@ -48,7 +48,7 @@ affects; this table is the index.
 | 7 | **Fixtures modelled from published API references** | Individual developers cannot get Samsara / Motive / Lytx sandbox access. The current header says "capture one true response per vendor" — that instruction cannot be followed and implies it was | 4 |
 | 8 | **GPS traces follow hand-drawn polylines** | 3–4 per district, interpolated along. Removes the "drivers crossing rivers" tell anyone with fleet experience spots instantly | 4 |
 | 9 | **Frontend steps 1–2 in scope, step 3 optional** | Board is the portfolio screenshot; the agent-trace panel is the differentiator. Time controls are droppable polish | 9 |
-| 10 | **Tests move with their phase, not at the end** | The 43 existing tests import `Signal`, `Incident`, `detectIncidents`. Phase 1 breaks all of them on contact. A test suite that is red from Phase 1 to Phase 11 is not a safety net — it is decoration | all |
+| 10 | **Tests move with their phase, not at the end** | The 40 existing tests import `Signal`, `Incident`, `detectIncidents`. Phase 1 breaks all of them on contact. A test suite that is red from Phase 1 to Phase 11 is not a safety net — it is decoration | all |
 | 11 | **The demo tenant uses 3 vendors, not 8** | A carrier runs one GPS unit, one ELD and one dashcam per truck — Samsara + Motive + Lytx is realistic; all eight is not. Other tenants use different subsets, which is what makes per-tenant connector config a real code path rather than a claim | 2, 4 |
 | 12 | **Add `src/aws/kinesis.ts`** | Phase 3's entire batching argument has nothing to point at: `src/aws/` stands in for DynamoDB, S3, EventBridge, Step Functions and Bedrock, but there is no stream. Without it, "batch from the stream" is a comment, not code | 3 |
 
@@ -743,7 +743,7 @@ Independent of Phases 1–9; can run at any point after Phase 0.
 
 ## Phase 11 — Scenario tests
 
-**The 43 existing tests are not this phase's work** (Decision 10). They are
+**The 40 existing tests are not this phase's work** (Decision 10). They are
 distributed across the phases that break them:
 
 | Test file | Tests | Repaired in |
@@ -754,7 +754,7 @@ distributed across the phases that break them:
 | `geo/spatial.test.ts` | 9 | Phase 5 — likely untouched; `spatial.ts` does not change |
 
 Every one of them imports `Signal`, `Incident` or `detectIncidents`, so Phase 1
-breaks all 43 on contact. Leaving them broken until Phase 11 would mean running
+breaks all 40 on contact. Leaving them broken until Phase 11 would mean running
 Phases 2–10 with no test signal at all — the exact stretch of work where a
 silent rename mistake is most likely and least visible.
 

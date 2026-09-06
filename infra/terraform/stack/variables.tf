@@ -37,7 +37,7 @@ variable "aws_region" {
 variable "app_origin" {
   description = <<-EOT
     The SPA's origin, scheme and port included, with no trailing slash.
-    e.g. "http://localhost:5173" or "https://app.netpulse.example.com".
+    e.g. "http://localhost:5173" or "https://app.meridian.example.com".
 
     Cognito callback/logout URLs and the API's CORS allow-list are all derived
     from this - they were three separate variables that always moved together,

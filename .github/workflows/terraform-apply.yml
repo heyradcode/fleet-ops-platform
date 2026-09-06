@@ -49,12 +49,12 @@ jobs:
       # -----------------------------------------------------------------------
       # The IAM role's trust policy pins the audience AND the subject, e.g.
       #   "token.actions.githubusercontent.com:sub":
-      #       "repo:acme/netpulse:environment:prod"
+      #       "repo:acme/meridian:environment:prod"
       # A wildcard subject like repo:acme/*:* would let ANY branch of ANY repo
       # in the org assume the prod deploy role. Pin it to the environment.
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::${{ inputs.aws-account }}:role/netpulse-deploy
+          role-to-assume: arn:aws:iam::${{ inputs.aws-account }}:role/meridian-deploy
           aws-region: us-east-1
           role-session-name: gha-${{ inputs.environment }}-${{ github.run_id }}
 
@@ -71,7 +71,7 @@ jobs:
       - name: Load deploy-time secrets
         run: |
           secret=$(aws secretsmanager get-secret-value \
-            --secret-id netpulse/${{ inputs.environment }}/idp \
+            --secret-id meridian/${{ inputs.environment }}/idp \
             --query SecretString --output text)
 
           for key in google_client_id google_client_secret; do
@@ -135,7 +135,7 @@ jobs:
           aws rds-data execute-statement \
             --resource-arn "$cluster_arn" \
             --secret-arn "$(terraform output -raw aurora_secret_arn)" \
-            --database netpulse \
+            --database meridian \
             --sql "$(cat ../../../../src/data/schema.sql)"
 
       # Sync the runbook corpus, then tell Bedrock to re-index it. Uploading
