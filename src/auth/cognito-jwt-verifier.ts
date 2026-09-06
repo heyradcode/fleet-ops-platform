@@ -37,7 +37,7 @@
  * This file uses HMAC so the demo can sign its own tokens offline. The
  * verification LOGIC below is the real logic; only the algorithm differs.
  */
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { b64urlDecode, b64urlDecodeText, b64urlEncode, hmacSha256, timingSafeEqual } from '../platform/crypto.ts';
 import type { Principal, TenantId } from '../platform/types.ts';
 
 const DEMO_SECRET = 'demo-only-not-a-real-signing-key';
@@ -67,10 +67,9 @@ export class TokenVerificationError extends Error {
   }
 }
 
-const b64url = (buf: Buffer | string) =>
-  Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const b64url = b64urlEncode;
 
-const unb64url = (s: string) => Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+const unb64url = b64urlDecode;
 
 /** Demo-only token minting. Cognito does this for you at the hosted UI. */
 export function signDemoToken(claims: Partial<CognitoClaims> & { sub: string }): string {
@@ -89,7 +88,7 @@ export function signDemoToken(claims: Partial<CognitoClaims> & { sub: string }):
   } as CognitoClaims;
 
   const signingInput = b64url(JSON.stringify(header)) + '.' + b64url(JSON.stringify(payload));
-  const sig = b64url(createHmac('sha256', DEMO_SECRET).update(signingInput).digest());
+  const sig = b64url(hmacSha256(DEMO_SECRET, signingInput));
   return signingInput + '.' + sig;
 }
 
@@ -102,19 +101,19 @@ export function verifyToken(token: string): Principal {
   if (parts.length !== 3) throw new TokenVerificationError('not a three-part JWS');
 
   const [headerB64, payloadB64, sigB64] = parts;
-  const header = JSON.parse(unb64url(headerB64).toString()) as { alg: string; kid?: string };
+  const header = JSON.parse(b64urlDecodeText(headerB64)) as { alg: string; kid?: string };
 
   // Check 7 first: never trust the token to tell you how to check the token.
   if (header.alg !== 'HS256') throw new TokenVerificationError('unexpected alg ' + header.alg);
 
   // Check 1: signature. timingSafeEqual, not ===, to avoid a timing oracle.
-  const expected = createHmac('sha256', DEMO_SECRET).update(headerB64 + '.' + payloadB64).digest();
+  const expected = hmacSha256(DEMO_SECRET, headerB64 + '.' + payloadB64);
   const actual = unb64url(sigB64);
   if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
     throw new TokenVerificationError('signature mismatch');
   }
 
-  const claims = JSON.parse(unb64url(payloadB64).toString()) as CognitoClaims;
+  const claims = JSON.parse(b64urlDecodeText(payloadB64)) as CognitoClaims;
   const now = Math.floor(Date.now() / 1000);
 
   if (claims.iss !== ISSUER) throw new TokenVerificationError('wrong issuer');                    // 2

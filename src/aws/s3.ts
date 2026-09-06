@@ -12,7 +12,7 @@
  * Bucket policy essentials: block public access, SSE-KMS, versioning on, and a
  * lifecycle rule moving objects to Glacier Instant Retrieval after 90 days.
  */
-import { randomUUID } from 'node:crypto';
+import { uuid } from '../platform/crypto.ts';
 import { log } from '../platform/logger.ts';
 import type { RawRecord } from '../platform/types.ts';
 
@@ -54,7 +54,7 @@ export function archiveRaw(record: RawRecord): string {
     'provider=' + record.provider,
     'dt=' + dt,
     'hh=' + hh,
-    randomUUID() + '.json',
+    uuid() + '.json',
   ].join('/');
 
   const uri = rawBucket.putObject(key, record);

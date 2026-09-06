@@ -39,6 +39,7 @@ import { requireRole } from '../platform/tenancy.ts';
 import { incidentId as newIncidentId } from '../platform/ids.ts';
 import { bus } from '../aws/eventbridge.ts';
 import { publishToSubscribers } from './subscriptions.ts';
+import { b64urlEncode } from '../platform/crypto.ts';
 
 /**
  * The AppSync Lambda event. `identity` is populated from the verified Cognito
@@ -89,7 +90,7 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
       // The cursor is opaque to the client and encodes DynamoDB's
       // LastEvaluatedKey. Never leak the raw key - it exposes the key schema.
       const nextToken = items.length === limit
-        ? Buffer.from(JSON.stringify({ after: items[items.length - 1].observedAt })).toString('base64url')
+        ? b64urlEncode(JSON.stringify({ after: items[items.length - 1].observedAt }))
         : null;
       return { items, nextToken };
     }

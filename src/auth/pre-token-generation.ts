@@ -1,3 +1,4 @@
+import { b64urlEncode } from '../platform/crypto.ts';
 /**
  * ---------------------------------------------------------------------------
  * Cognito PreTokenGeneration Lambda trigger
@@ -74,7 +75,7 @@ export async function handler(event: PreTokenGenerationEvent): Promise<PreTokenG
     claimsToAddOrOverride: {
       'custom:tenantId': membership.tenantId,
       // A stable id the app can send to support without leaking the email.
-      'custom:principalRef': Buffer.from(email).toString('base64url').slice(0, 16),
+      'custom:principalRef': b64urlEncode(email).slice(0, 16),
     },
     // Suppress claims the API does not need. Smaller tokens, less PII in logs.
     claimsToSuppress: ['given_name', 'family_name', 'phone_number'],

@@ -32,7 +32,7 @@
  * so vector search genuinely works - retrieval you can watch is worth more for
  * learning than a hard-coded list of "results".
  */
-import { createHash } from 'node:crypto';
+import { sha256 } from '../platform/crypto.ts';
 import { log } from '../platform/logger.ts';
 
 export const MODELS = {
@@ -81,8 +81,9 @@ export async function embed(text: string): Promise<number[]> {
   const vec = new Array<number>(EMBED_DIMS).fill(0);
 
   for (const token of tokenize(text)) {
-    const h = createHash('md5').update(token).digest();
-    vec[h.readUInt16BE(0) % EMBED_DIMS] += 1;
+    // First 16 bits of the token's SHA-256, as the bucket index.
+    const bucket = parseInt(sha256(token).slice(0, 4), 16);
+    vec[bucket % EMBED_DIMS] += 1;
   }
 
   const norm = Math.sqrt(vec.reduce((s, v) => s + v * v, 0)) || 1;

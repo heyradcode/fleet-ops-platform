@@ -29,16 +29,10 @@
  * The ingestion pipeline it runs for you: chunk -> embed -> upsert -> index.
  * That is implemented below so you can watch it happen.
  */
-import { readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { cosineSimilarity, embed, tokenize } from '../aws/bedrock.ts';
+import { getRunbooks } from '../platform/runbook-loader.ts';
 import type { TenantId } from '../platform/types.ts';
 import { log } from '../platform/logger.ts';
-
-/** ESM has no __dirname - derive it from import.meta.url. */
-const HERE = fileURLToPath(new URL('.', import.meta.url));
-const RUNBOOK_DIR = join(HERE, '..', 'data', 'runbooks');
 
 export type Chunk = {
   id: string;
@@ -119,15 +113,14 @@ export class KnowledgeBase {
 
   /** The Bedrock "ingestion job", in miniature. */
   async ingestRunbooks(tenantId: TenantId): Promise<void> {
-    const files = readdirSync(RUNBOOK_DIR).filter((f) => f.endsWith('.md'));
+    const docs = getRunbooks();
 
-    for (const file of files) {
-      const markdown = readFileSync(join(RUNBOOK_DIR, file), 'utf8');
-      for (const chunk of chunkMarkdown(markdown, file, tenantId)) {
+    for (const doc of docs) {
+      for (const chunk of chunkMarkdown(doc.text, doc.source, tenantId)) {
         this.#chunks.push({ ...chunk, embedding: await embed(chunk.text) });
       }
     }
-    log.info('knowledge base ingested', { docs: files.length, chunks: this.#chunks.length });
+    log.info('knowledge base ingested', { docs: docs.length, chunks: this.#chunks.length });
   }
 
   /**

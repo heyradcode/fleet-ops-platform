@@ -2,23 +2,23 @@
  * ---------------------------------------------------------------------------
  * The connector contract
  * ---------------------------------------------------------------------------
- * The JD's first deliverable is "integrate a designated set of third-party APIs
- * into a centralized reporting view". Eight vendors, eight auth schemes, eight
+ * A fleet runs telematics, ELD and dashcam hardware from different vendors,
+ * often several of each after an acquisition. Eight vendors, eight auth schemes,
  * payload shapes, eight rate limits. If you write eight bespoke Lambdas you
  * will maintain eight bespoke Lambdas forever.
  *
  * Instead: ONE interface, one retry policy, one circuit breaker, one place that
- * knows how to turn vendor JSON into a `Signal`. Adding Fortinet next quarter
- * is then a new file, not a new architecture.
+ * knows how to turn vendor JSON into `Telemetry`. Adding Zonar next quarter is
+ * then a new file, not a new architecture.
  *
  *   fetchRaw()   - talk to the vendor. Returns the payload untouched.
- *   normalise()  - vendor payload -> Signal[]. Pure function, trivially unit
+ *   normalise()  - vendor payload -> Telemetry[]. Pure function, trivially unit
  *                  testable, and the ONLY place that understands the vendor.
  *
  * Keeping normalise() pure is what makes replay work: when you find a mapping
  * bug you re-run it over the raw JSON already archived in S3.
  */
-import type { ProviderDomain, ProviderId, RawRecord, Signal, TenantId } from '../platform/types.ts';
+import type { ProviderDomain, ProviderId, RawRecord, Telemetry, TenantId } from '../platform/types.ts';
 import { log } from '../platform/logger.ts';
 
 export type ConnectorContext = {
@@ -37,7 +37,7 @@ export type Connector = {
   /** Vendor's documented rate limit. Feeds the Step Functions Map concurrency. */
   rateLimitPerMin: number;
   fetchRaw(ctx: ConnectorContext): Promise<RawRecord>;
-  normalise(raw: RawRecord): Signal[];
+  normalise(raw: RawRecord): Telemetry[];
 };
 
 // ---------------------------------------------------------------------------
@@ -145,27 +145,32 @@ export class CircuitBreaker {
  * is what makes a single cross-vendor reporting view meaningful rather than a
  * pile of incomparable colours.
  */
-export function severityFor(kind: Signal['kind'], value: number): Signal['severity'] {
-  const thresholds: Record<Signal['kind'], [warning: number, critical: number]> = {
-    'device-health': [90, 75],     // inverted: LOWER is worse
-    'wan-latency': [120, 250],
-    'packet-loss': [1, 5],
-    'queue-wait': [60, 180],
-    'abandon-rate': [5, 12],
-    'agent-occupancy': [85, 95],
-    'error-rate': [1, 5],
-    'log-volume': [10_000, 50_000],
+export function severityFor(kind: Telemetry['kind'], value: number): Telemetry['severity'] {
+  // [warning, critical]. Tuned so the demo fixtures land where the narrative
+  // needs them; real thresholds come from the safety team, not from a developer.
+  const thresholds: Record<Telemetry['kind'], [warning: number, critical: number]> = {
+    'position': [200, 300],            // kph - only ever flags a broken sensor
+    'speeding': [10, 25],              // kph over the posted limit
+    'harsh-brake': [0.35, 0.55],       // g
+    'idle': [15, 30],                  // minutes
+    'hos-remaining': [60, 40],         // INVERTED: fewer minutes left is worse
+    'route-adherence': [400, 1_000],   // metres off the corridor
+    'geofence-state': [1, 1],          // boolean; breach handled by the rule
+    'panic': [1, 1],                   // any panic is critical
   };
 
   const [warn, crit] = thresholds[kind];
-  const inverted = kind === 'device-health';
 
-  if (inverted) {
+  // Hours-of-service counts DOWN. Getting this backwards would silently stop
+  // the platform ever warning about a driver running out of legal hours.
+  if (kind === 'hos-remaining') {
     if (value <= crit) return 'critical';
     if (value <= warn) return 'warning';
     return 'ok';
   }
+
   if (value >= crit) return 'critical';
   if (value >= warn) return 'warning';
   return 'ok';
 }
+

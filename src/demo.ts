@@ -45,6 +45,7 @@ import { runAgent } from './ai/agent-core.ts';
 import { TOOL_SPECS, READ_ONLY_TOOL_SPECS } from './ai/tools.ts';
 import { usage as bedrockUsage, MODELS } from './aws/bedrock.ts';
 import { checkInput, canUseTool } from './ai/guardrails.ts';
+import { b64urlEncode, b64urlDecodeText } from './platform/crypto.ts';
 
 // ---------------------------------------------------------------------------
 
@@ -146,9 +147,9 @@ async function sectionAuth() {
   note('');
   note('Tamper with the payload and re-verify:');
   const [h, p, s] = operatorToken.split('.');
-  const forgedPayload = Buffer.from(
-    JSON.stringify({ ...JSON.parse(Buffer.from(p, 'base64url').toString()), 'custom:tenantId': 'globex' }),
-  ).toString('base64url');
+  const forgedPayload = b64urlEncode(
+    JSON.stringify({ ...JSON.parse(b64urlDecodeText(p)), 'custom:tenantId': 'globex' }),
+  );
   try {
     verifyToken([h, forgedPayload, s].join('.'));
     process.stdout.write('   \x1b[31mFORGERY ACCEPTED - this would be a breach\x1b[0m\n');
