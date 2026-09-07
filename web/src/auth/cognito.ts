@@ -32,7 +32,9 @@ import { sha256Bytes, b64urlEncode, uuid } from '../../../src/platform/crypto.ts
  * not Cognito is configured, and a missing variable must be a clear message at
  * sign-in time, not a crash while the bundle evaluates.
  */
-function config(): { domain: string; clientId: string; redirectUri: string; pool: PoolConfig } {
+function config(): {
+  domain: string; clientId: string; redirectUri: string; idps: string[]; pool: PoolConfig;
+} {
   const domain = import.meta.env?.VITE_COGNITO_DOMAIN as string | undefined;
   const clientId = import.meta.env?.VITE_COGNITO_CLIENT_ID as string | undefined;
   const issuer = import.meta.env?.VITE_COGNITO_ISSUER as string | undefined;
@@ -43,6 +45,13 @@ function config(): { domain: string; clientId: string; redirectUri: string; pool
     domain,
     clientId,
     redirectUri: `${globalThis.location.origin}/callback`,
+    // Which identity providers this POOL actually has. Home-realm discovery
+    // knows which IdP a domain *should* use; only the deployment knows which
+    // ones exist. Sending `identity_provider=AcmeSAML` to a pool that has no
+    // SAML provider gets "Login option is not available" from the hosted UI -
+    // a true statement about the pool that reads as a broken sign-in page.
+    idps: (import.meta.env?.VITE_COGNITO_IDPS as string | undefined ?? 'COGNITO')
+      .split(',').map((s) => s.trim()).filter(Boolean),
     // The issuer is the JWKS root as well as the `iss` claim we require, so
     // one variable pins both. A pool id in the URL and a different one in the
     // token is precisely what check 2 exists to catch.
@@ -97,7 +106,12 @@ export const cognitoAuth: AuthProvider = {
   },
 
   async signIn(email) {
-    return this.signInWith(resolveIdpForEmail(email), email);
+    const wanted = resolveIdpForEmail(email);
+    // Fall back to the pool's own form rather than asking for a provider it
+    // does not have. The offline provider still demonstrates the full
+    // discovery table; this one is bounded by what was deployed.
+    const available = config().idps;
+    return this.signInWith(available.includes(wanted) ? wanted : 'COGNITO', email);
   },
 
   async signInWith(provider) {

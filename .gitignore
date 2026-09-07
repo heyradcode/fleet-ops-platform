@@ -19,3 +19,8 @@ infra/terraform/modules/lambda/.build/
 # terraform.tfvars.example is the committed record of what is needed.
 *.tfvars
 !*.tfvars.example
+
+# Vite local env overrides. `.env` alone does not cover these, and .env.local
+# is exactly where real pool ids and endpoints end up.
+.env.local
+.env.*.local

@@ -8,6 +8,13 @@
  * Palette from web/src/styles.css: --ground, --panel, --line, --text, --amber. */
 
 .background-customizable {
+  /* This class is the CARD, not the page. Worth knowing before you try to
+   * fix the layout with it: min-height stretches the card to the viewport
+   * and padding pushes its contents down inside it. The page wrapper - the
+   * grey around the card, and the vertical position of the card on it - is
+   * not exposed by set-ui-customization at all, so neither the grey nor the
+   * top alignment can be styled here. Cognito's newer managed login (the
+   * Essentials tier) is the paid answer; this is the free one. */
   background-color: #0e1116;
 }
 
