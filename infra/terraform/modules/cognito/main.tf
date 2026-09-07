@@ -120,6 +120,20 @@ resource "aws_cognito_user_pool" "main" {
     }
   }
 
+  # NO SELF-SIGNUP, and this block is the only thing that stops it - the
+  # Cognito default is to allow it, so omitting this leaves the hosted UI's
+  # "Sign up" link live for anyone on the internet.
+  #
+  # It is also the setting the product model depends on. A dispatcher does not
+  # sign themselves up for a carrier's fleet platform: the carrier is
+  # onboarded, its SSO is configured, and its people arrive through it. Without
+  # this, a stranger creates an account, the PreTokenGeneration trigger finds
+  # no tenant for their domain and fails closed - so they see nothing, which
+  # is the right outcome reached by the wrong route.
+  admin_create_user_config {
+    allow_admin_create_user_only = true
+  }
+
   account_recovery_setting {
     recovery_mechanism {
       name     = "verified_email"
