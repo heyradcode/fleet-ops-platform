@@ -1,0 +1,104 @@
+/* Cognito hosted UI, in the board's palette.
+ *
+ * Cognito validates this against a FIXED list of classes and properties and
+ * rejects anything else, so this is not general CSS - no font-family, no
+ * pseudo-elements, no custom properties. It gets the redirect close enough
+ * that leaving the board does not feel like leaving the product.
+ *
+ * Palette from web/src/styles.css: --ground, --panel, --line, --text, --amber. */
+
+.background-customizable {
+  background-color: #0e1116;
+}
+
+.banner-customizable {
+  background-color: #151a21;
+  padding: 18px 0 18px 0;
+}
+
+.logo-customizable {
+  max-width: 60%;
+  max-height: 30%;
+}
+
+.label-customizable {
+  color: #6e7a8a;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.textDescription-customizable {
+  color: #6e7a8a;
+  font-size: 14px;
+  padding-top: 10px;
+  padding-bottom: 12px;
+}
+
+.inputField-customizable {
+  background-color: #1b222b;
+  border-color: #232b36;
+  color: #eaf0f6;
+  width: 100%;
+}
+
+.inputField-customizable:focus {
+  border-color: #f0a202;
+  outline: 0;
+}
+
+/* Amber only ever means "the thing to act on" - here, the one button. */
+.submitButton-customizable {
+  background-color: #f0a202;
+  color: #0e1116;
+  font-size: 14px;
+  font-weight: 600;
+  margin: 20px 0px 10px 0px;
+}
+
+.submitButton-customizable:hover {
+  background-color: #ffb524;
+  color: #0e1116;
+}
+
+.idpButton-customizable {
+  background-color: #1b222b;
+  border-color: #313b48;
+  color: #c9d1d9;
+  width: 100%;
+}
+
+.idpButton-customizable:hover {
+  background-color: #232b36;
+  color: #eaf0f6;
+}
+
+.socialButton-customizable {
+  border-radius: 2px;
+  height: 40px;
+  margin-bottom: 12px;
+  width: 100%;
+}
+
+.redirect-customizable {
+  padding: 12px;
+}
+
+.legalText-customizable {
+  color: #4a5566;
+  font-size: 11px;
+}
+
+.errorMessage-customizable {
+  background-color: #7d2a2d;
+  border-color: #e5484d;
+  color: #eaf0f6;
+  padding: 10px;
+}
+
+.passwordCheck-notValid-customizable {
+  color: #e5484d;
+}
+
+.passwordCheck-valid-customizable {
+  color: #3fb27f;
+}

@@ -133,6 +133,10 @@ module "cognito" {
   # name prefix; set it if the apply tells you the domain is taken.
   domain_prefix = var.domain_prefix
 
+  # The hosted UI's stylesheet, kept beside this file rather than inline - it
+  # is CSS, and it deserves an editor that knows that.
+  ui_css = file("${path.module}/hosted-ui/theme.css")
+
   # Threat protection is the Cognito "Plus" feature plan. It is the highest
   # value paid feature on a real pool and pointless on a demo one, so it stays
   # off and the pool stays on the free plan.

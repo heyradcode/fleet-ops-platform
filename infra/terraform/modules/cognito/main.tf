@@ -10,6 +10,12 @@ variable "callback_urls" { type = list(string) }
 variable "logout_urls" { type = list(string) }
 variable "pre_token_generation_lambda_arn" { type = string }
 
+variable "ui_css" {
+  description = "Hosted UI stylesheet. Empty means leave Cognito's default. Validated server-side against a fixed class list."
+  type        = string
+  default     = ""
+}
+
 variable "domain_prefix" {
   description = "Hosted UI domain prefix. Globally unique across all AWS accounts. Empty derives it from name_prefix."
   type        = string
@@ -310,6 +316,27 @@ resource "aws_cognito_user_pool_client" "web" {
 resource "aws_cognito_user_pool_domain" "main" {
   domain       = coalesce(var.domain_prefix, "${var.name_prefix}-auth")
   user_pool_id = aws_cognito_user_pool.main.id
+}
+
+# The hosted UI, in the board's palette.
+#
+# The redirect to Cognito is a real step in the PKCE flow, and an unstyled grey
+# box in the middle of it reads as having left the product. This gets it close.
+#
+# Cognito validates the CSS server-side against a FIXED list of about seventeen
+# classes and rejects the whole document on one unknown name - `.inputLabel-
+# customizable` is NOT on it, though `.label-customizable` is. No font-family,
+# no pseudo-elements, and the page background and link colour are not
+# reachable at all, so this can get close to the board and never match it.
+#
+# Depends on the DOMAIN, not just the pool: there is no hosted UI to style
+# until the domain exists, and Terraform cannot infer that ordering itself.
+resource "aws_cognito_user_pool_ui_customization" "this" {
+  count = var.ui_css == "" ? 0 : 1
+
+  user_pool_id = aws_cognito_user_pool_domain.main.user_pool_id
+  client_id    = aws_cognito_user_pool_client.web.id
+  css          = var.ui_css
 }
 
 # Groups become the `cognito:groups` claim, which mapGroupsToRoles() in
