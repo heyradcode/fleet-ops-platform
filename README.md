@@ -12,9 +12,13 @@ pnpm start       # the backend, narrated, in your terminal
 pnpm web         # the dispatch board, at localhost:5180
 ```
 
-The board opens on a sign-in page. Four demo accounts, no passwords: a district
-dispatcher, a safety reviewer, an operations lead and a user from a different
-carrier. What each one sees is decided by the token they are issued.
+The board opens on a sign-in page. Offline there are no passwords - type any
+address at one of four registered carrier domains (`acme-freight.com`,
+`safety.acme-freight.com`, `meridian.io`, `northstar-logistics.com`) and the
+same Cognito logic the Lambdas run mints and verifies a token locally. What you
+see afterwards is decided by that token, not by anything on the page: a
+dispatcher gets one district, an admin the whole carrier, and an unregistered
+domain gets nothing at all.
 
 <sub>Node 22+ for the backend — it is TypeScript and Node runs it directly via
 type-stripping, so there is no build step. The board is a separate workspace

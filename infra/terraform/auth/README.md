@@ -96,7 +96,7 @@ as `redirect_mismatch` at the hosted UI rather than as anything more helpful.
 **1. Check the pool answers.** `terraform output hosted_ui_url`, open it. You
 should get a Cognito login page. Nobody can sign in yet — there are no users.
 
-**2. Make a user.** Self-signup is off by design: a dispatcher does not sign
+**2. Make a user.** Self-signup is off (`admin_create_user_config`): a dispatcher does not sign
 themselves up for a carrier's fleet.
 
 ```bash
@@ -122,7 +122,30 @@ VITE_COGNITO_ISSUER     https://cognito-idp.<region>.amazonaws.com/<poolId>
 ```
 
 With any of them missing the board keeps using the offline provider. That is
-the intended default, not a failure — the demo accounts stay clickable.
+the intended default, not a failure — the local issuer still mints and
+verifies tokens for the registered carrier domains, with no password.
+
+### Onboarding a carrier
+
+Membership lives in the DynamoDB table this root creates, not in code. Adding
+a carrier is a row:
+
+```bash
+aws dynamodb put-item --table-name meridian-demo-membership --item '{
+  "PK":       {"S": "TENANT_MEMBERSHIP#newco.example"},
+  "tenantId": {"S": "newco"},
+  "roles":    {"SS": ["dispatcher"]},
+  "district": {"S": "phx"}
+}'
+```
+
+No rebuild, no deploy. Terraform seeds the four demo carriers with
+`aws_dynamodb_table_item`, which manages only the rows it declares — rows
+added this way survive the next `apply` rather than being destroyed.
+
+Omit `district` for tenant-wide scope. `roles` is a string SET, and only
+`admin`, `safety`, `dispatcher`, `driver` and `viewer` map to anything —
+anything else degrades to `viewer` rather than failing.
 
 **4. Optional: Google sign-in.** Create an OAuth client in Google Cloud with
 the authorized redirect URI `https://<domain>/oauth2/idpresponse`, then:

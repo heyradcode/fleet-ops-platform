@@ -22,37 +22,6 @@ import { resolveIdpForEmail, IDENTITY_PROVIDERS } from '../../../src/auth/provid
 
 const STORAGE_KEY = 'meridian.session';
 
-/**
- * Accounts this demo will sign in, and what each one demonstrates.
- *
- * A real pool holds these in Cognito with the tenant and district on the user
- * record; the PreTokenGeneration trigger reads them from DynamoDB. Here the
- * trigger's own membership table does that job, and this list exists so the
- * sign-in page can offer something to click - a demo whose first screen is an
- * empty form nobody has credentials for is a demo nobody gets past.
- */
-export const DEMO_ACCOUNTS = [
-  {
-    email: 'dispatcher@acme-freight.com',
-    name: 'Dallas dispatcher',
-    shows: 'Scoped to one district. The board shows Dallas and nothing else.',
-  },
-  {
-    email: 'safety@safety.acme-freight.com',
-    name: 'Safety reviewer',
-    shows: 'Reads the whole carrier, but cannot move a load.',
-  },
-  {
-    email: 'lead@meridian.io',
-    name: 'Operations lead',
-    shows: 'Tenant-wide scope, because of the admin role rather than a missing filter.',
-  },
-  {
-    email: 'viewer@northstar-logistics.com',
-    name: 'A different carrier',
-    shows: 'Same platform, different tenant. Sees none of the above.',
-  },
-] as const;
 
 function labelFor(idp: string): string {
   return idp === 'COGNITO' ? 'Continue with email' : `Continue with ${idp}`;

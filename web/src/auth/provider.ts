@@ -8,8 +8,9 @@
  *   VITE_COGNITO_DOMAIN and VITE_COGNITO_CLIENT_ID set  -> hosted UI, PKCE
  *   otherwise                                           -> the local issuer
  *
- * The local provider ships the demo accounts; the hosted one has no business
- * showing them, since it has no way to honour a click on one.
+ * Offline, any address at a registered carrier domain signs in without a
+ * password. Against a real pool the password is Cognito's, and the domain has
+ * to exist in the membership table the token trigger reads.
  */
 import type { AuthProvider } from './index.ts';
 import { localAuth } from './local.ts';

@@ -27,7 +27,10 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const FUNCTIONS = [
   {
     name: 'pre-token-generation',
-    entry: 'src/auth/pre-token-generation.ts',
+    // NOT the handler itself. This entry wires the DynamoDB membership
+    // adapter and re-exports the handler, keeping the AWS SDK out of the
+    // shared module graph that the browser also loads.
+    entry: 'infra/terraform/auth/lambda-entry.ts',
   },
 ];
 
@@ -48,6 +51,15 @@ for (const fn of FUNCTIONS) {
     // from shimming things that are already there.
     platform: 'node',
     target: 'node22',
+    // The nodejs22.x runtime ships AWS SDK v3, so bundling it would add
+    // megabytes to the zip and slow every cold start to ship a copy of what
+    // is already on the box. External here, devDependency in package.json -
+    // which is also what keeps `src/` free of runtime dependencies.
+    //
+    // AWS has signalled the SDK may not be bundled in future runtimes. If
+    // that happens this line moves to a real dependency, and the only thing
+    // that changes is the size of the zip.
+    external: ['@aws-sdk/*'],
     // Sourcemaps make a CloudWatch stack trace point at the TypeScript line
     // that caused it rather than at column 4,891 of a bundle.
     sourcemap: 'inline',

@@ -28,6 +28,7 @@
     "build:lambda": "node scripts/build-lambda.mjs"
   },
   "devDependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1127.0",
     "@types/node": "^26.4.1",
     "esbuild": "0.25.12",
     "nodemon": "^3.1.9",

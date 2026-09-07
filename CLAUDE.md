@@ -124,6 +124,14 @@ real belongs in this repo.
   guard AND the board's hours-of-service strip. It used to be typed three
   times; an amber strip that disagreed with the rule would have been the
   symptom.
+- **The token trigger is in the BROWSER's module graph.**
+  `web/src/auth/local.ts` imports `auth/pre-token-generation.ts` so the offline
+  board runs Cognito's real logic — which means an AWS SDK import there breaks
+  `pnpm web:build`, and **CI would not catch it**: the portability check greps
+  for `node:` builtins and `@aws-sdk/*` is not one. Membership therefore goes
+  through a registry (`platform/membership.ts`), with the DynamoDB adapter
+  wired in `infra/terraform/auth/lambda-entry.ts`, which only esbuild reads.
+  Same shape as `runbook-loader.ts` / `runbook-loader.node.ts`.
 - **`crypto.randomUUID()` is secure-context only.** Undefined over plain http
   on a LAN address, which is how the board is reached behind a VPN that
   intercepts loopback. `platform/crypto.ts` falls back to `getRandomValues`.
@@ -164,4 +172,6 @@ src/aws/         local stand-ins for 6 AWS services
 src/data/        generator, corridors, scenarios, runbooks, schema.sql
 web/src/transport/  the boundary that lets the backend run in the browser
 web/src/auth/    sign-in: the same Cognito logic the Lambdas run, local issuer
+src/platform/membership.ts  which carrier an email domain belongs to; a
+                 registry, so the browser never loads the DynamoDB client
 ```

@@ -21,9 +21,12 @@ pnpm start
 pnpm web
 ```
 
-The board opens on a sign-in page. Pick one of the four demo accounts — there
-are no passwords — and notice that what each one can see is decided by the
-token it was issued, not by anything on the page.
+The board opens on a sign-in page. There are no passwords offline — type any
+address at `acme-freight.com` (a district dispatcher), `meridian.io` (an
+admin, tenant-wide) or `northstar-logistics.com` (a different carrier), and
+notice that what each one can see is decided by the token it was issued, not
+by anything on the page. An unregistered domain signs in and sees nothing,
+which is the fail-closed rule rather than a bug.
 
 ## 2. Read in this order (2-3 hours)
 

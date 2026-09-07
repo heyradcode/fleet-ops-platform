@@ -101,6 +101,21 @@ module "pre_token" {
   # Cognito's own timeout for this trigger is 5 seconds and it is not
   # configurable, so a longer Lambda timeout would only burn money before
   # Cognito gave up anyway.
+
+  environment = {
+    # Unset means the built-in carrier table, which is how the demo and the
+    # tests run. Terraform always sets it, so the fallback firing in a
+    # deployed function is a deployment bug and lambda-entry.ts logs it.
+    MEMBERSHIP_TABLE_NAME = aws_dynamodb_table.membership.name
+  }
+
+  # ONE action, on ONE table. The trigger reads membership and does nothing
+  # else, and this runs on the login path for every user in the system - the
+  # blast radius of a mistake here is everyone.
+  policy_statements = [{
+    actions   = ["dynamodb:GetItem"]
+    resources = [aws_dynamodb_table.membership.arn]
+  }]
 }
 
 # Cognito must be allowed to invoke it, and the permission is scoped to THIS

@@ -18,7 +18,6 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { auth, usingCognito } from './auth/provider.ts';
-import { DEMO_ACCOUNTS } from './auth/local.ts';
 import { AuthError, type Realm, type Session } from './auth/index.ts';
 
 type Props = {
@@ -62,18 +61,6 @@ export function SignIn({ onSignedIn, initialError = null }: Props) {
     }
   }
 
-  async function useAccount(address: string) {
-    setEmail(address);
-    setBusy(true);
-    setError(null);
-    try {
-      onSignedIn(await auth.signIn(address));
-    } catch (err) {
-      setError(err instanceof AuthError ? err.message : 'Sign-in failed. Try again.');
-    } finally {
-      setBusy(false);
-    }
-  }
 
   return (
     <div className="gate">
@@ -126,28 +113,6 @@ export function SignIn({ onSignedIn, initialError = null }: Props) {
                 {busy ? 'Signing in…' : realm ? realm.label : 'Continue'}
               </button>
             </form>
-
-            {/* Only the local issuer can honour a click on one of these. */}
-            {!usingCognito && <section className="gate-demo">
-              <h2 className="panel-h">Or sign in as</h2>
-              <p className="gate-note">
-                Four accounts, each showing a different scope. There are no
-                passwords — this build runs Cognito's logic against a local
-                issuer rather than a user pool.
-              </p>
-              {DEMO_ACCOUNTS.map((a) => (
-                <button
-                  key={a.email}
-                  className="demo-account"
-                  onClick={() => useAccount(a.email)}
-                  disabled={busy}
-                >
-                  <span className="demo-name">{a.name}</span>
-                  <span className="demo-email mono">{a.email}</span>
-                  <span className="demo-shows">{a.shows}</span>
-                </button>
-              ))}
-            </section>}
 
             <p className="gate-switch">
               New carrier?{' '}

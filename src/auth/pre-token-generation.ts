@@ -1,5 +1,6 @@
 import { b64urlEncode } from '../platform/crypto.ts';
 import { log } from '../platform/logger.ts';
+import { lookupTenantMembership, type Membership } from '../platform/membership.ts';
 /**
  * ---------------------------------------------------------------------------
  * Cognito PreTokenGeneration Lambda trigger
@@ -58,40 +59,11 @@ type TokenClaimOverride = {
   claimsToSuppress?: string[];
 };
 
-type Membership = {
-  tenantId: string;
-  roles: string[];
-  /**
-   * The dispatcher's district, if they have one.
-   *
-   * THIS IS WHY THE TRIGGER MATTERS MORE THAN IT LOOKS. Stamping the district
-   * into the token means it arrives at every downstream service SIGNED. A
-   * dispatcher cannot widen their own board by editing a request, because the
-   * board's scope was never in the request - it was in the token, and the
-   * token's signature covers it.
-   *
-   * Absent means tenant-wide, which is what an admin or a regional manager
-   * gets. That is a deliberate grant, not a default: see scopeFromClaims() in
-   * cognito-jwt-verifier.ts, which only widens for an explicit admin role.
-   */
-  district?: string;
-};
-
-/** Stand-in for a DynamoDB lookup keyed by email domain or federated sub. */
-function lookupTenantMembership(email: string): Membership | undefined {
-  const domain = email.split('@')[1]?.toLowerCase() ?? '';
-  const table: Record<string, Membership> = {
-    // A dispatcher, scoped to one board.
-    'acme-freight.com': { tenantId: 'acme-freight', roles: ['dispatcher'], district: 'dal' },
-    // Safety reviewers read the whole carrier but cannot move a load.
-    'safety.acme-freight.com': { tenantId: 'acme-freight', roles: ['safety'] },
-    // A different carrier entirely.
-    'northstar-logistics.com': { tenantId: 'northstar-logistics', roles: ['viewer'] },
-    // The platform team.
-    'meridian.io': { tenantId: 'acme-freight', roles: ['admin'] },
-  };
-  return table[domain];
-}
+// The membership lookup lives in platform/membership.ts, behind a registry.
+// It reads DynamoDB in the deployed Lambda and a built-in table everywhere
+// else, and this file cannot tell which - see that file for why the trigger
+// being in the browser's module graph forces exactly this shape.
+export type { Membership };
 
 /**
  * Drivers authenticate differently from dispatchers, and the difference is
@@ -155,7 +127,7 @@ function applyOverrides(
 
 export async function handler(event: PreTokenGenerationEvent): Promise<PreTokenGenerationEvent> {
   const email = event.request.userAttributes.email ?? '';
-  const membership = lookupTenantMembership(email);
+  const membership = await lookupTenantMembership(email);
 
   // The DOMAIN, never the address. This is the only record of why a sign-in
   // was scoped the way it was, and on a login path it is written for every
