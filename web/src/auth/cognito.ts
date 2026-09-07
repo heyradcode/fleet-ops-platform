@@ -21,7 +21,9 @@
  */
 import type { AuthProvider, Realm, Session, SignUpRequest } from './index.ts';
 import { AuthError } from './index.ts';
-import { verifyTokenRs256, type PoolConfig } from '../../../src/auth/cognito-jwt-verifier.ts';
+import {
+  verifyTokenRs256, TokenVerificationError, type PoolConfig,
+} from '../../../src/auth/cognito-jwt-verifier.ts';
 import { authorizeUrl, resolveIdpForEmail } from '../../../src/auth/providers.ts';
 import { sha256Bytes, b64urlEncode, uuid } from '../../../src/platform/crypto.ts';
 
@@ -97,7 +99,11 @@ export const cognitoAuth: AuthProvider = {
   },
 
   discover(email): Realm {
-    const idp = resolveIdpForEmail(email);
+    // Bounded by what the POOL has, exactly as signIn() is. Reporting
+    // AcmeSAML on the button and then requesting COGNITO would be a screen
+    // that describes something other than what it is about to do.
+    const wanted = resolveIdpForEmail(email);
+    const idp = config().idps.includes(wanted) ? wanted : 'COGNITO';
     return {
       idp,
       kind: idp === 'COGNITO' ? 'cognito' : 'saml',
@@ -106,15 +112,12 @@ export const cognitoAuth: AuthProvider = {
   },
 
   async signIn(email) {
-    const wanted = resolveIdpForEmail(email);
-    // Fall back to the pool's own form rather than asking for a provider it
-    // does not have. The offline provider still demonstrates the full
-    // discovery table; this one is bounded by what was deployed.
-    const available = config().idps;
-    return this.signInWith(available.includes(wanted) ? wanted : 'COGNITO', email);
+    // discover() already bounded this to what the pool has - going through it
+    // keeps the button's promise and the request identical by construction.
+    return this.signInWith(this.discover(email).idp, email);
   },
 
-  async signInWith(provider) {
+  async signInWith(provider, email) {
     const { domain, clientId, redirectUri } = config();
     const { verifier, challenge } = createPkcePair();
     // `state` is CSRF protection, not decoration: on the way back it is
@@ -131,6 +134,7 @@ export const cognitoAuth: AuthProvider = {
       redirectUri,
       identityProvider: provider,
       codeChallenge: challenge,
+      loginHint: email,
       state,
     }));
 
@@ -209,9 +213,30 @@ export async function completeRedirect(searchParams: URLSearchParams): Promise<S
   if (!res.ok) throw new AuthError('The identity provider rejected the sign-in. Start again.');
 
   const { access_token: token } = await res.json() as { access_token: string };
+
   // The ACCESS token, not the id token: it is what carries cognito:groups and
   // the custom claims the V2_0 trigger stamped, and what an API authorises on.
-  const session = { token, principal: await verifyTokenRs256(token, pool) };
-  sessionStorage.setItem(TOKEN_KEY, token);
-  return session;
+  try {
+    const session = { token, principal: await verifyTokenRs256(token, pool) };
+    sessionStorage.setItem(TOKEN_KEY, token);
+    return session;
+  } catch (err) {
+    // A token that verified everything EXCEPT tenancy is the fail-closed path,
+    // not a broken sign-in: Cognito authenticated them, the trigger found no
+    // carrier for their domain, and the board must not show a fleet. Say that
+    // in words the person can act on - "JWT rejected: no tenant claim" is
+    // true and tells them nothing.
+    // Not named, deliberately. A Cognito ACCESS token carries no `email`
+    // claim - that lives in the id token - so decoding this one to name the
+    // account returns nothing every time. The generic wording is the honest
+    // one until the trigger stamps an email of its own.
+    const noTenant = err instanceof TokenVerificationError
+      && err.message.includes('no tenant claim');
+    throw new AuthError(
+      noTenant
+        ? 'That account is not registered with a carrier. Sign in with your ' +
+          'work email, or ask your operations lead to add you.'
+        : 'Sign-in could not be verified. Start again.',
+    );
+  }
 }

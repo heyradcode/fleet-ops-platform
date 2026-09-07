@@ -1,4 +1,5 @@
 import { b64urlEncode } from '../platform/crypto.ts';
+import { log } from '../platform/logger.ts';
 /**
  * ---------------------------------------------------------------------------
  * Cognito PreTokenGeneration Lambda trigger
@@ -155,6 +156,22 @@ function applyOverrides(
 export async function handler(event: PreTokenGenerationEvent): Promise<PreTokenGenerationEvent> {
   const email = event.request.userAttributes.email ?? '';
   const membership = lookupTenantMembership(email);
+
+  // The DOMAIN, never the address. This is the only record of why a sign-in
+  // was scoped the way it was, and on a login path it is written for every
+  // user in the system - so it carries the lookup key and the decision, and
+  // no PII. Without it the trigger is a black box at exactly the moment you
+  // need to see inside it: "authenticated fine, saw no fleet" and nothing to
+  // say whether the domain missed, the version was wrong, or the claim was
+  // dropped downstream.
+  log.info('token claims resolved', {
+    domain: email.split('@')[1] ?? '(none)',
+    triggerVersion: event.version,
+    triggerSource: event.triggerSource,
+    tenantId: membership?.tenantId ?? '(unregistered)',
+    district: membership?.district ?? '(none)',
+    roles: (membership?.roles ?? []).join(',') || '(none)',
+  });
 
   if (!membership) {
     // Fail CLOSED: an unknown domain gets no tenant, and every tenant-scoped

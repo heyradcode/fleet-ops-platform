@@ -16,7 +16,7 @@
  * Dallas dispatcher genuinely cannot reach Phoenix because their token does not
  * say they may.
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { auth, usingCognito } from './auth/provider.ts';
 import { DEMO_ACCOUNTS } from './auth/local.ts';
 import { AuthError, type Realm, type Session } from './auth/index.ts';
@@ -32,6 +32,15 @@ export function SignIn({ onSignedIn, initialError = null }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(initialError);
   const [mode, setMode] = useState<'in' | 'up'>('in');
+
+  // useState's initial value is used on the FIRST render and never again, so
+  // an error that arrives later - and this one always does, because the token
+  // exchange is async - would set the prop and change nothing on screen. That
+  // is what "the callback page is just the sign-in page again" was: a failed
+  // redirect whose reason was computed, passed down, and silently dropped.
+  useEffect(() => {
+    if (initialError) setError(initialError);
+  }, [initialError]);
 
   // Discovery runs as you type. It costs nothing, and watching the provider
   // resolve is the clearest way to show what the lookup does.
@@ -102,6 +111,16 @@ export function SignIn({ onSignedIn, initialError = null }: Props) {
               )}
 
               {error && <p className="gate-error">{error}</p>}
+
+              {/* Cognito keeps its OWN session cookie, so /oauth2/authorize
+                  re-issues a code for the same rejected account on every
+                  attempt - a loop with no visible exit. Only /logout breaks
+                  it, and that is what signOut() does. */}
+              {error && usingCognito && (
+                <button type="button" className="linkish gate-switch" onClick={() => auth.signOut()}>
+                  Sign in as someone else
+                </button>
+              )}
 
               <button className="ask gate-submit" type="submit" disabled={busy || !realm}>
                 {busy ? 'Signing in…' : realm ? realm.label : 'Continue'}

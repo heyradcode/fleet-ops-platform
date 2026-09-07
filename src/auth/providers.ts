@@ -151,6 +151,8 @@ export function authorizeUrl(opts: {
   identityProvider: string;
   codeChallenge: string;
   state: string;
+  /** The address the user typed. Prefills the hosted UI - see below. */
+  loginHint?: string;
 }): string {
   const params = new URLSearchParams({
     response_type: 'code',
@@ -162,5 +164,14 @@ export function authorizeUrl(opts: {
     code_challenge_method: 'S256',
     state: opts.state,          // CSRF protection - verify it on the way back
   });
+
+  // The email typed on OUR page is only a discovery input; the hosted UI has
+  // its own field, and the browser will happily autofill a different saved
+  // account into it. Cognito then authenticates that one, the trigger finds no
+  // carrier for its domain, and the board rejects a token the person believes
+  // they requested for someone else entirely. `login_hint` prefills the field
+  // so the two agree.
+  if (opts.loginHint) params.set('login_hint', opts.loginHint);
+
   return 'https://' + opts.domain + '/oauth2/authorize?' + params;
 }
