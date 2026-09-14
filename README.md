@@ -87,26 +87,38 @@ is a board people learn to ignore.
 ## How it fits together
 
 ```
-  POLL  Meraki · Mist · Central     WEBHOOK  the same clouds, inbound
-        │  every 5 min, watermarked        │  HMAC + replay window at the edge
-        │  three pagination dialects       │  timely, partial, sometimes twice
-        ▼                                  ▼
-  S3 landing zone ──▶ connector.normalise(raw, inventory, RESOURCE)
-        │                                  │
-        │      the resource carries the PLANE — one cloud observes from two
-        │             + our own probe: the external plane
-        ▼                                  ▼
+  POLL                                WEBHOOK
+  Meraki · Mist · Central             the same clouds, inbound
+  every 5 min, watermarked            HMAC + replay window at the edge
+  three pagination dialects           timely, partial, sometimes twice
+        │                                   │
+        └─────────────────┬─────────────────┘
+                          │        + our own probe: the external plane
+                          ▼
+                   S3 landing zone
+                          │  archived BEFORE anything interprets it
+                          ▼
+        connector.normalise(raw, inventory, RESOURCE)
+                          │  the resource carries the PLANE -
+                          │  one cloud observes from two
+                          ▼
   Kinesis ──▶ batched consumer ──┬──▶ DynamoDB   current status, overwritten
   (by deviceId)                  ├──▶ S3         observation history, Parquet
                                  ├──▶ S3         flows, by exporter, Athena only
                                  └──▶ rules ──▶ Alarm ──▶ Incident
-                                                             │
-                            only alarms ──▶ EventBridge ─────┤
-                                                             ▼
-                              AppSync subscription, filtered by site
-                                                             │
-                                                             ▼
-                                                   the operations board
+                                                              │
+                                                              ▼
+                                                       EventBridge
+                                                  only alarms, never
+                                                     observations
+                                                              │
+             ┌───────────────┬───────────────┬────────────────┘
+             ▼               ▼               ▼
+        pager / Slack   Splunk HEC    AppSync subscription,
+                        their SIEM,   filtered by site
+                        already on          │
+                        the wall            ▼
+                                    the operations board
 ```
 
 Aurora PostGIS holds the inventory and the topology — "everything beneath this
@@ -124,6 +136,7 @@ You have limited time, so:
 | `src/platform/types.ts` | The domain model. `ObservationPlane` is the load-bearing one |
 | `src/integrations/http.ts` | Pagination and watermarks — what cloud APIs share |
 | `src/integrations/webhook.ts` | Verifying a delivery on a public endpoint |
+| `src/integrations/splunk/` | Shipping to the customer’s SIEM, and querying it back |
 | `src/platform/inventory.ts` | The alias→device join — the genuinely hard part |
 | `src/pipeline/steps.ts` | Where observations become alarms become incidents |
 | `src/data/scenarios.ts` | Six scenarios, each proving one claim about the rules |
@@ -154,6 +167,15 @@ and flag the mistakes that are easy to make.
 - **Observations never reach the event bus.** They are persisted and folded into
   hot state; only alarms are published. A test asserts it, because it is the
   claim most easily broken by a well-meaning edit.
+- **Splunk is a bus consumer, not a new subsystem.** The customer already runs
+  their NOC on it, so our conclusions go to them rather than asking anyone to
+  watch a second screen. Adding it was two rules and no change to anything that
+  produces events — which is what the bus was for. It gets alarms and incidents
+  and never observations, because Splunk licenses by indexed volume per day.
+- **Splunk is not a fourth observation plane.** If their Splunk ingests the
+  Meraki API — and plenty do — then a Splunk row agreeing with Meraki is one
+  vendor corroborating itself through a proxy. Search results are context for a
+  human; they never become Observations and never reach the rules.
 - **Flows never reach the operational store at all.** Aggregated traffic goes
   to its own bucket, partitioned by exporter, and is read with Athena. It is
   the one class whose volume would make DynamoDB scale with traffic rather than
@@ -242,7 +264,7 @@ pnpm start --only=ingest           # auth | ingest | scenarios | data | events
 pnpm start --only=ai               # graphql | rest | geo | ai
 pnpm dev                           # the same, restarting on every save
 
-pnpm test                          # 104 tests, no network
+pnpm test                          # 121 tests, no network
 pnpm typecheck
 
 pnpm web                           # the operations board

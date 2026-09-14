@@ -107,12 +107,20 @@
                                    │
                     ONLY ALARMS. Never observations.
                                    ▼
-                       ┌──────────────────────┐
-                       │     EventBridge      │
-                       └──┬────────┬──────┬───┘
-                          │        │      │
-                        pager    Slack   Firehose
-                                        (analytics)
+                  ┌────────────────────────────────┐
+                  │          EventBridge           │
+                  └───┬───────┬────────┬────────┬──┘
+                      │       │        │        │
+                      ▼       ▼        ▼        ▼
+                    pager   Slack  Firehose     Splunk HEC
+                                  (analytics)   the customer's SIEM.
+                                                Alarms and incidents
+                                                only - it bills by
+                                                INDEXED VOLUME PER DAY,
+                                                so the same rule that
+                                                keeps observations off
+                                                the bus keeps them out
+                                                of Splunk.
 ```
 
 ---
@@ -237,7 +245,15 @@ Device item at write time.
      - the notifier Lambda pages a human
      - the agent Lambda writes an AI root-cause summary
      - Firehose archives everything for analytics
-   Three consumers, none aware of the others. Adding a fourth is Terraform.
+     - the Splunk forwarder ships alarms and incidents to the customer's SIEM
+   Four consumers, none aware of the others. Splunk was added as two RULES and
+   no change to anything that produces an event - which is the whole argument
+   for the bus, and the reason it is worth the indirection.
+
+   What crosses the bus is a PROJECTION, not the record: EventBridge patterns
+   match on structure, so the filterable fields are flat and at the top level.
+   A consumer that casts it back to a full Alarm compiles and then throws on
+   every delivery. See AlarmEventDetail in platform/types.ts.
 ```
 
 ---

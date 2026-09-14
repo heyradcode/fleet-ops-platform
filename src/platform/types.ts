@@ -547,6 +547,69 @@ export type Incident = {
 };
 
 // ---------------------------------------------------------------------------
+// What actually crosses the event bus
+// ---------------------------------------------------------------------------
+
+/**
+ * The bus carries a PROJECTION, not the whole record - and these types exist
+ * because forgetting that broke a consumer.
+ *
+ * EventBridge patterns match on structure, so the fields a rule filters on have
+ * to be at the top level of `detail`; deeply nested ones make for fragile
+ * patterns. That argues for a small, flat payload. But a consumer cannot then
+ * assume it received an `Alarm`, and the Splunk forwarder did exactly that -
+ * `e.detail as Alarm` compiled happily, and every delivery threw on a field the
+ * bus had never carried.
+ *
+ * A cast is an assertion, and that one was false. Naming the projection makes
+ * the compiler enforce the contract in both directions: the producer cannot
+ * drop a field a consumer needs, and a consumer cannot reach for one that was
+ * never sent.
+ *
+ * THE ALTERNATIVE IS WORSE. A consumer could re-read the full alarm from
+ * DynamoDB, but that is one GetItem per event on the hot path - the N+1 the
+ * whole storage design exists to avoid. So the projection carries what
+ * consumers need, and that set is written down here.
+ */
+export type AlarmEventDetail = {
+  tenantId: TenantId;
+  alarmId: AlarmId;
+  deviceId: DeviceId;
+  interfaceId?: InterfaceId;
+  siteId: SiteId;
+  kind: AlarmKind;
+  severity: Severity;
+  /**
+   * When it was RAISED, not when the bus carried it.
+   *
+   * Without this a consumer has to stamp its own arrival time, and a backlog
+   * replayed after an outage then lands as if it all happened at once - which
+   * is precisely the moment an accurate timeline matters most.
+   */
+  raisedAt: string;
+  /**
+   * Carried because it explains WHY an alarm did or did not page, which is the
+   * first thing anyone asks of one. A rule can filter on it, and it is one
+   * integer rather than the observation ids behind it.
+   */
+  planeCount: number;
+};
+
+export type IncidentEventDetail = {
+  tenantId: TenantId;
+  incidentId: IncidentId;
+  siteId: SiteId;
+  severity: Severity;
+  status: Incident['status'];
+  title: string;
+  deviceIds: DeviceId[];
+  /** So a consumer can join back to the alarms without a second read. */
+  alarmIds: AlarmId[];
+  rootCauseDeviceId?: DeviceId;
+  openedAt: string;
+};
+
+// ---------------------------------------------------------------------------
 // Access
 // ---------------------------------------------------------------------------
 

@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 104 tests, no network. Picks up web/ tests too.
+pnpm test                       # 121 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180
 pnpm web:build                  # typechecks web/ AND builds it
@@ -91,6 +91,22 @@ anything wanting a Bedrock Knowledge Base drags in OpenSearch Serverless at
 These are the claims the architecture rests on. Each has a test; if you change
 one, change the test deliberately rather than making it pass.
 
+- **What crosses the bus is a PROJECTION, not the record.** `AlarmEventDetail`
+  and `IncidentEventDetail` name it, and producers use `satisfies`. A consumer
+  casting `e.detail as Alarm` compiles and then throws on every delivery,
+  because the bus never carried the field - which is exactly how the Splunk
+  forwarder broke. If a consumer needs a field, widen the projection; do NOT
+  re-read the record, which is one GetItem per event on the hot path.
+- **Splunk gets alarms and incidents, never observations.** It licenses by
+  INDEXED VOLUME PER DAY, so the same argument that keeps observations off the
+  bus keeps them out of Splunk - and here the bill is metered rather than
+  amortised. Bulk stays in S3/Athena. Splunk is a bus consumer, so adding it
+  changed nothing that produces events.
+- **Splunk is NOT an observation plane.** Tempting, and the same mistake as
+  deriving `plane` from `encoding` in a new hat: if the customer's Splunk
+  ingests the Meraki API, a Splunk row agreeing with Meraki is one vendor
+  corroborating itself through a proxy. Search results are CONTEXT for a human
+  and for the agent; they never become Observations and never reach the rules.
 - **Observations never reach the event bus.** Only alarms and incidents are
   published. An estate produces far more observations than decisions, and
   publishing them would make cost scale with estate size instead of incidents.
@@ -164,6 +180,14 @@ network. Nothing real belongs in this repo.
   the assistant failed on its first log line. Output goes through `out()` in
   `platform/logger.ts`; the contract test now asks the agent a question, and
   CI greps for any `process.` member, not just `.env`.
+- **Splunk wants EPOCH SECONDS and newline-delimited objects.** Milliseconds
+  index the event in the year 56000; a JSON array indexes the whole batch as
+  ONE event. Both return 200, both look like success, and both leave the
+  customer paying for an index their searches cannot see.
+- **The agent never composes SPL.** It picks from a catalogue by name and
+  passes typed parameters. SPL has commands that write (`collect`,
+  `outputlookup`) and run scripts, so an injected pipe is not a data leak, it
+  is code execution inside the customer's SIEM.
 - **A webhook endpoint on the public internet is not protected by its URL.**
   Verify the HMAC BEFORE the timestamp and both before `JSON.parse`: checking
   the clock first tells an unauthenticated caller whether their guess was in
@@ -254,6 +278,7 @@ src/integrations/webhook.ts  inbound: HMAC, replay window, idempotency
 src/integrations/connector.ts  the one contract: poll() and onWebhook()
 src/integrations/controller/  Meraki, Mist, Aruba Central
 src/integrations/probe.ts  the external plane — the only thing that sees silence
+src/integrations/splunk/   outbound HEC (a bus consumer) + catalogued SPL search
 src/pipeline/    collect → normalise → stream → enrich → evaluate → correlate
 src/geo/         spatial maths, PostGIS queries, GeoJSON/TopoJSON, topology
 src/ai/          RAG, agent loop, guardrails

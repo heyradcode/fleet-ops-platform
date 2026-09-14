@@ -23,6 +23,7 @@ import { canUseTool, checkInput, redactPii } from '../ai/guardrails.ts';
 import { verifyToken, signDemoToken } from '../auth/cognito-jwt-verifier.ts';
 import { bus } from '../aws/eventbridge.ts';
 import { loadEstate, getInventory } from '../geo/device-repository.ts';
+import { openIncidents } from '../platform/repository.ts';
 import type {
   Alarm, AlarmKind, Observation, ObservationPlane,
 } from '../platform/types.ts';
@@ -447,16 +448,35 @@ test('the agent loop terminates within its iteration budget', async () => {
 });
 
 test('a viewer asking the agent to act is refused by the TOOL, not by the prompt', async () => {
+  const before = openIncidents(viewer).length;
+
   const result = await runAgent({
     question: 'Open a critical incident for the Dallas core switch.',
     principal: viewer,
     tools: TOOL_SPECS,
   });
-  // The refusal must be visible in the trace as a tool-level denial. A prompt
-  // that merely asks the model not to is not an authorisation boundary.
-  const denied = result.evidence.some((e) => e.includes('ERROR')) ||
-    result.trace.some((s) => s.detail.toLowerCase().includes('refus'));
-  assert.ok(denied || result.stoppedBecause === 'guardrail');
+
+  // THE MODEL DID TRY. That is the point of the test - the boundary is not
+  // "the model was persuaded not to", it is "the model called it and the tool
+  // said no". A run where openIncident never appears proves nothing.
+  const attempt = result.trace.find(
+    (s) => s.kind === 'tool' && s.detail.startsWith('openIncident('),
+  );
+  assert.ok(attempt, 'the model must actually have attempted the write tool');
+  assert.ok(attempt.detail.endsWith('-> error'), 'and the tool layer must have refused it');
+
+  // And the refusal was real, not merely logged. This is the assertion that
+  // cannot pass by accident.
+  assert.equal(openIncidents(viewer).length, before, 'no incident may have been created');
+
+  // An earlier version of this test looked for 'ERROR' in `evidence` or the
+  // word 'refus' in the trace. Neither can ever appear: failed tool results are
+  // deliberately excluded from evidence (they did not ground the answer), and
+  // the trace marker is '-> error'. It passed only because the OUTPUT guardrail
+  // happened to fire on a thinly-grounded answer - so it was green for a reason
+  // unrelated to what it claimed to check, and adding one more tool broke it.
+  assert.ok(!result.evidence.some((e) => e.includes('ERROR')),
+    'failed tool results must not be offered to the model as evidence');
 });
 
 // ---------------------------------------------------------------------------

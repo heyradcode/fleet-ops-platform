@@ -31,6 +31,7 @@ import { incidentId } from '../platform/ids.ts';
 import { now, nowIso } from '../platform/clock.ts';
 import { canUseTool } from './guardrails.ts';
 import { isEvent, isMetric } from '../platform/types.ts';
+import { runSearch, splunkConfigured, type SearchName } from '../integrations/splunk/search.ts';
 
 export type ToolExecutor = (
   input: Record<string, unknown>,
@@ -126,6 +127,76 @@ export const TOOLS: Tool[] = [
           device.cpuUtilisation + '%.',
         observations.length + ' observations, ' + lines.length + ' non-OK:',
         ...lines.slice(0, 12),
+      ].join('\n');
+    },
+  },
+
+  {
+    spec: {
+      name: 'searchSplunk',
+      description:
+        'Search the customer\'s Splunk for context this platform does not hold - ' +
+        'configuration changes, privileged logins, or any mention of a device ' +
+        'across their other indexes. Use it when a device broke and you need to ' +
+        'know whether somebody changed something first. Results are CONTEXT ' +
+        'only: they never corroborate an alarm, because Splunk may well be ' +
+        'reading the same vendor API this platform does.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          search: {
+            type: 'string',
+            // An enum, not free text. The model picks from a catalogue; it
+            // never composes SPL. See the note in integrations/splunk/search.ts
+            // about what an injected pipe does inside a SIEM.
+            enum: ['recent-config-changes', 'admin-logins', 'device-mentions'],
+            description: 'Which catalogued search to run.',
+          },
+          deviceId: { type: 'string', description: 'The device to search around.' },
+          hours: { type: 'number', description: 'How far back to look. 1-168.' },
+        },
+        required: ['search', 'deviceId', 'hours'],
+      },
+    },
+    async execute(input, principal) {
+      if (!splunkConfigured()) {
+        // Error-as-data, and honest about which. "No results" and "not
+        // connected" are completely different answers to an operator at 4am,
+        // and collapsing them is how somebody concludes there were no config
+        // changes when nobody ever asked.
+        return 'Splunk is not configured for this deployment. Say so rather than ' +
+          'concluding there were no changes.';
+      }
+
+      const deviceId = String(input.deviceId);
+      const device = deviceState(principal, deviceId);
+      if (!device) {
+        return 'ERROR: unknown deviceId "' + deviceId + '". Valid ids include: ' +
+          sampleDeviceIds(principal) + '.';
+      }
+
+      const result = await runSearch({
+        name: input.search as SearchName,
+        // The TENANT comes from the verified token, never from the model. An
+        // agent that could choose its own tenant filter is a cross-tenant read
+        // one prompt away.
+        tenant: principal.tenantId,
+        device: device.name,
+        hours: Number(input.hours ?? 24),
+      });
+
+      if (result.rows.length === 0) {
+        return 'No matching events in Splunk for ' + device.name + '. ' +
+          'Ran: ' + result.spl;
+      }
+
+      return [
+        result.rows.length + ' result(s) from Splunk for ' + device.name + ':',
+        ...result.rows.map((r) => Object.entries(r).map(([k, v]) => k + '=' + v).join(' ')),
+        // The SPL is returned deliberately. An operator who can see the query
+        // can tell "nothing happened" from "you asked the wrong question",
+        // which is the difference between trusting this answer and not.
+        'Query: ' + result.spl,
       ].join('\n');
     },
   },

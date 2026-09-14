@@ -33,7 +33,8 @@
  * one.
  */
 import type {
-  Alarm, AlarmKind, DeviceState, Incident, Observation, ObservationPlane, Principal, Severity,
+  Alarm, AlarmEventDetail, AlarmKind, DeviceState, Incident, IncidentEventDetail,
+  Observation, ObservationPlane, Principal, Severity,
 } from '../platform/types.ts';
 import { isEvent, isFlow, isMetric } from '../platform/types.ts';
 import type { Inventory } from '../platform/inventory.ts';
@@ -865,7 +866,10 @@ export async function publish(
         siteId: alarm.siteId,
         kind: alarm.kind,
         severity: alarm.severity,
-      },
+        interfaceId: alarm.interfaceId,
+        planeCount: alarm.planes.length,
+        raisedAt: alarm.raisedAt,
+      } satisfies AlarmEventDetail,
     });
   }
 
@@ -877,11 +881,14 @@ export async function publish(
         tenantId: incident.tenantId,
         incidentId: incident.incidentId,
         severity: incident.severity,
+        status: incident.status,
         siteId: incident.siteId,
         deviceIds: incident.deviceIds,
+        alarmIds: incident.alarmIds,
         rootCauseDeviceId: incident.rootCauseDeviceId,
         title: incident.title,
-      },
+        openedAt: incident.openedAt,
+      } satisfies IncidentEventDetail,
     });
   }
 

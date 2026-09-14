@@ -30,6 +30,8 @@ import { setProber, resetProber, probeEstate } from './integrations/probe.ts';
 import { drainPages, resetWatermarks } from './integrations/http.ts';
 import { verifyWebhook, signWebhook } from './integrations/webhook.ts';
 import { webhookSecretFor } from './integrations/controller/registry.ts';
+import { registerSplunkForwarding, flushSplunk } from './integrations/splunk/forwarder.ts';
+import { hecSent } from './integrations/splunk/hec.ts';
 import { rawBucket, historyBucket, flowBucket } from './aws/s3.ts';
 import { observationStream } from './aws/kinesis.ts';
 import { buildScenarios } from './data/scenarios.ts';
@@ -451,6 +453,10 @@ function registerEventRules() {
   bus.rule('all-alarms-to-analytics',
     { source: ['netpulse.evaluate'], detailType: ['AlarmRaised'] },
     (e) => { delivered.push('firehose <- ' + (e.detail as { alarmId: string }).alarmId); });
+
+  // Rules 4 and 5: the customer's Splunk. Two lines, and nothing that PRODUCES
+  // an event had to change - which is the entire argument for the bus.
+  registerSplunkForwarding(bus);
 }
 
 async function sectionEvents() {
@@ -462,6 +468,32 @@ async function sectionEvents() {
   write('   critical-incidents-to-pager   ' + dim('detail.severity = critical') + '\n');
   write('   warnings-to-slack             ' + dim('detail.severity = warning') + '\n');
   write('   all-alarms-to-analytics       ' + dim('every AlarmRaised') + '\n');
+  write('   alarms-to-splunk              ' + dim('every AlarmRaised -> HEC') + '\n');
+  write('   incidents-to-splunk           ' + dim('every IncidentOpened -> HEC') + '\n');
+
+  // --- Splunk --------------------------------------------------------------
+  note('');
+  note('Splunk: the customer already runs their NOC on it, so our conclusions');
+  note('go to them rather than asking anyone to watch a second screen.');
+  const shipped = await flushSplunk();
+  write('   ' + shipped.events + ' events in ' + shipped.batches + ' HEC batch(es)' +
+    (shipped.failed.length > 0 ? ', ' + shipped.failed.length + ' queued for replay' : '') + '\n');
+
+  const sample = hecSent[0];
+  if (sample) {
+    write('   ' + dim('sourcetype=' + sample.sourcetype + ' index=' + sample.index +
+      ' host=' + sample.host) + '\n');
+    write('   ' + dim('time=' + sample.time + ' — EPOCH SECONDS. Send milliseconds and') + '\n');
+    write('   ' + dim('Splunk indexes it in the year 56000: no error, no results, full bill.') + '\n');
+    write('   ' + dim('indexed fields: ' + Object.keys(sample.fields).join(', ')) + '\n');
+  }
+
+  note('');
+  note('WHAT IS NOT SENT, and why it decides the integration:');
+  write('   observations to Splunk:  \x1b[1m0\x1b[0m\n');
+  write('   ' + dim('Splunk licenses by INDEXED VOLUME PER DAY. The same argument that') + '\n');
+  write('   ' + dim('keeps observations off the bus keeps them out of Splunk, and here') + '\n');
+  write('   ' + dim('the bill is metered rather than amortised. Bulk stays in S3/Athena.') + '\n');
 
   note('');
   note('Delivered on the last run:');
