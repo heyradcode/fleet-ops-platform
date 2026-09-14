@@ -25,21 +25,21 @@
  * The functions in this file are the LAMBDA data source, implemented properly.
  * VTL and APPSYNC_JS examples for the direct-DynamoDB paths are in api/vtl/.
  */
-import type { Principal, Exception } from '../platform/types.ts';
+import type { Principal, Alarm } from '../platform/types.ts';
 
-/** The subset of an Exception that crosses the subscription wire. */
-type DriverExceptionPayload = Pick<
-  Exception, 'exceptionId' | 'driverId' | 'districtId' | 'kind' | 'severity' | 'providers' | 'raisedAt'
+/** The subset of an Alarm that crosses the subscription wire. */
+type DeviceAlarmPayload = Pick<
+  Alarm, 'alarmId' | 'deviceId' | 'siteId' | 'kind' | 'severity' | 'planes' | 'raisedAt'
 >;
 import {
-  recentTelemetry, telemetryForDriver, telemetryBySeverity,
-  recentExceptions, openIncidents, getIncident, putIncident,
+  recentObservations, observationsForDevice, observationsBySeverity,
+  recentAlarms, openIncidents, getIncident, putIncident,
 } from '../platform/repository.ts';
 import {
-  allDrivers, allDistricts, getDriver, driversWithinRadius, availableDriversNear,
-} from '../geo/driver-repository.ts';
-import { withinScope, scopeAllowsDistrict } from '../platform/tenancy.ts';
-import { driversToFeatureCollection } from '../geo/geojson.ts';
+  allDeviceStates, allSites, deviceState, uplinkChain, subtreeOf,
+} from '../geo/device-repository.ts';
+import { withinScope, scopeAllowsSite } from '../platform/tenancy.ts';
+import { devicesToFeatureCollection } from '../geo/geojson.ts';
 import { nowIso } from '../platform/clock.ts';
 import { askWithRag } from '../ai/bedrock-rag.ts';
 import { runAgent } from '../ai/agent-core.ts';
@@ -49,16 +49,15 @@ import { incidentId as newIncidentId } from '../platform/ids.ts';
 import { bus } from '../aws/eventbridge.ts';
 import { publishToSubscribers } from './subscriptions.ts';
 import { b64urlEncode } from '../platform/crypto.ts';
-import { HOS_THRESHOLD_MINUTES } from '../integrations/connector.ts';
 
 /**
  * The AppSync Lambda event. `identity` is populated from the verified Cognito
  * token by AppSync itself - you never parse a JWT in a resolver.
  */
 export type AppSyncEvent = {
-  info: { fieldName: string; parentTypeName: 'Query' | 'Mutation' | 'Driver' | 'Incident' };
+  info: { fieldName: string; parentTypeName: 'Query' | 'Mutation' | 'Device' | 'Incident' };
   arguments: Record<string, unknown>;
-  /** The parent object, for nested field resolvers like Driver.telemetry. */
+  /** The parent object, for nested field resolvers like Device.observations. */
   source?: Record<string, unknown>;
   identity: {
     sub: string;
@@ -75,10 +74,10 @@ export function principalFrom(event: AppSyncEvent): Principal {
     email: String(claims.email ?? ''),
     tenantId: String(claims['custom:tenantId'] ?? ''),
     roles: (event.identity.groups ?? ['viewer']) as Principal['roles'],
-    // The district claim is stamped by the PreTokenGeneration trigger, so a
-    // dispatcher cannot widen their own board by editing the request.
-    scope: claims['custom:district']
-      ? { kind: 'district', districtId: String(claims['custom:district']) }
+    // The site claim is stamped by the PreTokenGeneration trigger, so a
+    // operator cannot widen their own board by editing the request.
+    scope: claims['custom:site']
+      ? { kind: 'site', siteId: String(claims['custom:site']) }
       : { kind: 'tenant' },
     identityProvider: 'cognito',
   };
@@ -91,47 +90,63 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
 
   switch (key) {
     // ---- Query ----------------------------------------------------------
-    case 'Query.drivers': {
-      // SCOPE FIRST, filters second. `districtId` is a convenience for the
+    case 'Query.devices': {
+      // SCOPE FIRST, filters second. `siteId` is a convenience for the
       // client; withinScope() is the boundary, derived from the token. A
-      // dispatcher who passes another district gets an empty list rather than
+      // operator who passes another site gets an empty list rather than
       // someone else's board.
-      let fleet = withinScope(principal, allDrivers(principal));
-      if (args.districtId) fleet = fleet.filter((d) => d.districtId === args.districtId);
-      if (args.status) fleet = fleet.filter((d) => d.status === args.status);
-      return fleet;
+      let estate = withinScope(principal, allDeviceStates(principal));
+      if (args.siteId) estate = estate.filter((d) => d.siteId === args.siteId);
+      if (args.status) estate = estate.filter((d) => d.status === args.status);
+      return estate;
     }
 
-    case 'Query.territories':
-      return allDistricts(principal);
+    case 'Query.sites':
+      return allSites(principal);
 
-    case 'Query.exceptions': {
-      const all = recentExceptions(principal, Number(args.limit ?? 50));
-      const scoped = all.filter((e) => scopeAllowsDistrict(principal, e.districtId));
-      return args.districtId
-        ? scoped.filter((e) => e.districtId === args.districtId)
+    case 'Query.alarms': {
+      const all = recentAlarms(principal, Number(args.limit ?? 50));
+      const scoped = all.filter((e) => scopeAllowsSite(principal, e.siteId));
+      return args.siteId
+        ? scoped.filter((e) => e.siteId === args.siteId)
         : scoped;
     }
 
-    case 'Query.availableDriversNear':
-      return availableDriversNear(
-        principal,
-        { lon: Number(args.lon), lat: Number(args.lat) },
-        Number(args.radiusKm),
-      );
-
-    case 'Query.driver': {
-      const driver = getDriver(principal, String(args.driverId));
-      // Inside the tenant but outside the caller's district is still a refusal.
-      if (driver && !scopeAllowsDistrict(principal, driver.districtId)) return null;
-      return driver;
+    /**
+     * The topology query, and the reason the map is not the whole story.
+     *
+     * A fleet platform answers "who is near this driver" with a spatial query,
+     * because proximity is what makes another truck useful. Proximity means
+     * almost nothing here - forty devices in one building share a coordinate,
+     * and the device that matters when one fails is the one ABOVE it, which may
+     * be in a different rack, floor or building entirely. So the equivalent
+     * question is answered from the topology graph, not from geometry.
+     */
+    case 'Query.topology': {
+      const deviceId = String(args.deviceId);
+      if (!deviceState(principal, deviceId)) return null;
+      return {
+        deviceId,
+        upstream: uplinkChain(principal, deviceId),
+        downstream: subtreeOf(principal, deviceId),
+      };
     }
 
-    case 'Query.telemetry': {
+    case 'Query.device': {
+      const device = deviceState(principal, String(args.deviceId));
+      // Inside the tenant but outside the caller's site is still a refusal, and
+      // it must look identical to "no such device". Returning undefined here
+      // instead of null would serialise as a missing field rather than an
+      // explicit null, which GraphQL clients read differently.
+      if (!device || !scopeAllowsSite(principal, device.siteId)) return null;
+      return device;
+    }
+
+    case 'Query.observations': {
       const limit = Number(args.limit ?? 25);
       const items = args.severity
-        ? telemetryBySeverity(principal, args.severity as never).slice(0, limit)
-        : recentTelemetry(principal, limit);
+        ? observationsBySeverity(principal, args.severity as never).slice(0, limit)
+        : recentObservations(principal, limit);
       // The cursor is opaque to the client and encodes DynamoDB's
       // LastEvaluatedKey. Never leak the raw key - it exposes the key schema.
       const nextToken = items.length === limit
@@ -146,13 +161,17 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
     case 'Query.incident':
       return getIncident(principal, String(args.incidentId));
 
-    case 'Query.driversNear':
-      return driversWithinRadius(principal, { lon: Number(args.lon), lat: Number(args.lat) }, Number(args.radiusKm));
+    case 'Query.devicesAtSite': {
+      const siteId = String(args.siteId);
+      // Inside the tenant but outside the caller's site is still a refusal.
+      if (!scopeAllowsSite(principal, siteId)) return [];
+      return allDeviceStates(principal).filter((d) => d.siteId === siteId);
+    }
 
     case 'Query.mapLayer': {
-      const fleet = allDrivers(principal);
-      const byDriver = new Map(fleet.map((d) => [d.driverId, telemetryForDriver(principal, d.driverId)]));
-      const fc = driversToFeatureCollection(fleet, byDriver);
+      const estate = allDeviceStates(principal);
+      const byDevice = new Map(estate.map((d) => [d.deviceId, observationsForDevice(principal, d.deviceId)]));
+      const fc = devicesToFeatureCollection(estate, byDevice);
       return { featureCollection: JSON.stringify(fc), bbox: fc.bbox };
     }
 
@@ -168,39 +187,39 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
 
     // ---- Nested field resolvers -----------------------------------------
     /**
-     * Driver.telemetry. This is where N+1 lives: `drivers { telemetry { .. } }` calls
-     * it once per driver. Fixes, in order of preference:
+     * Device.observations. This is where N+1 lives: `devices { observations { .. } }` calls
+     * it once per device. Fixes, in order of preference:
      *   1. Make it a BatchInvoke resolver - AppSync hands the Lambda an ARRAY
      *      of events (up to 2000) and you do one Query per partition.
      *   2. Cache it - AppSync per-resolver caching, keyed on $context.source.
-     *   3. Denormalise the top few readings onto the Driver item at write time.
+     *   3. Denormalise the top few readings onto the Device item at write time.
      */
-    case 'Driver.telemetry': {
-      const driverId = String(event.source?.driverId);
-      const all = telemetryForDriver(principal, driverId);
+    case 'Device.observations': {
+      const deviceId = String(event.source?.deviceId);
+      const all = observationsForDevice(principal, deviceId);
       const filtered = args.severity ? all.filter((s) => s.severity === args.severity) : all;
       return filtered.slice(0, Number(args.limit ?? 20));
     }
 
-    case 'Incident.drivers': {
-      const ids = (event.source?.driverIds as string[]) ?? [];
-      return ids.map((id) => getDriver(principal, id)).filter(Boolean);
+    case 'Incident.devices': {
+      const ids = (event.source?.deviceIds as string[]) ?? [];
+      return ids.map((id) => deviceState(principal, id)).filter(Boolean);
     }
 
-    case 'Incident.telemetry': {
-      const ids = new Set((event.source?.telemetryIds as string[]) ?? []);
-      return recentTelemetry(principal, 500).filter((s) => ids.has(s.telemetryId));
+    case 'Incident.observations': {
+      const ids = new Set((event.source?.observationIds as string[]) ?? []);
+      return recentObservations(principal, 500).filter((s) => ids.has(s.observationId));
     }
 
     // ---- Mutation --------------------------------------------------------
     case 'Mutation.openIncident': {
       const input = args.input as {
         title: string; severity: 'info' | 'warning' | 'critical';
-        districtId: string; driverIds: string[];
+        siteId: string; deviceIds: string[];
       };
       // Belt and braces: the @aws_auth directive already blocked viewers, but
       // defence in depth costs one line.
-      requireRole(principal, 'admin', 'dispatcher');
+      requireRole(principal, 'admin', 'operator');
 
       const incident = {
         tenantId: principal.tenantId,
@@ -208,9 +227,9 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
         title: input.title,
         severity: input.severity,
         status: 'open' as const,
-        districtId: input.districtId,
-        driverIds: input.driverIds,
-        exceptionIds: [],
+        siteId: input.siteId,
+        deviceIds: input.deviceIds,
+        alarmIds: [],
         openedAt: nowIso(),
       };
       putIncident(principal, incident);
@@ -221,7 +240,7 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
       publishToSubscribers('onIncidentOpened', incident);
 
       await bus.putEvents({
-        source: 'meridian.api',
+        source: 'netpulse.api',
         detailType: 'IncidentOpened',
         detail: { tenantId: incident.tenantId, incidentId: incident.incidentId, severity: incident.severity },
       });
@@ -229,7 +248,7 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
     }
 
     case 'Mutation.acknowledgeIncident': {
-      requireRole(principal, 'admin', 'dispatcher');
+      requireRole(principal, 'admin', 'operator');
       const existing = getIncident(principal, String(args.incidentId));
       if (!existing) throw new Error('incident not found');
 
@@ -248,41 +267,46 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
      * MUTATION, and the payload is that mutation's return value - so a backend
      * that wants to push has to call the mutation, usually with IAM.
      *
-     * And note what has no equivalent here: telemetry. Pushing 11,000
+     * And note what has no equivalent here: observations. Pushing 11,000
      * readings/sec to every connected board would be useless to a human and
-     * ruinous to pay for. Positions refresh on a poll; only exceptions push.
+     * ruinous to pay for. Positions refresh on a poll; only alarms push.
      */
-    case 'Mutation.publishException': {
-      const exception = args.input as DriverExceptionPayload;
+    case 'Mutation.publishAlarm': {
+      const alarm = args.input as DeviceAlarmPayload;
       // The subscription filter matches on these top-level fields, so they have
       // to be in the returned object - a subscriber cannot receive a field the
       // mutation did not return, even if they asked for it.
-      publishToSubscribers('onDriverException', exception);
-      return exception;
+      publishToSubscribers('onDeviceAlarm', alarm);
+      return alarm;
     }
 
-    case 'Mutation.reassignDriver': {
-      // The same authorisation the agent's reassignDriver tool goes through.
-      // There is no privileged path for the agent - it calls what a dispatcher
-      // calls, with the dispatcher's own authority.
-      requireRole(principal, 'admin', 'dispatcher');
-      const to = getDriver(principal, String((args.input as { toDriverId: string }).toDriverId));
-      if (!to) throw new Error('unknown driver');
-      if (to.hosRemainingMinutes <= HOS_THRESHOLD_MINUTES.warning) {
-        // A regulatory refusal, not a preference. Enforced here as well as in
-        // the tool, because both are entry points to the same action.
+    case 'Mutation.suppressAlarm': {
+      // The same authorisation the agent's suppressAlarm tool goes through.
+      // There is no privileged path for the agent - it calls what an operator
+      // calls, with the operator's own authority.
+      requireRole(principal, 'admin', 'operator');
+      const input = args.input as { deviceId: string; minutes: number; reason: string };
+      const target = deviceState(principal, input.deviceId);
+      if (!target) throw new Error('unknown device');
+
+      const dependents = subtreeOf(principal, input.deviceId);
+      if (dependents.length > 0) {
+        // A structural refusal, not a preference. Suppressing a device others
+        // depend on hides the ROOT CAUSE of everything beneath it, so the
+        // cascade still pages but now names a symptom. Enforced here as well as
+        // in the tool, because both are entry points to the same action.
         throw new Error(
-          to.driverId + ' has ' + to.hosRemainingMinutes +
-          ' minutes of drive time left and cannot accept a reassignment',
+          input.deviceId + ' has ' + dependents.length + ' devices depending on it; ' +
+          'suppressing it would hide the root cause of any outage beneath it',
         );
       }
-      throw new Error('reassignment saga not implemented in the offline demo');
+      throw new Error('suppression windows are not implemented in the offline demo');
     }
 
     case 'Mutation.askAgent': {
       // Viewers get the read-only tool set; operators get the full one. The
       // agent's authority is the CALLER's authority, never the Lambda's.
-      const isOperator = principal.roles.some((r) => r === 'admin' || r === 'dispatcher');
+      const isOperator = principal.roles.some((r) => r === 'admin' || r === 'operator');
       const result = await runAgent({
         question: String(args.question),
         principal,
@@ -292,7 +316,7 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
       return {
         answer: result.answer,
         citations: result.evidence.slice(0, 3).map((e) => ({
-          source: /SOURCE (\S+)/.exec(e)?.[1] ?? 'telemetry',
+          source: /SOURCE (\S+)/.exec(e)?.[1] ?? 'observations',
           snippet: e.replace(/\s+/g, ' ').slice(0, 140),
         })),
         trace: result.trace,

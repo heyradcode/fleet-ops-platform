@@ -12,7 +12,7 @@
  *      if a vendor sends you EPSG:3857 "GeoJSON", it is not GeoJSON.
  */
 import type { Position } from './spatial.ts';
-import type { Driver, Severity, Telemetry } from '../platform/types.ts';
+import type { DeviceState, Observation, Severity } from '../platform/types.ts';
 
 export type GeoGeometry =
   | { type: 'Point'; coordinates: Position }
@@ -49,49 +49,71 @@ function closeRing(ring: Position[]): Position[] {
 }
 
 /**
- * Drivers + their worst current reading, as a FeatureCollection.
- * This is literally the payload the dispatch board fetches.
+ * Devices + their worst current observation, as a FeatureCollection.
+ * This is literally the payload the operations board fetches.
+ *
+ * EVERY DEVICE AT A SITE SHARES ONE COORDINATE, which is a real difference from
+ * a fleet map and shapes the whole design of the board. Trucks are spread
+ * across a district and a scatter plot is informative; forty switches in one
+ * building are one dot with forty things behind it. So the map is a SITE view
+ * with severity rolled up, and the device detail lives in a panel beside it
+ * rather than in overlapping markers nobody can click.
  */
-export function driversToFeatureCollection(
-  drivers: Driver[],
-  telemetryByDriver: Map<string, Telemetry[]>,
+export function devicesToFeatureCollection(
+  devices: DeviceState[],
+  observationsByDevice: Map<string, Observation[]>,
 ): GeoFeatureCollection {
-  const rank = { ok: 0, info: 1, warning: 2, critical: 3 };
+  const rank: Record<Severity, number> = { ok: 0, info: 1, warning: 2, critical: 3 };
 
-  const features = drivers.map((driver) => {
-    const readings = telemetryByDriver.get(driver.driverId) ?? [];
-    const worst = readings.reduce<Severity>(
-      (acc, t) => (rank[t.severity] > rank[acc] ? t.severity : acc),
+  const features = devices.map((device) => {
+    const observations = observationsByDevice.get(device.deviceId) ?? [];
+    const worst = observations.reduce<Severity>(
+      (acc, o) => (rank[o.severity] > rank[acc] ? o.severity : acc),
       'ok',
     );
 
     return {
       type: 'Feature',
-      id: driver.driverId,
-      geometry: point(driver.lon, driver.lat),
+      id: device.deviceId,
+      geometry: point(device.lon, device.lat),
       properties: {
-        driverId: driver.driverId,
-        name: driver.name,
-        districtId: driver.districtId,
-        vehicleId: driver.vehicleId,
-        status: driver.status,
-        hosRemainingMinutes: driver.hosRemainingMinutes,
+        deviceId: device.deviceId,
+        name: device.name,
+        siteId: device.siteId,
+        role: device.role,
+        vendor: device.vendor,
+        status: device.status,
+        interfacesDown: device.interfacesDown,
+        cpuUtilisation: device.cpuUtilisation,
         // The board styles straight off these two - colour from severity,
         // radius from urgency. Data-driven styling runs on the GPU, so there
         // is no per-feature JavaScript and no re-render loop.
         severity: worst,
-        readingCount: readings.length,
-        // Low hours remaining is urgent even when nothing has gone wrong yet;
-        // this is what makes a driver about to run out of legal time visible
-        // on the map before they become an exception.
+        observationCount: observations.length,
+        // Weighted by ROLE as well as severity. A saturated core switch and a
+        // saturated access point are the same number and very different news;
+        // without this the map draws them identically and the eye goes to
+        // whichever happens to be on top.
         urgency: Math.round(
-          rank[worst] * 25 + Math.max(0, 120 - driver.hosRemainingMinutes) / 2,
+          rank[worst] * 25 + roleWeight(device.role) * 15 + device.interfacesDown * 2,
         ),
       },
     } satisfies GeoFeature;
   });
 
   return { type: 'FeatureCollection', features, bbox: computeBBox(features) };
+}
+
+/** How much of the estate sits underneath this kind of box. */
+function roleWeight(role: DeviceState['role']): number {
+  switch (role) {
+    case 'core': return 4;
+    case 'wan-edge': return 3;
+    case 'distribution': return 2;
+    case 'firewall': return 2;
+    case 'access': return 1;
+    case 'wireless-ap': return 0;
+  }
 }
 
 /** A FeatureCollection bbox lets the client fit the viewport in one step. */

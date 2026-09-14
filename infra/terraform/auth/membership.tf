@@ -1,10 +1,10 @@
 # =============================================================================
-# Tenant membership: which carrier an email domain belongs to
+# Tenant membership: which customer an email domain belongs to
 # =============================================================================
 # The table the PreTokenGeneration trigger reads on every login. Before this it
-# was four literals compiled into the Lambda bundle, so onboarding a carrier
+# was four literals compiled into the Lambda bundle, so onboarding a customer
 # meant a code change, a rebuild and a deploy - which is why a typo like
-# meridian.com against meridian.io could not be fixed without a release.
+# netpulse.com against netpulse.io could not be fixed without a release.
 #
 # On-demand billing, because the access pattern is one tiny read per login and
 # provisioned capacity would mean guessing a number and paying for it whether
@@ -21,7 +21,7 @@ resource "aws_dynamodb_table" "membership" {
     type = "S"
   }
 
-  # This table decides who can see whose fleet. Losing it is a full outage of
+  # This table decides who can see whose estate. Losing it is a full outage of
   # sign-in, and restoring it from a bundle rebuild is not a recovery plan.
   point_in_time_recovery {
     enabled = true
@@ -31,13 +31,13 @@ resource "aws_dynamodb_table" "membership" {
     enabled = true
   }
 
-  # A carrier removed by accident should be recoverable, and the table is
+  # A customer removed by accident should be recoverable, and the table is
   # small enough that keeping it costs nothing.
   deletion_protection_enabled = var.env == "prod"
 }
 
 # -----------------------------------------------------------------------------
-# The seed carriers
+# The seed customers
 # -----------------------------------------------------------------------------
 # The same four in DEMO_MEMBERSHIPS in src/platform/membership.ts, which is
 # what the offline board and the tests read. Two hand-maintained copies would
@@ -52,25 +52,25 @@ resource "aws_dynamodb_table" "membership" {
 
 resource "aws_dynamodb_table_item" "membership" {
   for_each = {
-    "acme-freight.com" = {
-      tenantId = "acme-freight"
-      roles    = ["dispatcher"]
-      district = "dal"
+    "acme-networks.com" = {
+      tenantId = "acme-networks"
+      roles    = ["operator"]
+      site = "dal"
     }
-    "safety.acme-freight.com" = {
-      tenantId = "acme-freight"
+    "safety.acme-networks.com" = {
+      tenantId = "acme-networks"
       roles    = ["safety"]
-      district = null
+      site = null
     }
-    "northstar-logistics.com" = {
-      tenantId = "northstar-logistics"
+    "northwind-utilities.com" = {
+      tenantId = "northwind-utilities"
       roles    = ["viewer"]
-      district = null
+      site = null
     }
-    "meridian.io" = {
-      tenantId = "acme-freight"
+    "netpulse.io" = {
+      tenantId = "acme-networks"
       roles    = ["admin"]
-      district = null
+      site = null
     }
   }
 
@@ -85,9 +85,9 @@ resource "aws_dynamodb_table_item" "membership" {
       # what membership.dynamodb.ts reads back.
       roles = { SS = each.value.roles }
     },
-    # Absent district means tenant-wide. Writing an empty string instead would
-    # give them a district called "", which scopeFromClaims would treat as no
-    # district anyway - but only by accident. Omit the attribute.
-    each.value.district == null ? {} : { district = { S = each.value.district } },
+    # Absent site means tenant-wide. Writing an empty string instead would
+    # give them a site called "", which scopeFromClaims would treat as no
+    # site anyway - but only by accident. Omit the attribute.
+    each.value.site == null ? {} : { site = { S = each.value.site } },
   ))
 }

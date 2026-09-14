@@ -3,13 +3,13 @@
 ## The split
 
 ```
-DynamoDB — telemetry, incidents      high volume, write-heavy, known-key reads
-Aurora   — drivers, regions, reports spatial, ad-hoc, joins and aggregates
+DynamoDB — observations, incidents      high volume, write-heavy, known-key reads
+Aurora   — devices, regions, reports spatial, ad-hoc, joins and aggregates
 S3       — raw vendor payloads     cheap, durable, replayable
 ```
 
 Using one for the other's job is the mistake. DynamoDB cannot answer "which
-drivers are within 75km"; Aurora cannot absorb a million writes a minute without
+devices are within 75km"; Aurora cannot absorb a million writes a minute without
 becoming a project.
 
 ---
@@ -25,12 +25,12 @@ key prefix.
 
 ```
 PK                       SK                          entity
-TENANT#acme#DRIVER         DRIVER#dal-01                 Driver
-TENANT#acme#TELEMETRY       2026-09-04T10:00:00Z#a3f…   Telemetry
+TENANT#acme#DRIVER         DRIVER#dal-01                 Device
+TENANT#acme#TELEMETRY       2026-09-04T10:00:00Z#a3f…   Observations
 TENANT#acme#INCIDENT     2026-09-04T10:02:00Z#inc_7f Incident
 ```
 
-Because the SK **starts with an ISO-8601 timestamp**, "this tenant's telemetry
+Because the SK **starts with an ISO-8601 timestamp**, "this tenant's observations
 from the last hour, newest first" is one Query with a range condition and
 `ScanIndexForward: false`. No scan, no filter, no sorting in application code —
 ever.
@@ -42,13 +42,13 @@ ever.
 
 | Pattern | How |
 |---|---|
-| Recent telemetry for a tenant | Query `PK = TENANT#<t>#TELEMETRY`, descending, limit |
-| Signals for one driver | Query **GSI1** `GSI1PK = TENANT#<t>#DRIVER#<driver>` |
+| Recent observations for a tenant | Query `PK = TENANT#<t>#TELEMETRY`, descending, limit |
+| Signals for one device | Query **GSI1** `GSI1PK = TENANT#<t>#DRIVER#<device>` |
 | Open incidents | Query `PK = TENANT#<t>#INCIDENT`, descending |
-| One driver by id | GetItem `PK = TENANT#<t>#DRIVER`, `SK = DRIVER#<id>` |
+| One device by id | GetItem `PK = TENANT#<t>#DRIVER`, `SK = DRIVER#<id>` |
 
 GSI1 flips the access direction — that is what a secondary index is *for*.
-Without it, "all telemetry for dal-01" would mean reading every reading for the
+Without it, "all observations for dal-01" would mean reading every reading for the
 tenant and filtering, which costs read units proportional to your **data**
 rather than to your **answer**.
 
@@ -124,7 +124,7 @@ must not have a privileged back door into the data.
 
 ## Aurora PostgreSQL
 
-Used for drivers, service regions and reporting. Serverless v2 scales capacity
+Used for devices, service regions and reporting. Serverless v2 scales capacity
 continuously and, in non-prod, **to zero** after 15 minutes idle — which takes a
 dev database bill to nearly nothing overnight. Never enable auto-pause in prod;
 cold resume costs ~15 seconds.
@@ -154,7 +154,7 @@ Schema highlights (`src/data/schema.sql`):
 Hive-partitioned so Athena/Glue can prune by date:
 
 ```
-raw/tenant=acme-freight/provider=samsara/dt=2026-09-08/hh=14/<uuid>.json
+raw/tenant=acme-networks/provider=cisco/dt=2026-09-08/hh=14/<uuid>.json
 ```
 
 **Archive before you normalise.** Normalisation is code, code has bugs, and when

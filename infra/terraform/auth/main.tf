@@ -52,7 +52,7 @@ provider "aws" {
 
   default_tags {
     tags = {
-      Project   = "meridian"
+      Project   = "netpulse"
       ManagedBy = "terraform"
       Root      = "auth"
     }
@@ -60,7 +60,7 @@ provider "aws" {
 }
 
 locals {
-  name_prefix = "meridian-${var.env}"
+  name_prefix = "netpulse-${var.env}"
 
   # Cognito matches redirect URIs EXACTLY - no trailing slash tolerance, no
   # wildcards. localhost is included so the same pool serves local development;
@@ -103,7 +103,7 @@ module "pre_token" {
   # Cognito gave up anyway.
 
   environment = {
-    # Unset means the built-in carrier table, which is how the demo and the
+    # Unset means the built-in customer table, which is how the demo and the
     # tests run. Terraform always sets it, so the fallback firing in a
     # deployed function is a deployment bug and lambda-entry.ts logs it.
     MEMBERSHIP_TABLE_NAME = aws_dynamodb_table.membership.name

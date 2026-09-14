@@ -166,7 +166,7 @@ resource "aws_bedrockagent_knowledge_base" "runbooks" {
     rds_configuration {
       resource_arn           = var.aurora_cluster_arn
       credentials_secret_arn = var.aurora_secret_arn
-      database_name          = "meridian"
+      database_name          = "netpulse"
       table_name             = "bedrock_kb"
 
       field_mapping {
@@ -332,7 +332,7 @@ resource "aws_iam_role_policy" "kb" {
 # is a safety-review asset and a privacy liability that outlives them by years.
 resource "aws_s3_bucket" "history" {
   bucket = "${var.name_prefix}-history-${data.aws_caller_identity.current.account_id}"
-  tags   = { Purpose = "telemetry-history" }
+  tags   = { Purpose = "observations-history" }
 }
 
 resource "aws_s3_bucket_public_access_block" "history" {

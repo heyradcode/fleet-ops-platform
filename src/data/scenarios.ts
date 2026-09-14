@@ -1,279 +1,247 @@
 /**
- * ---------------------------------------------------------------------------
- * Scenarios - synthetic data that argues for something
- * ---------------------------------------------------------------------------
- * Fixture data usually just fills a screen. These six exist to prove one claim
- * each about how the platform behaves, and they are the reason the pipeline's
- * rules can be demonstrated rather than described:
+ * Six situations, each proving exactly one claim the architecture rests on.
  *
- *   road-closure    fourteen drivers, ONE incident. Not fourteen pages.
- *   gps-drift       a lone deviation with nothing corroborating it raises
- *                   NOTHING. This is the most valuable of the six: anyone can
- *                   show a dashboard lighting up; showing the noise filter
- *                   working is the harder and more convincing thing.
- *   harsh-braking   an accelerometer and a dashcam, two vendors, one event.
- *   hos-risk        a regulatory clock running out - authoritative, so it
- *                   escalates without waiting for a second opinion.
- *   panic           a person pressed a button. Sub-second path, no batching,
- *                   no corroboration.
- *   poison-record   one unparseable payload in a batch of many. The batch is
- *                   bisected, the bad record is parked, and the shard keeps
- *                   moving.
+ * They emit VENDOR-SHAPED PAYLOADS - real syslog lines, real trap varbinds -
+ * rather than pre-built Observations, so every scenario travels the same
+ * decode -> map -> resolve -> evaluate -> correlate path that production
+ * traffic does. A scenario that hand-built its own observations would prove
+ * that the rules work on data the rules already agree with, which is worth
+ * nothing.
  *
- * Each scenario emits VENDOR-SHAPED payloads, not canonical Telemetry, so the
- * data travels the real path: fetchRaw -> normalise -> resolve -> evaluate ->
- * detect. A scenario that skipped normalisation would prove nothing about the
- * layer most likely to contain the bug.
+ * Devices are selected BY ROLE from the generated estate rather than named
+ * literally, so a change to the generator cannot silently leave a scenario
+ * pointing at a device that no longer exists - it fails loudly instead.
+ *
+ * Fixtures are modelled from published references, not captured from live
+ * accounts. Real device inventories are a map of an identifiable
+ * organisation's internal network; nothing real belongs in this repo.
  */
-import type { RawRecord } from '../platform/types.ts';
-import { DEMO_EPOCH } from '../platform/clock.ts';
-import { generateFleet } from './generate.ts';
-import { corridorById, pointAlong } from './polylines.ts';
-
-export type ScenarioId =
-  | 'road-closure'
-  | 'gps-drift'
-  | 'harsh-braking'
-  | 'hos-risk'
-  | 'panic'
-  | 'poison-record';
+import type { Device, DeviceRole, SiteId, TenantId } from '../platform/types.ts';
+import type { RawBatch } from '../integrations/wire.ts';
+import type { Estate } from './estate.ts';
 
 export type Scenario = {
-  id: ScenarioId;
-  /** One line, shown in the demo. */
+  id: string;
   title: string;
-  /** The claim this scenario exists to demonstrate. */
+  /** The one claim this scenario exists to demonstrate. */
   proves: string;
-  /** Vendor payloads, exactly as the connectors would receive them. */
-  build(tenantId: string): RawRecord[];
+  /** What the operator should see afterwards, in one line. */
+  expect: string;
+  batches: RawBatch[];
+  /** Devices the synthetic prober should report as unreachable. */
+  unreachable?: string[];
 };
 
-const iso = (offsetMs = 0) => new Date(DEMO_EPOCH + offsetMs).toISOString();
+const AT = '2026-09-08T14:30:00.000Z';
 
-/** Drivers in a district, from the generated fleet. */
-function driversIn(districtId: string) {
-  return generateFleet().filter((d) => d.districtId === districtId);
+function at(offsetSeconds: number): string {
+  return new Date(Date.parse(AT) + offsetSeconds * 1_000).toISOString();
 }
 
-// ---------------------------------------------------------------------------
+function pick(estate: Estate, siteId: SiteId, role: DeviceRole, nth = 0): Device {
+  const matches = estate.devices
+    .filter((d) => d.siteId === siteId && d.role === role)
+    .sort((a, b) => a.deviceId.localeCompare(b.deviceId));
+  const device = matches[nth];
+  if (!device) {
+    throw new Error(
+      'scenario needs a ' + role + ' at ' + siteId + ' (#' + nth + ') and the estate has ' +
+      matches.length + '. Fix the scenario or the generator, do not paper over it.',
+    );
+  }
+  return device;
+}
 
-export const SCENARIOS: Scenario[] = [
-  {
-    id: 'road-closure',
-    title: 'Road closure on I-35E, Dallas',
-    proves: 'Fourteen affected drivers produce ONE incident, not fourteen pages',
-    build(tenantId) {
-      // Everyone running the same corridor, stopped within a few hundred metres
-      // of the same point, and pushed onto the shoulder and side streets around
-      // it. Each driver ends up with TWO kinds of evidence - off-corridor AND
-      // stationary - which is what corroborates a deviation when there is only
-      // one GPS vendor to hear it from.
-      //
-      // Note that both come from Samsara. That is deliberate: this carrier runs
-      // Samsara, Motive and Lytx, and a dashcam has nothing to say about a road
-      // closure. Corroboration here is two kinds of evidence, not two vendors.
-      const corridor = corridorById('dal-i35e')!;
-      const [blockLon, blockLat] = pointAlong(corridor, 0.42);
-      const affected = driversIn('dal').slice(0, 14);
+function pickVendor(estate: Estate, vendor: Device['vendor']): Device {
+  const device = estate.devices
+    .filter((d) => d.vendor === vendor && d.role !== 'wireless-ap')
+    .sort((a, b) => a.deviceId.localeCompare(b.deviceId))[0];
+  if (!device) {
+    throw new Error(
+      'scenario needs a ' + vendor + ' device and the estate has none. ' +
+      'Fix the scenario or the generator, do not paper over it.',
+    );
+  }
+  return device;
+}
 
-      return [{
-        tenantId, provider: 'samsara', fetchedAt: iso(),
-        payload: {
-          data: affected.map((d, i) => {
-            // All diverted to the SAME side - traffic off a closed carriageway
-            // goes one way, not both. Each driver ends up 800m-1.2km off the
-            // corridor (well past the 400m threshold) and strung ~2km along the
-            // frontage road, which keeps every one of them inside the 3km merge
-            // radius of the others. If they scattered further, this would
-            // correctly become several incidents rather than one.
-            const lon = Number((blockLon - 0.0090 - (i % 4) * 0.0020).toFixed(6));
-            const lat = Number((blockLat + ((i % 7) - 3) * 0.0035).toFixed(6));
-            const at = iso(i * 1_000);
-            return {
-              id: d.vehicleId,
-              name: d.vehicleId,
-              externalIds: { driverId: d.driverId },
-              gps: {
-                time: at, latitude: lat, longitude: lon,
-                speedMilesPerHour: 0,
-                headingDegrees: 180,
-                reverseGeo: { formattedLocation: 'I-35E S, Dallas, TX' },
-              },
-              engineStates: { time: at, value: 'Idle' },
-              // Stopped for twenty-odd minutes. The second signal.
-              idleMinutes: 21 + (i % 6),
-              harshEvent: null,
-            };
-          }),
-          pagination: { endCursor: null, hasNextPage: false },
-        },
-      }];
+function syslog(tenantId: TenantId, receivedAt: string, lines: string[]): RawBatch {
+  return {
+    tenantId,
+    encoding: 'syslog',
+    receivedAt,
+    source: { collector: 'vector-use1-1' },
+    records: lines,
+  };
+}
+
+function traps(tenantId: TenantId, receivedAt: string, records: unknown[]): RawBatch {
+  return {
+    tenantId,
+    encoding: 'snmp-trap',
+    receivedAt,
+    source: { collector: 'vector-use1-1' },
+    records,
+  };
+}
+
+/** A Cisco IOS-XE link transition, RFC 5424. */
+function ciscoLink(host: string, iface: string, state: 'up' | 'down', when: string): string {
+  return '<187>1 ' + when + ' ' + host + ' - - - - %LINK-3-UPDOWN: Interface ' +
+    iface + ', changed state to ' + state;
+}
+
+/** The matching SNMP linkDown/linkUp trap for the same port on the same box. */
+function ciscoLinkTrap(sysName: string, iface: string, ifIndex: number, down: boolean) {
+  return {
+    source: '10.10.0.1',
+    trapOid: down ? '1.3.6.1.6.3.1.1.5.3' : '1.3.6.1.6.3.1.1.5.4',
+    varbinds: [
+      { oid: '1.3.6.1.2.1.1.5.0', value: sysName },
+      { oid: '1.3.6.1.2.1.2.2.1.1.' + String(ifIndex), value: ifIndex },
+      { oid: '1.3.6.1.2.1.2.2.1.7.' + String(ifIndex), value: 1 },
+      { oid: '1.3.6.1.2.1.2.2.1.8.' + String(ifIndex), value: down ? 2 : 1 },
+      { oid: '1.3.6.1.2.1.31.1.1.1.1.' + String(ifIndex), value: iface },
+    ],
+  };
+}
+
+function snmpName(device: Device): string {
+  return device.aliases.find((a) => a.kind === 'snmp-sysname')?.value ?? device.name;
+}
+
+function firstInterface(estate: Estate, device: Device): string {
+  const iface = estate.interfaces.find((i) => i.deviceId === device.deviceId);
+  if (!iface) throw new Error('no interfaces generated for ' + device.deviceId);
+  return iface.name;
+}
+
+export function buildScenarios(estate: Estate): Scenario[] {
+  const tenantId = estate.sites[0].tenantId;
+  const dallas = 'dal-01';
+
+  const core = pick(estate, dallas, 'core');
+  const dist = pick(estate, dallas, 'distribution');
+  const access = pick(estate, dallas, 'access');
+  const access2 = pick(estate, dallas, 'access', 1);
+  const corePort = firstInterface(estate, core);
+  const accessPort = firstInterface(estate, access);
+
+  // One device from each of the other two vendors, for the mixed-estate
+  // scenario. Selected by VENDOR rather than by name, so the scenario keeps
+  // proving what it claims even if the generator renames or re-sites things.
+  const junos = pickVendor(estate, 'juniper');
+  const aruba = pickVendor(estate, 'aruba');
+
+  // Everything downstream of the distribution switch, which is what the cascade
+  // scenario expects to collapse into one incident.
+  const downstream = estate.devices.filter((d) => d.uplinkDeviceId === dist.deviceId);
+
+  return [
+    {
+      id: 'double-report',
+      title: 'One link failure, reported twice by the same box',
+      proves:
+        'A syslog line and an SNMP trap from one agent are ONE event with two ' +
+        'records, not two witnesses. They share a dedupe key and collapse before ' +
+        'the rules ever see them.',
+      expect: 'two raw records, one event, and NOT enough on its own to page anyone',
+      batches: [
+        syslog(tenantId, at(1), [ciscoLink(core.name, corePort, 'down', at(0))]),
+        traps(tenantId, at(1), [ciscoLinkTrap(snmpName(core), corePort, 10_001, true)]),
+      ],
     },
-  },
 
-  {
-    id: 'gps-drift',
-    title: 'A single GPS spike, Austin',
-    proves: 'An uncorroborated deviation raises NO incident - the noise filter working',
-    build(tenantId) {
-      const driver = driversIn('aus')[0];
-      // One reading, one vendor, nothing else agreeing. A cheap receiver under
-      // an overpass does this several times a shift. If this paged a
-      // dispatcher, they would learn to ignore the board within a week.
-      return [{
-        tenantId, provider: 'samsara', fetchedAt: iso(),
-        payload: {
-          data: [{
-            id: driver.vehicleId,
-            name: driver.vehicleId,
-            externalIds: { driverId: driver.driverId },
-            gps: {
-              time: iso(),
-              latitude: 30.4102, longitude: -97.8510,   // ~9km off corridor
-              speedMilesPerHour: 46,
-              headingDegrees: 12,
-              reverseGeo: { formattedLocation: 'US-183, Austin, TX' },
-            },
-            engineStates: { time: iso(), value: 'On' },
-            harshEvent: null,
-          }],
-          pagination: { endCursor: null, hasNextPage: false },
-        },
-      }];
+    {
+      id: 'cross-plane',
+      title: 'The same failure, seen from three different vantage points',
+      proves:
+        'Corroboration means independent PLANES. The switch says the port is ' +
+        'down, its controller reports the device offline, and our own probe ' +
+        'cannot reach it. Three vantage points, so this one is real.',
+      expect: 'an incident opens, because the evidence is genuinely independent',
+      batches: [
+        syslog(tenantId, at(1), [ciscoLink(access.name, accessPort, 'down', at(0))]),
+      ],
+      // The probe is the third plane, and the only one that works when a device
+      // has stopped talking altogether.
+      unreachable: [access.deviceId],
     },
-  },
 
-  {
-    id: 'harsh-braking',
-    title: 'Hard braking witnessed twice, Denver',
-    proves: 'Two independent devices on one truck agreeing is what makes it real',
-    build(tenantId) {
-      const driver = driversIn('den')[0];
-      const at = iso();
-      return [
-        {
-          tenantId, provider: 'samsara', fetchedAt: iso(),
-          payload: {
-            data: [{
-              id: driver.vehicleId, name: driver.vehicleId,
-              externalIds: { driverId: driver.driverId },
-              gps: {
-                time: at, latitude: driver.lat, longitude: driver.lon,
-                speedMilesPerHour: 38, headingDegrees: 190,
-                reverseGeo: { formattedLocation: 'I-25 S, Denver, CO' },
-              },
-              engineStates: { time: at, value: 'On' },
-              harshEvent: { time: at, behaviourLabel: 'Harsh Braking', downloadForwardVideoUrl: null, gForce: 0.71 },
-            }],
-            pagination: { endCursor: null, hasNextPage: false },
-          },
-        },
-        {
-          // Same driver, same instant, different hardware and different vendor.
-          tenantId, provider: 'lytx', fetchedAt: iso(),
-          payload: {
-            events: [{
-              eventId: 'LYT-HB-' + driver.driverId,
-              driverId: driver.driverId,
-              vehicleId: driver.vehicleId,
-              recordDateTime: at,
-              latitude: driver.lat, longitude: driver.lon,
-              behaviors: [{ id: 41, name: 'Braking - Hard', severity: 'High' }],
-              triggerGForce: 0.68,
-              status: 'Reviewed',
-            }],
-            meta: { count: 1 },
-          },
-        },
-      ];
+    {
+      id: 'cascade',
+      title: 'A distribution switch dies and takes its subtree with it',
+      proves:
+        'Topology merge. One failure produces an alarm on every device beneath ' +
+        'it; they collapse into ONE incident that names the switch to go and ' +
+        'look at, rather than paging once per orphaned device.',
+      expect:
+        'one incident naming ' + dist.name + ' as root cause, not ' +
+        String(downstream.length + 1) + ' separate pages',
+      batches: [
+        syslog(tenantId, at(2), [
+          ciscoLink(dist.name, firstInterface(estate, dist), 'down', at(0)),
+          ...downstream.map((d) => ciscoLink(d.name, firstInterface(estate, d), 'down', at(1))),
+        ]),
+      ],
+      unreachable: [dist.deviceId, ...downstream.map((d) => d.deviceId)],
     },
-  },
 
-  {
-    id: 'hos-risk',
-    title: 'Hours-of-service running out, Chicago',
-    proves: 'A regulatory clock is authoritative - it escalates without a second opinion',
-    build(tenantId) {
-      const driver = driversIn('chi')[0];
-      return [{
-        tenantId, provider: 'motive', fetchedAt: iso(),
-        payload: {
-          logs: [{
-            log: {
-              driver: { id: driver.driverId, username: driver.driverId },
-              date: '2026-09-08',
-              driving_time_remaining: 1_500,      // 25 minutes
-              shift_time_remaining: 4_200,
-              current_status: 'driving',
-              updated_at: iso(),
-            },
-          }],
-          pagination: { per_page: 100, page_no: 1, total: 1 },
-        },
-      }];
+    {
+      id: 'lone-signal',
+      title: 'One access port flaps and nothing else agrees',
+      proves:
+        'The noise filter. A single uncorroborated alarm is recorded and shown, ' +
+        'but does not page. This is the case that makes the other five ' +
+        'trustworthy - a board that alerts on everything gets ignored.',
+      expect: 'an alarm on the board, no incident, nobody woken',
+      batches: [
+        syslog(tenantId, at(1), [
+          ciscoLink(access2.name, firstInterface(estate, access2), 'down', at(0)),
+        ]),
+      ],
     },
-  },
 
-  {
-    id: 'panic',
-    title: 'Driver panic button, Phoenix',
-    proves: 'The sub-second path: no batching window, no corroboration, no delay',
-    build(tenantId) {
-      const driver = driversIn('phx')[0];
-      // Modelled as a Lytx event because the dashcam is what has a physical
-      // button in the cab. A real deployment routes this off the batched
-      // stream entirely - "real-time" for a 30-second position refresh and
-      // "real-time" for a panic alert are different systems.
-      return [{
-        tenantId, provider: 'lytx', fetchedAt: iso(),
-        payload: {
-          events: [{
-            eventId: 'LYT-PANIC-' + driver.driverId,
-            driverId: driver.driverId,
-            vehicleId: driver.vehicleId,
-            recordDateTime: iso(),
-            latitude: driver.lat, longitude: driver.lon,
-            behaviors: [{ id: 99, name: 'Panic Button', severity: 'Critical' }],
-            triggerGForce: 0,
-            status: 'Unreviewed',
-          }],
-          meta: { count: 1 },
-        },
-      }];
+    {
+      id: 'mixed-estate',
+      title: 'Three vendors describing the same kind of event',
+      proves:
+        'One canonical model. Cisco, Junos and AOS-CX say the same thing in ' +
+        'three dialects - a mnemonic, a structured-data element and an English ' +
+        'sentence - and land as identical Observations.',
+      expect: 'three vendors, one shape, one severity rule applied to all of them',
+      batches: [
+        syslog(tenantId, at(1), [
+          // Cisco: the fact is inside the prose.
+          ciscoLink(core.name, corePort, 'down', at(0)),
+          // Junos: the fact is in structured data. The hostname and port come
+          // from the estate rather than being written out here - a literal
+          // would silently stop resolving the moment the generator's naming
+          // changed, and the scenario would quietly prove nothing.
+          '<28>1 ' + at(0) + ' ' + junos.name + ' mib2d 2104 SNMP_TRAP_LINK_DOWN ' +
+          '[junos@2636.1.1.1.2.29 ifIndex="528" ifAdminStatus="up(1)" ' +
+          'ifOperStatus="down(2)" ifName="' + firstInterface(estate, junos) + '"] ifName ' +
+          firstInterface(estate, junos),
+          // AOS-CX: the fact is in an English sentence, and the daemon is the handle.
+          '<147>1 ' + at(0) + ' ' + aruba.name + ' ops-switchd 1832 - - Interface ' +
+          firstInterface(estate, aruba) + ' is now down',
+        ]),
+      ],
     },
-  },
 
-  {
-    id: 'poison-record',
-    title: 'One unparseable payload mid-batch',
-    proves: 'The batch is bisected, one record is parked, and the shard keeps moving',
-    build(tenantId) {
-      const fleet = driversIn('dal').slice(0, 8);
-      return [{
-        tenantId, provider: 'samsara', fetchedAt: iso(),
-        payload: {
-          data: fleet.map((d, i) => ({
-            id: d.vehicleId, name: d.vehicleId,
-            externalIds: { driverId: d.driverId },
-            gps: {
-              time: iso(i * 500),
-              latitude: d.lat, longitude: d.lon,
-              // The fifth vehicle reports a speed the vendor's own docs say is
-              // impossible. A bad firmware rollout looks exactly like this.
-              speedMilesPerHour: i === 4 ? Number.NaN : 55,
-              headingDegrees: 90,
-              reverseGeo: { formattedLocation: 'I-30 E, Dallas, TX' },
-            },
-            engineStates: { time: iso(i * 500), value: 'On' },
-            harshEvent: null,
-          })),
-          pagination: { endCursor: null, hasNextPage: false },
-        },
-      }];
+    {
+      id: 'stale-inventory',
+      title: 'A device sends syslog under a name nobody registered',
+      proves:
+        'Unresolved hosts are COUNTED and named, never dropped in silence. An ' +
+        'estate whose syslog half fails to resolve looks exactly like a quiet ' +
+        'estate, and that is the most dangerous failure mode this pipeline has.',
+      expect: 'the record is dropped, the hostname is reported, and the number is visible',
+      batches: [
+        syslog(tenantId, at(1), [
+          ciscoLink('sw-nobody-registered-01', 'GigabitEthernet1/0/9', 'down', at(0)),
+        ]),
+      ],
     },
-  },
-];
-
-export function scenarioById(id: ScenarioId): Scenario | undefined {
-  return SCENARIOS.find((s) => s.id === id);
+  ];
 }

@@ -1,0 +1,41 @@
+## ============================================================================
+## Query.device - a UNIT resolver straight onto DynamoDB. No Lambda.
+## ============================================================================
+## This is the one worth understanding, because most teams reach for a Lambda
+## here and pay for it forever. A resolver that only reads DynamoDB has no
+## business being a Lambda: no cold start, no per-invocation charge, and one
+## fewer thing to deploy.
+##
+## THE TENANT KEY IS BUILT FROM THE TOKEN, NOT FROM THE ARGUMENTS. `$ctx.identity`
+## is populated by AppSync from the verified Cognito JWT before this template
+## runs, so there is no code path where a caller supplies their own tenant. The
+## same discipline as platform/repository.ts, enforced one layer earlier.
+##
+## VTL is a template language, not a programming language. It has no types, no
+## debugger and error messages that name a line in generated output. Prefer
+## APPSYNC_JS (see Query.observations.js) for anything with a conditional in it;
+## this file exists because plenty of deployed estates are still VTL and being
+## unable to read it is a real gap.
+## ============================================================================
+
+#set($tenantId = $ctx.identity.claims.get("custom:tenantId"))
+
+## Fail closed. A token with no tenant claim must not fall through to a query
+## with an empty partition key - that is a scan of nothing today and a
+## cross-tenant read the moment someone "helpfully" makes the key optional.
+#if($util.isNullOrEmpty($tenantId))
+  $util.unauthorized()
+#end
+
+{
+  "version": "2018-05-29",
+  "operation": "GetItem",
+  "key": {
+    "PK": $util.dynamodb.toDynamoDBJson("TENANT#${tenantId}#DEVICE"),
+    "SK": $util.dynamodb.toDynamoDBJson("DEVICE#${ctx.args.deviceId}")
+  },
+  ## Eventually consistent is right here. The device item is overwritten on
+  ## every observation, so a strongly consistent read costs double the read
+  ## units to be a few milliseconds fresher than a board that polls anyway.
+  "consistentRead": false
+}

@@ -125,7 +125,7 @@ def ask_with_rag(question: str, tenant_id: str) -> dict[str, Any]:
         )
 
     Use that for plain Q&A. Do it by hand, as below, when you need to blend
-    retrieved text with live telemetry or control the prompt yourself.
+    retrieved text with live observations or control the prompt yourself.
     """
     chunks = retrieve(question, tenant_id)
     if not chunks:
@@ -295,15 +295,15 @@ def _execute_tool(
 
 WRITE_TOOLS = {"openIncident", "acknowledgeIncident", "dispatchEngineer"}
 
-SYSTEM_PROMPT = """You are Meridian, an operations assistant for enterprise
+SYSTEM_PROMPT = """You are NetPulse, an operations assistant for enterprise
 network and contact-centre teams.
 
 Rules:
 - Ground every recommendation in a runbook you retrieved. If no runbook covers
   the situation, say so rather than improvising a procedure.
-- Check telemetry before explaining a cause. Do not speculate from the question.
+- Check observations before explaining a cause. Do not speculate from the question.
 - Before claiming a problem is regional, verify it with a spatial query.
-- Cite the driver ids and vendors your conclusion rests on.
+- Cite the device ids and vendors your conclusion rests on.
 - Never claim to have taken an action you did not take via a tool."""
 
 

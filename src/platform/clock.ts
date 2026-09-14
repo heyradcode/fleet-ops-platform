@@ -8,10 +8,10 @@
  *   1. REPRODUCIBLE DEMOS. A run that stamps wall-clock time produces different
  *      output every time, so it cannot be narrated, screenshotted, or diffed
  *      against a previous run to see what a change did.
- *   2. ASSERTABLE TESTS. "The exception was raised within the batch window" is
+ *   2. ASSERTABLE TESTS. "The alarm was raised within the batch window" is
  *      only testable if the test controls the window.
- *   3. TRACE REPLAY. The dispatch board scrubs backwards and forwards through a
- *      recorded telemetry trace. That is just advancing this clock.
+ *   3. TRACE REPLAY. The operations board scrubs backwards and forwards through a
+ *      recorded observations trace. That is just advancing this clock.
  *
  * The production implementation is `system()` and is what a Lambda uses. The
  * demo and the tests install `fixed()`, which is why every run prints the same
@@ -44,7 +44,7 @@ export function systemClock(): Clock {
 /**
  * A clock you drive by hand.
  *
- * `advance()` is what makes trace replay work: the generated telemetry trace is
+ * `advance()` is what makes trace replay work: the generated observations trace is
  * a list of ticks, and replaying it is advancing this clock one interval at a
  * time while feeding the matching records through the pipeline.
  */

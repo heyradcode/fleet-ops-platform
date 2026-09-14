@@ -169,7 +169,7 @@ function toolsAlreadyRun(messages: Message[]): Set<string> {
  * an agent that pages someone because you asked "why is this slow?" is a bug,
  * not a feature.
  */
-const ACTION_TOOLS = new Set(['openIncident', 'acknowledgeIncident', 'reassignDriver']);
+const ACTION_TOOLS = new Set(['openIncident', 'acknowledgeIncident', 'suppressAlarm']);
 const ACTION_INTENT = /\b(open|raise|create|file|page|escalate|acknowledge|dispatch)\b/i;
 
 function plan(req: { system: string; messages: Message[]; tools?: ToolSpec[] }): Omit<ModelResponse, 'usage'> {
@@ -202,35 +202,66 @@ function inferArgs(tool: ToolSpec, messages: Message[]): Record<string, unknown>
 
   for (const key of tool.input_schema.required ?? []) {
     if (key === 'query' || key === 'question') args[key] = question;
-    else if (key === 'driverId' || key === 'fromDriverId') {
-      args[key] = extractDriverId(question) ?? 'drv-1000';
-    }
-    else if (key === 'toDriverId') args[key] = 'drv-1001';
-    else if (key === 'districtId') args[key] = 'dal';
-    else if (key === 'driverIds') args[key] = [extractDriverId(question) ?? 'drv-1000'];
+    else if (key === 'deviceId') args[key] = extractDeviceId(question);
+    else if (key === 'deviceIds') args[key] = [extractDeviceId(question)];
+    else if (key === 'siteId') args[key] = extractSiteId(question);
     else if (key === 'severity') args[key] = 'critical';
-    else if (key === 'radiusKm') args[key] = 400;
+    else if (key === 'minutes') args[key] = 60;
     else if (key === 'hours') args[key] = 6;
+    else if (key === 'reason') args[key] = question;
+    else if (key === 'title') args[key] = question;
     else args[key] = question;
   }
   return args;
 }
 
-function extractDriverId(text: string): string | undefined {
-  const explicit = /\b(drv-\d{4})\b/i.exec(text);
+/**
+ * Guess a device id from the question.
+ *
+ * A REAL model reads the tool's schema and picks an argument. This stand-in
+ * cannot, so it pattern-matches - and the fallback matters more than it looks:
+ * passing the whole question through as a `deviceId` produces a tool error on
+ * every turn, which makes the demo's agent trace look broken when the thing
+ * being demonstrated is the loop, not the model.
+ */
+function extractDeviceId(text: string): string {
+  const explicit = /\b(dev-[a-z]{3}-[a-z0-9]+-\d{2})\b/i.exec(text);
   if (explicit) return explicit[1].toLowerCase();
 
-  // A dispatcher usually says a place or a name, not an id. Mapping the demo
-  // fleet by district is enough to make the scripted agent behave plausibly.
-  const named: Record<string, string> = {
-    dallas: 'drv-1000', austin: 'drv-1016', denver: 'drv-1027',
-    chicago: 'drv-1038', phoenix: 'drv-1049',
+  // An engineer usually says a place and a role, not an id. Composing one from
+  // whichever it mentions is enough to make the scripted agent behave
+  // plausibly against the generated estate.
+  const sites: Record<string, string> = {
+    dallas: 'dal01', austin: 'aus01', denver: 'den01',
+    chicago: 'chi01', phoenix: 'phx01',
+  };
+  const roles: Array<[word: string, prefix: string, first: number]> = [
+    ['core', 'cor', 1],
+    ['distribution', 'dis', 3],
+    ['access', 'acc', 5],
+    ['edge', 'wan', 2],
+    ['switch', 'cor', 1],
+  ];
+
+  const lower = text.toLowerCase();
+  const site = Object.entries(sites).find(([name]) => lower.includes(name))?.[1]
+    ?? Object.entries(sites).find(([, id]) => lower.includes(id))?.[1]
+    ?? 'dal01';
+  const role = roles.find(([word]) => lower.includes(word)) ?? roles[0];
+
+  return 'dev-' + role[1] + '-' + site + '-' + String(role[2]).padStart(2, '0');
+}
+
+function extractSiteId(text: string): string {
+  const explicit = /\b([a-z]{3}-\d{2})\b/i.exec(text);
+  if (explicit) return explicit[1].toLowerCase();
+
+  const sites: Record<string, string> = {
+    dallas: 'dal-01', austin: 'aus-01', denver: 'den-01',
+    chicago: 'chi-01', phoenix: 'phx-01',
   };
   const lower = text.toLowerCase();
-  for (const [name, id] of Object.entries(named)) {
-    if (lower.includes(name)) return id;
-  }
-  return undefined;
+  return Object.entries(sites).find(([name]) => lower.includes(name))?.[1] ?? 'dal-01';
 }
 
 function firstUserText(messages: Message[]): string {
@@ -258,7 +289,7 @@ function synthesise(messages: Message[]): string {
     ...results.map((r) => '  - ' + oneLine(r)),
     '',
     'Recommended action: follow the retrieved runbook - work its triage steps',
-    'in order, and confirm the driver is safe before deciding anything about',
+    'in order, and confirm the device is safe before deciding anything about',
     'the load.',
   ].join('\n');
 }

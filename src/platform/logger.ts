@@ -22,13 +22,13 @@ export function setCorrelationId(id: string) { correlationId = id; }
  *
  * Lambda and the terminal have a stdout. A browser tab does not - and there
  * `process` is not undefined but UNBOUND, so the first line the agent logged
- * threw "process is not defined" straight into the driver panel. The module
+ * threw "process is not defined" straight into the device panel. The module
  * graph loaded fine; the failure waited for the first log call, which is why
  * the browser-contract test now asks the agent a question rather than only
  * importing it.
  *
  * In a browser, errors and warnings keep their level. Narration goes to
- * console.debug, which DevTools hides by default: a dispatch board's console
+ * console.debug, which DevTools hides by default: a operations board's console
  * is not the place for the backend's running commentary. Looked up per call,
  * not at import, so a graph loaded under Node and later run without `process`
  * (the contract test does exactly that) takes the right branch.

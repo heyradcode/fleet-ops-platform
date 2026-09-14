@@ -1,56 +1,64 @@
 /**
  * The in-process transport: the entire backend, running in the browser tab.
  *
- * It imports the same resolvers, the same pipeline and the same rules the
- * Lambdas would run. Nothing here is a mock of the backend - it IS the backend,
- * with `src/aws/` standing in for the AWS services underneath.
+ * It imports the same decoders, the same mappers, the same pipeline and the
+ * same rules the Lambdas would run. Nothing here is a mock of the backend - it
+ * IS the backend, with `src/aws/` standing in for the AWS services underneath.
  *
  * The scenarios are replayed through the real path on load
- * (normalise -> resolve -> derive -> evaluate -> detect) so the board shows
- * what the RULES decided, not a hand-written list of things that look like
- * alerts. If the corroboration rule changes, this board changes with it.
+ * (decode -> map -> collapse -> resolve -> evaluate -> correlate) so the board
+ * shows what the RULES decided, not a hand-written list of things that look
+ * like alerts. If the corroboration rule changes, this board changes with it.
  */
-import type { BoardSnapshot, PositionTick, Transport } from './index.ts';
-import type { Driver, Exception, Principal } from '../../../src/platform/types.ts';
-import { generateTrace } from '../../../src/data/generate.ts';
+import type { BoardSnapshot, HealthTick, Transport } from './index.ts';
+import type { Alarm, DeviceStatus, Incident, Principal } from '../../../src/platform/types.ts';
 
 import { setClock, fixedClock } from '../../../src/platform/clock.ts';
 import { setRandom, seededRandom } from '../../../src/platform/random.ts';
 import { setUuid, seededUuid } from '../../../src/platform/crypto.ts';
 import { verifyToken, signDemoToken } from '../../../src/auth/cognito-jwt-verifier.ts';
-import { allDrivers, allDistricts } from '../../../src/geo/driver-repository.ts';
-import { withinScope } from '../../../src/platform/tenancy.ts';
-import { SCENARIOS } from '../../../src/data/scenarios.ts';
 import {
-  normaliseAll, resolveTerritory, deriveRouteAdherence, evaluate, detectIncidents,
+  loadEstate, getInventory, allDeviceStates, allSites,
+} from '../../../src/geo/device-repository.ts';
+import { withinScope } from '../../../src/platform/tenancy.ts';
+import { buildScenarios } from '../../../src/data/scenarios.ts';
+import { generateHealthTrace } from '../../../src/data/trace.ts';
+import { setProber, resetProber, probeEstate } from '../../../src/integrations/probe.ts';
+import {
+  normalisePushed, collapseDuplicates, resolveLocations, evaluate, detectIncidents,
 } from '../../../src/pipeline/steps.ts';
 import { runAgent } from '../../../src/ai/agent-core.ts';
 import { TOOL_SPECS } from '../../../src/ai/tools.ts';
 import { knowledgeBase } from '../../../src/ai/knowledge-base.ts';
-import { putTelemetry, putDrivers } from '../../../src/platform/repository.ts';
+import { putObservations, putDeviceStates } from '../../../src/platform/repository.ts';
 import { loadRunbooksFromBundle } from './runbooks.browser.ts';
 
 /**
  * Seed the platform primitives before anything reads them.
  *
  * The same three calls `demo.ts` makes. Without them the board would render
- * different driver positions and different incident ids on every reload, which
- * makes it impossible to tell a real change from noise while building.
+ * different device ids and different incident ids on every reload, which makes
+ * it impossible to tell a real change from noise while building.
  */
 function seed(): void {
   setClock(fixedClock());
   const rng = seededRandom();
   setRandom(rng);
   setUuid(seededUuid(rng));
+  loadEstate();
 }
 
 let seeded = false;
 
+function ensureSeeded(): void {
+  if (!seeded) { seed(); seeded = true; }
+}
+
 /**
  * The signed-in principal.
  *
- * Null until sign-in completes, and the board does not render before then -
- * so there is no path that reads fleet data without a verified token behind it.
+ * Null until sign-in completes, and the board does not render before then - so
+ * there is no path that reads estate data without a verified token behind it.
  */
 let session: Principal | null = null;
 
@@ -58,7 +66,7 @@ let session: Principal | null = null;
  * The caller. Comes from the signed-in session, never from the UI.
  *
  * Before sign-in existed this was fabricated here, which meant the board's
- * scope was asserted rather than demonstrated. Now a Dallas dispatcher cannot
+ * scope was asserted rather than demonstrated. Now a Dallas operator cannot
  * reach Phoenix because their TOKEN does not say they may, and the same
  * withinScope() the GraphQL resolver applies is what enforces it.
  */
@@ -71,10 +79,10 @@ function caller(): Principal {
 
 /**
  * A tenant-wide principal, used only to compute what the RULES decided across
- * the whole fleet before the caller's scope narrows it.
+ * the whole estate before the caller's scope narrows it.
  *
  * Deriving it from the session's own tenant rather than hard-coding one keeps
- * the tenant boundary intact: a Northstar user computes Northstar's exceptions.
+ * the tenant boundary intact: a Northwind user computes Northwind's alarms.
  */
 function analyst(): Principal {
   return verifyToken(signDemoToken({
@@ -87,43 +95,60 @@ function analyst(): Principal {
 
 /** Run every scenario through the real pipeline and collect what it decided. */
 function runScenarios(principal: Principal) {
-  const exceptions: Exception[] = [];
-  const incidents = [];
+  const estate = loadEstate(principal.tenantId);
+  const inventory = getInventory(principal);
 
-  for (const scenario of SCENARIOS) {
-    const collected = scenario.build(principal.tenantId).map((raw) => ({ raw }));
-    const readings = deriveRouteAdherence(
-      resolveTerritory(principal, normaliseAll(principal, collected)),
-    );
-    const raised = evaluate(principal, readings);
-    exceptions.push(...raised);
+  const alarms: Alarm[] = [];
+  const incidents: Incident[] = [];
+
+  for (const scenario of buildScenarios(estate)) {
+    // The prober is part of the scenario, because the external plane is what
+    // makes half of these corroborate at all. Reset afterwards so one
+    // scenario's outage does not leak into the next.
+    if (scenario.unreachable) {
+      const down = new Set(scenario.unreachable);
+      setProber((deviceId) => !down.has(deviceId));
+    } else {
+      resetProber();
+    }
+
+    const pushed = normalisePushed(inventory, scenario.batches).observations;
+    const probed = scenario.unreachable
+      ? probeEstate(principal, inventory)
+        .filter((o) => scenario.unreachable!.includes(o.deviceId))
+      : [];
+
+    const enriched = resolveLocations(principal, collapseDuplicates([...pushed, ...probed]));
+    const raised = evaluate(principal, enriched);
+    alarms.push(...raised);
     incidents.push(...detectIncidents(principal, raised));
   }
+  resetProber();
 
-  // An exception whose id appears in no incident fired but was not
-  // corroborated. The board shows these dimmed rather than hiding them - see
-  // the note on `.is-noise` in styles.css.
-  const paged = new Set(incidents.flatMap((i) => i.exceptionIds));
-  const heldBack = exceptions.filter((e) => !paged.has(e.exceptionId));
+  // An alarm whose id appears in no incident fired but was not corroborated.
+  // The board shows these dimmed rather than hiding them - see the note on
+  // `.is-noise` in styles.css.
+  const paged = new Set(incidents.flatMap((i) => i.alarmIds));
+  const heldBack = alarms.filter((a) => !paged.has(a.alarmId));
 
-  return { exceptions, incidents, heldBack };
+  return { alarms, incidents, heldBack };
 }
 
 /**
  * The agent needs the same data the board shows, in the repository where its
  * tools look for it. Populating it once on demand keeps the board's first
- * paint fast - nobody waits for an embedding index to build before seeing
- * where their trucks are.
+ * paint fast - nobody waits for an embedding index to build before seeing the
+ * state of their estate.
  */
 let agentReady: Promise<void> | undefined;
 
 function prepareAgent(): Promise<void> {
   agentReady ??= (async () => {
     // The browser half of the runbook registry, loaded HERE rather than at
-    // startup. Two reasons: the board's first paint should not wait on a
-    // corpus it does not draw, and `import.meta.glob` is a Vite build-time
-    // feature - calling it during seed() made the whole transport unloadable
-    // outside Vite, which cost the ability to test it under `node --test`.
+    // startup. Two reasons: the board's first paint should not wait on a corpus
+    // it does not draw, and `import.meta.glob` is a Vite build-time feature -
+    // calling it during seed() made the whole transport unloadable outside
+    // Vite, which cost the ability to test it under `node --test`.
     //
     // Without this call the knowledge base throws on first retrieval,
     // deliberately loudly: a silently empty knowledge base makes the agent
@@ -132,13 +157,14 @@ function prepareAgent(): Promise<void> {
     loadRunbooksFromBundle();
 
     const principal = analyst();
-    putDrivers(principal, allDrivers(principal));
+    const estate = loadEstate(principal.tenantId);
+    const inventory = getInventory(principal);
 
-    for (const scenario of SCENARIOS) {
-      const collected = scenario.build(principal.tenantId).map((raw) => ({ raw }));
-      putTelemetry(principal, deriveRouteAdherence(
-        resolveTerritory(principal, normaliseAll(principal, collected)),
-      ));
+    putDeviceStates(principal, allDeviceStates(principal));
+
+    for (const scenario of buildScenarios(estate)) {
+      const pushed = normalisePushed(inventory, scenario.batches).observations;
+      putObservations(principal, resolveLocations(principal, collapseDuplicates(pushed)));
     }
 
     await knowledgeBase.ingestRunbooks(principal.tenantId);
@@ -151,39 +177,39 @@ export const inProcessTransport: Transport = {
     session = principal;
   },
 
-  async loadBoard(districtId) {
-    if (!seeded) { seed(); seeded = true; }
+  async loadBoard(siteId) {
+    ensureSeeded();
 
     const principal = caller();
-    const { exceptions, incidents, heldBack } = runScenarios(analyst());
+    const { alarms, incidents, heldBack } = runScenarios(analyst());
 
     // TWO STEPS, and both are needed. withinScope() is the BOUNDARY, derived
-    // from the token; districtId is the caller's chosen VIEW. Applying only
-    // the first meant a Dallas dispatcher who asked for Phoenix got Dallas's
-    // sixteen drivers rendered under a Phoenix heading - not a leak, since
-    // scope had already excluded Phoenix, but wrong in a way that would make
-    // someone distrust the board the moment they noticed.
+    // from the token; siteId is the caller's chosen VIEW. Applying only the
+    // first meant a Dallas operator who asked for Phoenix got Dallas's devices
+    // rendered under a Phoenix heading - not a leak, since scope had already
+    // excluded Phoenix, but wrong in a way that would make someone distrust the
+    // board the moment they noticed.
     //
-    // Query.drivers in the GraphQL resolver does exactly this pair. Every
-    // entry point to the same data has to, which is the argument for both
-    // living behind the same two functions rather than being reimplemented.
-    const inDistrict = (d: { districtId: string }) => !districtId || d.districtId === districtId;
+    // Query.devices in the GraphQL resolver does exactly this pair. Every entry
+    // point to the same data has to, which is the argument for both living
+    // behind the same two functions rather than being reimplemented.
+    const atSite = (x: { siteId: string }) => !siteId || x.siteId === siteId;
 
     return {
-      drivers: withinScope(principal, allDrivers(principal)).filter(inDistrict),
-      territories: allDistricts(principal),
-      exceptions: exceptions.filter(inDistrict),
-      incidents: incidents.filter(inDistrict),
-      heldBack: heldBack.filter(inDistrict),
+      devices: withinScope(principal, allDeviceStates(principal)).filter(atSite),
+      sites: allSites(principal),
+      alarms: alarms.filter(atSite),
+      incidents: incidents.filter(atSite),
+      heldBack: heldBack.filter(atSite),
     } satisfies BoardSnapshot;
   },
 
   async askAgent(question) {
-    if (!seeded) { seed(); seeded = true; }
+    ensureSeeded();
     await prepareAgent();
 
-    // The agent runs with the CALLER's principal, never a privileged one. A
-    // dispatcher scoped to Dallas gets an assistant scoped to Dallas, and the
+    // The agent runs with the CALLER's principal, never a privileged one. An
+    // operator scoped to Dallas gets an assistant scoped to Dallas, and the
     // tools enforce that themselves rather than trusting the prompt.
     return runAgent({
       question,
@@ -192,70 +218,70 @@ export const inProcessTransport: Transport = {
     });
   },
 
-  subscribePositions(districtId, onTick) {
-    if (!seeded) { seed(); seeded = true; }
+  subscribeHealth(siteId, onTick) {
+    ensureSeeded();
 
     const principal = caller();
-    // The same boundary as loadBoard: the token decides which drivers exist,
-    // and the district is a view on top of that. A tick never carries a
-    // position the caller could not have loaded.
+    // The same boundary as loadBoard: the token decides which devices exist,
+    // and the site is a view on top of that. A frame never carries a device the
+    // caller could not have loaded.
     const visible = new Set(
-      withinScope(principal, allDrivers(principal))
-        .filter((d) => !districtId || d.districtId === districtId)
-        .map((d) => d.driverId),
+      withinScope(principal, allDeviceStates(principal))
+        .filter((d) => !siteId || d.siteId === siteId)
+        .map((d) => d.deviceId),
     );
 
-    // The seeded trace: 60 ticks at 30s, every driver, positions interpolated
-    // along real corridors. Generated once per subscription - ~3,600 records.
-    const trace = generateTrace({ tenantId: principal.tenantId, ticks: 60 });
+    const estate = loadEstate(principal.tenantId);
+    const trace = generateHealthTrace(estate);
 
     let i = 0;
     let cancelled = false;
 
     const emit = () => {
       if (cancelled) return;
-      const tick = trace[i % trace.length];
-      const positions: PositionTick['positions'] = new Map();
-      for (const r of tick.readings) {
-        if (!visible.has(r.driverId) || !r.location) continue;
-        positions.set(r.driverId, {
-          lon: r.location.lon,
-          lat: r.location.lat,
-          status: r.attributes.status as Driver['status'],
-        });
+      const frame = trace.frames[i % trace.frames.length];
+      const status = new Map<string, DeviceStatus>();
+      for (const [deviceId, s] of frame.status) {
+        if (visible.has(deviceId)) status.set(deviceId, s);
       }
-      onTick({ at: tick.at, index: i % trace.length, total: trace.length, positions });
+      onTick({
+        at: frame.at,
+        index: i % trace.frames.length,
+        total: trace.frames.length,
+        status,
+        rootCauseDeviceId: trace.rootCauseDeviceId,
+      });
       i++;
     };
 
-    // First tick immediately, so the fleet is placed before the interval
+    // First frame immediately, so the estate is drawn before the interval
     // fires; then one every 1.5s. Thirty simulated minutes in ninety real
-    // seconds: fast enough to see movement, slow enough to read.
+    // seconds: fast enough to watch a cascade spread, slow enough to read.
     emit();
     const timer = setInterval(emit, 1500);
 
     return () => { cancelled = true; clearInterval(timer); };
   },
 
-  subscribeExceptions(districtId, onException) {
+  subscribeAlarms(siteId, onAlarm) {
     // Seed here too. This path used to rely on loadBoard() having run first,
-    // which is true today and is not a guarantee - an effect-order change, or
-    // a component that subscribes without loading, would break it silently.
-    if (!seeded) { seed(); seeded = true; }
+    // which is true today and is not a guarantee - an effect-order change, or a
+    // component that subscribes without loading, would break it silently.
+    ensureSeeded();
 
     // The offline stand-in for the AppSync WebSocket. The real one is a
     // filtered subscription; the filter is applied HERE for the same reason
-    // AppSync applies it server-side - a Phoenix dispatcher should never
-    // receive Dallas traffic, for cost and for confidentiality.
+    // AppSync applies it server-side - a Phoenix operator should never receive
+    // Dallas traffic, for cost and for confidentiality.
     let cancelled = false;
 
-    const { exceptions } = runScenarios(analyst());
-    const queue = exceptions.filter((e) => !districtId || e.districtId === districtId);
+    const { alarms } = runScenarios(analyst());
+    const queue = alarms.filter((a) => !siteId || a.siteId === siteId);
 
     let i = 0;
     const timer = setInterval(() => {
       if (cancelled || i >= queue.length) return;
-      onException(queue[i++]);
+      onAlarm(queue[i++]);
     }, 2400);
 
     return () => { cancelled = true; clearInterval(timer); };

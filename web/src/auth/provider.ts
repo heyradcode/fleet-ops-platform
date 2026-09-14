@@ -8,7 +8,7 @@
  *   VITE_COGNITO_DOMAIN and VITE_COGNITO_CLIENT_ID set  -> hosted UI, PKCE
  *   otherwise                                           -> the local issuer
  *
- * Offline, any address at a registered carrier domain signs in without a
+ * Offline, any address at a registered customer domain signs in without a
  * password. Against a real pool the password is Cognito's, and the domain has
  * to exist in the membership table the token trigger reads.
  */

@@ -2,7 +2,7 @@
 # Reusable Lambda module
 # =============================================================================
 # Every function in the platform is created through this module, so the whole
-# fleet gets the same logging retention, the same tracing, the same alarms and
+# estate gets the same logging retention, the same tracing, the same alarms and
 # the same least-privilege posture without anyone having to remember.
 
 variable "name" { type = string }

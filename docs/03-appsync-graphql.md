@@ -2,8 +2,8 @@
 
 ## Why GraphQL here at all
 
-A Meridian dashboard shows open incidents, each incident's affected drivers, each
-driver's recent telemetry, and a map layer. Over REST that is four or five round
+A NetPulse dashboard shows open incidents, each incident's affected devices, each
+device's recent observations, and a map layer. Over REST that is four or five round
 trips, or one bespoke `/dashboard` endpoint that you rewrite every time the UI
 changes. Over GraphQL it is one request whose shape the *client* decides.
 
@@ -82,7 +82,7 @@ type Mutation @aws_cognito_user_pools {
   openIncident(input: OpenIncidentInput!): Incident!
     @aws_auth(cognito_groups: ["admin", "operator"])   # field-level RBAC
 
-  publishSignal(input: PublishSignalInput!): Telemetry! @aws_iam   # for services
+  publishSignal(input: PublishSignalInput!): Observations! @aws_iam   # for services
 }
 ```
 
@@ -147,11 +147,11 @@ watcher matching and one not.
 ## The N+1 problem
 
 ```graphql
-query { drivers { name telemetry(limit: 5) { kind severity } } }
+query { devices { name observations(limit: 5) { kind severity } } }
 ```
 
-`Query.drivers` runs once. `Driver.telemetry` runs **once per driver**. Five drivers, six
-resolver invocations. Fifty drivers, fifty-one.
+`Query.devices` runs once. `Device.observations` runs **once per device**. Five devices, six
+resolver invocations. Fifty devices, fifty-one.
 
 Fixes, best first:
 
@@ -159,14 +159,14 @@ Fixes, best first:
    (up to 2000) instead of one, and you do a single Query per partition. This is
    AppSync's built-in DataLoader.
 2. **Per-resolver caching**, keyed on `$context.source`.
-3. **Denormalise at write time** — store the top few telemetry on the Driver item.
+3. **Denormalise at write time** — store the top few observations on the Device item.
 
 ---
 
 ## Caching
 
 `PER_RESOLVER_CACHING` lets you set a TTL on the resolvers that are safe to
-cache (the map layer, the driver list) and leave the rest alone.
+cache (the map layer, the device list) and leave the rest alone.
 
 **The risk:** the cache key includes `$context.identity` by default. If you
 hand-set `caching_keys` and omit identity, you will serve one tenant another
@@ -181,7 +181,7 @@ a row number, and offsets cannot express it.
 
 ```graphql
 type SignalConnection {
-  items: [Telemetry!]!
+  items: [Observations!]!
   nextToken: String     # opaque — base64 of LastEvaluatedKey
 }
 ```

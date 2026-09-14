@@ -11,23 +11,29 @@
  * *together* sort *next to each other*. You then "query" a prefix.
  *
  *   PK                                SK                        entity
- *   TENANT#acme#DRIVER                DRIVER#drv-0142           Driver
- *   TENANT#acme#TELEMETRY             2026-09-08T14:30Z#tlm_ab  Telemetry
- *   TENANT#acme#EXCEPTION             2026-09-08T14:31Z#exc_3c  Exception
+ *   TENANT#acme#DEVICE                DEVICE#dev-core-dal01     DeviceState
+ *   TENANT#acme#OBSERVATION           2026-09-08T14:30Z#obs_ab  Observation
+ *   TENANT#acme#ALARM                 2026-09-08T14:31Z#alm_3c  Alarm
  *   TENANT#acme#INCIDENT              2026-09-08T14:32Z#inc_7f  Incident
  *
- * THE DRIVER ITEM IS OVERWRITTEN, NEVER APPENDED. One item per driver holds
- * current position and status; at 330k drivers that is 330k items no matter how
- * often devices report. Position *history* is appended to S3 instead, because
- * ~950M rows a day in the operational store would be both slow and ruinous.
- * That split is the single most consequential storage decision in the platform.
+ * THE DEVICE ITEM IS OVERWRITTEN, NEVER APPENDED. One item per device holds
+ * current status and load; at 40k devices that is 40k items no matter how often
+ * they report. Observation *history* is appended to S3 instead - a syslog-heavy
+ * estate produces hundreds of millions of records a day, and holding them in
+ * the operational store would be both slow and ruinous. That split is the
+ * single most consequential storage decision in the platform.
  *
- * Because the SK starts with a timestamp, "give me this tenant's telemetry from
- * the last hour, newest first" is one Query with a `begins_with` / range
+ * Because the SK starts with a timestamp, "give me this tenant's observations
+ * from the last hour, newest first" is one Query with a `begins_with` / range
  * condition and `ScanIndexForward: false`. No scan, no filter, O(result size).
  *
- * GSI1 flips it so we can ask "all readings for driver drv-0142 across vendors":
- *   GSI1PK = TENANT#acme#DRIVER#drv-0142 , GSI1SK = observedAt
+ * GSI1 flips it so we can ask "everything seen about dev-core-dal01, across
+ * every feed and both planes":
+ *   GSI1PK = TENANT#acme#DEVICE#dev-core-dal01 , GSI1SK = observedAt
+ *
+ * FLOWS ARE NOT HERE AT ALL. IPFIX records go straight to S3 as columnar files
+ * and are queried with Athena. They are the one observation class whose volume
+ * would make this table's cost scale with traffic rather than with incidents.
  *
  * The rule worth internalising: *model your access patterns first, then
  * derive the keys*. Never the other way round.
@@ -115,29 +121,29 @@ export class DynamoTable {
   size(): number { return [...this.#items.values()].reduce((n, p) => n + p.size, 0); }
 }
 
-export const mainTable = new DynamoTable(env('TABLE_NAME', 'meridian-dev-main'));
+export const mainTable = new DynamoTable(env('TABLE_NAME', 'netpulse-dev-main'));
 
 /** Key builders live next to the table so the layout is documented in one place. */
 export const keys = {
-  /** The hot-state item. One per driver, overwritten on every position ping. */
-  driver: (p: Principal, driverId: string) => ({
-    PK: `TENANT#${p.tenantId}#DRIVER`, SK: `DRIVER#${driverId}`,
+  /** The hot-state item. One per device, overwritten on every observation. */
+  device: (p: Principal, deviceId: string) => ({
+    PK: `TENANT#${p.tenantId}#DEVICE`, SK: `DEVICE#${deviceId}`,
   }),
   /**
-   * GSI1 on the driver item flips driver -> district, which is what makes a
-   * dispatcher's board one Query instead of a scan-and-filter over the fleet.
+   * GSI1 on the device item flips device -> site, which is what makes a site
+   * operator's board one Query instead of a scan-and-filter over the estate.
    */
-  driverByDistrict: (p: Principal, districtId: string, driverId: string) => ({
-    GSI1PK: `TENANT#${p.tenantId}#DISTRICT#${districtId}`, GSI1SK: `DRIVER#${driverId}`,
+  deviceBySite: (p: Principal, siteId: string, deviceId: string) => ({
+    GSI1PK: `TENANT#${p.tenantId}#SITE#${siteId}`, GSI1SK: `DEVICE#${deviceId}`,
   }),
-  telemetry: (p: Principal, observedAt: string, id: string) => ({
-    PK: `TENANT#${p.tenantId}#TELEMETRY`, SK: `${observedAt}#${id}`,
+  observation: (p: Principal, observedAt: string, id: string) => ({
+    PK: `TENANT#${p.tenantId}#OBSERVATION`, SK: `${observedAt}#${id}`,
   }),
-  telemetryByDriver: (p: Principal, driverId: string, observedAt: string) => ({
-    GSI1PK: `TENANT#${p.tenantId}#DRIVER#${driverId}`, GSI1SK: observedAt,
+  observationByDevice: (p: Principal, deviceId: string, observedAt: string) => ({
+    GSI1PK: `TENANT#${p.tenantId}#DEVICE#${deviceId}`, GSI1SK: observedAt,
   }),
-  exception: (p: Principal, raisedAt: string, id: string) => ({
-    PK: `TENANT#${p.tenantId}#EXCEPTION`, SK: `${raisedAt}#${id}`,
+  alarm: (p: Principal, raisedAt: string, id: string) => ({
+    PK: `TENANT#${p.tenantId}#ALARM`, SK: `${raisedAt}#${id}`,
   }),
   incident: (p: Principal, openedAt: string, id: string) => ({
     PK: `TENANT#${p.tenantId}#INCIDENT`, SK: `${openedAt}#${id}`,

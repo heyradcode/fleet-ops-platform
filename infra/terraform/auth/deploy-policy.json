@@ -31,7 +31,7 @@
         "dynamodb:PutItem",
         "dynamodb:DeleteItem"
       ],
-      "Resource": "arn:aws:dynamodb:us-east-1:588651260734:table/meridian-*"
+      "Resource": "arn:aws:dynamodb:us-east-1:588651260734:table/netpulse-*"
     }
   ]
 }

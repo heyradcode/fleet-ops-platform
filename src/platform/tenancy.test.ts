@@ -8,40 +8,44 @@ import assert from 'node:assert/strict';
 import { signDemoToken, verifyToken, TokenVerificationError } from '../auth/cognito-jwt-verifier.ts';
 import {
   assertSameTenant, requireRole, CrossTenantAccessError, tenantScopedSessionPolicy,
-  scopeAllowsDistrict, withinScope, OutOfScopeError, assertDistrictInScope,
+  scopeAllowsSite, withinScope, OutOfScopeError, assertSiteInScope,
 } from './tenancy.ts';
-import { putTelemetry, recentTelemetry } from './repository.ts';
+import { putObservations, recentObservations } from './repository.ts';
 import { handler as preTokenGeneration } from '../auth/pre-token-generation.ts';
 import { resolveIdpForEmail } from '../auth/providers.ts';
-import type { Driver, Principal, Telemetry } from './types.ts';
+import type { DeviceState, Principal, Observation } from './types.ts';
 
 const acme = verifyToken(signDemoToken({
-  sub: 'u1', email: 'a@acme.com', 'custom:tenantId': 'acme', 'cognito:groups': ['dispatcher'],
+  sub: 'u1', email: 'a@acme.com', 'custom:tenantId': 'acme', 'cognito:groups': ['operator'],
 }));
 const globex = verifyToken(signDemoToken({
   sub: 'u2', email: 'b@globex.com', 'custom:tenantId': 'globex', 'cognito:groups': ['viewer'],
 }));
 
-function reading(tenantId: string, id: string): Telemetry {
+function reading(tenantId: string, id: string): Observation {
   return {
-    tenantId, telemetryId: id, provider: 'samsara', domain: 'telematics', kind: 'harsh-brake',
-    driverId: 'drv-1000', sourceRef: 'TRK-8891', value: 0.62, unit: 'g', severity: 'critical',
-    observedAt: '2026-09-08T14:30:00.000Z', attributes: {},
+    tenantId, observationId: id,
+    vendor: 'cisco', platform: 'ios-xe', encoding: 'syslog', plane: 'device',
+    deviceId: 'dev-cor-dal01-01', sourceRef: 'GigabitEthernet1/0/1',
+    observedAt: '2026-09-08T14:30:00.000Z', receivedAt: '2026-09-08T14:30:00.000Z',
+    severity: 'critical', attributes: {},
+    class: 'event', kind: 'link-state', state: 'down', message: 'link down', dedupeKey: 'k-' + id,
   };
 }
 
-function driver(driverId: string, districtId: string): Driver {
+function device(deviceId: string, siteId: string): DeviceState {
   return {
-    tenantId: 'acme', driverId, name: 'Test', districtId, vehicleId: 'V1',
-    status: 'driving', lon: 0, lat: 0, hosRemainingMinutes: 300,
+    tenantId: 'acme', deviceId, name: deviceId, siteId,
+    role: 'access', vendor: 'cisco', status: 'healthy',
+    lon: 0, lat: 0, cpuUtilisation: 10, interfacesDown: 0,
     updatedAt: '2026-09-08T14:30:00.000Z',
   };
 }
-test('a tenant cannot read another tenant telemetry', () => {
-  putTelemetry(acme, [reading('acme', 'acme-1')]);
-  putTelemetry(globex, [reading('globex', 'globex-1')]);
-  const acmeSees = recentTelemetry(acme, 100).map((t) => t.telemetryId);
-  const globexSees = recentTelemetry(globex, 100).map((t) => t.telemetryId);
+test('a tenant cannot read another tenant observations', () => {
+  putObservations(acme, [reading('acme', 'acme-1')]);
+  putObservations(globex, [reading('globex', 'globex-1')]);
+  const acmeSees = recentObservations(acme, 100).map((t) => t.observationId);
+  const globexSees = recentObservations(globex, 100).map((t) => t.observationId);
 
   assert.ok(acmeSees.includes('acme-1'));
   assert.ok(!acmeSees.includes('globex-1'));
@@ -55,8 +59,8 @@ test('assertSameTenant rejects a cross-tenant request', () => {
 });
 
 test('requireRole enforces write permissions', () => {
-  assert.throws(() => requireRole(globex, 'admin', 'dispatcher'), /forbidden/);
-  assert.doesNotThrow(() => requireRole(acme, 'admin', 'dispatcher'));
+  assert.throws(() => requireRole(globex, 'admin', 'operator'), /forbidden/);
+  assert.doesNotThrow(() => requireRole(acme, 'admin', 'operator'));
 });
 
 test('the IAM session policy pins dynamodb:LeadingKeys to one tenant', () => {
@@ -117,72 +121,72 @@ test('unknown Cognito groups degrade to viewer, never to admin', () => {
 // Scope: the second boundary, inside the tenant
 // ---------------------------------------------------------------------------
 
-test('a district-scoped dispatcher cannot see another district', () => {
-  const dallas: Principal = { ...acme, scope: { kind: 'district', districtId: 'dal' } };
+test('a site-scoped operator cannot see another site', () => {
+  const dallas: Principal = { ...acme, scope: { kind: 'site', siteId: 'dal-01' } };
 
-  assert.ok(scopeAllowsDistrict(dallas, 'dal'));
-  assert.ok(!scopeAllowsDistrict(dallas, 'phx'));
-  assert.throws(() => assertDistrictInScope(dallas, 'phx'), OutOfScopeError);
+  assert.ok(scopeAllowsSite(dallas, 'dal-01'));
+  assert.ok(!scopeAllowsSite(dallas, 'phx-01'));
+  assert.throws(() => assertSiteInScope(dallas, 'phx-01'), OutOfScopeError);
 });
 
 test('withinScope narrows a driver list to the caller\'s district', () => {
-  const dallas: Principal = { ...acme, scope: { kind: 'district', districtId: 'dal' } };
-  const fleet = [driver('drv-1', 'dal'), driver('drv-2', 'phx'), driver('drv-3', 'dal')];
+  const dallas: Principal = { ...acme, scope: { kind: 'site', siteId: 'dal-01' } };
+  const fleet = [device('dev-1', 'dal-01'), device('dev-2', 'phx-01'), device('dev-3', 'dal-01')];
 
-  const visible = withinScope(dallas, fleet).map((d) => d.driverId);
-  assert.deepEqual(visible, ['drv-1', 'drv-3']);
+  const visible = withinScope(dallas, fleet).map((d) => d.deviceId);
+  assert.deepEqual(visible, ['dev-1', 'dev-3']);
 });
 
-test('a driver-scoped principal sees only themselves', () => {
-  const self: Principal = { ...acme, scope: { kind: 'driver', driverId: 'drv-2' } };
-  const fleet = [driver('drv-1', 'dal'), driver('drv-2', 'phx')];
+test('a device-scoped principal sees only that device', () => {
+  const self: Principal = { ...acme, scope: { kind: 'device', deviceId: 'dev-2' } };
+  const fleet = [device('dev-1', 'dal-01'), device('dev-2', 'phx-01')];
 
-  assert.deepEqual(withinScope(self, fleet).map((d) => d.driverId), ['drv-2']);
+  assert.deepEqual(withinScope(self, fleet).map((d) => d.deviceId), ['dev-2']);
   // A driver has no district board at all - not even their own district's.
-  assert.ok(!scopeAllowsDistrict(self, 'phx'));
+  assert.ok(!scopeAllowsSite(self, 'phx-01'));
 });
 
 test('an admin is tenant-scoped, which is the only way to see everything', () => {
   const admin: Principal = { ...acme, scope: { kind: 'tenant' } };
-  const fleet = [driver('drv-1', 'dal'), driver('drv-2', 'phx')];
+  const fleet = [device('dev-1', 'dal-01'), device('dev-2', 'phx-01')];
 
   assert.equal(withinScope(admin, fleet).length, 2);
-  assert.ok(scopeAllowsDistrict(admin, 'anything'));
+  assert.ok(scopeAllowsSite(admin, 'anything'));
 });
 
 // ---------------------------------------------------------------------------
 // Where the scope comes from: the PreTokenGeneration trigger
 // ---------------------------------------------------------------------------
 
-test('the district is stamped into the token, not asserted by the client', async () => {
+test('the site is stamped into the token, not asserted by the client', async () => {
   const event = await preTokenGeneration({
     version: '1', triggerSource: 'TokenGeneration_Authentication',
     userPoolId: 'us-east-1_TEST', userName: 'd',
     request: {
-      userAttributes: { email: 'dispatcher@acme-freight.com' },
+      userAttributes: { email: 'operator@acme-networks.com' },
       groupConfiguration: { groupsToOverride: [], iamRolesToOverride: [] },
     },
     response: {},
   });
 
   const claims = event.response.claimsOverrideDetails?.claimsToAddOrOverride ?? {};
-  assert.equal(claims['custom:tenantId'], 'acme-freight');
-  // This is the whole point: the scope arrives SIGNED. A dispatcher cannot
+  assert.equal(claims['custom:tenantId'], 'acme-networks');
+  // This is the whole point: the scope arrives SIGNED. An operator cannot
   // widen their own board by editing a request, because the scope was never in
   // the request.
-  assert.equal(claims['custom:district'], 'dal');
+  assert.equal(claims['custom:site'], 'dal-01');
   assert.deepEqual(
     event.response.claimsOverrideDetails?.groupOverrideDetails?.groupsToOverride,
-    ['dispatcher'],
+    ['operator'],
   );
 });
 
-test('a device-bound driver token carries no district at all', async () => {
+test('a device-bound token carries no site claim at all', async () => {
   const event = await preTokenGeneration({
     version: '1', triggerSource: 'TokenGeneration_Authentication',
     userPoolId: 'us-east-1_TEST', userName: 'drv',
     request: {
-      userAttributes: { email: 'dispatcher@acme-freight.com', 'custom:deviceBound': 'true' },
+      userAttributes: { email: 'operator@acme-networks.com', 'custom:deviceBound': 'true' },
       groupConfiguration: { groupsToOverride: [], iamRolesToOverride: [] },
     },
     response: {},
@@ -191,8 +195,8 @@ test('a device-bound driver token carries no district at all', async () => {
   const claims = event.response.claimsOverrideDetails?.claimsToAddOrOverride ?? {};
   // A driver sees their own assignments, not a board. Handing them a
   // district-scoped token would show them every other truck in Dallas.
-  assert.equal(claims['custom:district'], undefined);
-  assert.equal(claims['custom:tenantId'], 'acme-freight');
+  assert.equal(claims['custom:site'], undefined);
+  assert.equal(claims['custom:tenantId'], 'acme-networks');
 });
 
 test('a V2 trigger writes the claims to the ACCESS token', async () => {
@@ -207,18 +211,18 @@ test('a V2 trigger writes the claims to the ACCESS token', async () => {
     version: '2', triggerSource: 'TokenGeneration_HostedAuth',
     userPoolId: 'us-east-1_TEST', userName: 'd',
     request: {
-      userAttributes: { email: 'dispatcher@acme-freight.com' },
+      userAttributes: { email: 'operator@acme-networks.com' },
       groupConfiguration: { groupsToOverride: [], iamRolesToOverride: [] },
     },
     response: {},
   });
 
   const access = event.response.claimsAndScopeOverrideDetails?.accessTokenGeneration;
-  assert.equal(access?.claimsToAddOrOverride?.['custom:tenantId'], 'acme-freight');
-  assert.equal(access?.claimsToAddOrOverride?.['custom:district'], 'dal');
+  assert.equal(access?.claimsToAddOrOverride?.['custom:tenantId'], 'acme-networks');
+  assert.equal(access?.claimsToAddOrOverride?.['custom:site'], 'dal-01');
   assert.deepEqual(
     event.response.claimsAndScopeOverrideDetails?.groupOverrideDetails?.groupsToOverride,
-    ['dispatcher'],
+    ['operator'],
   );
   // And the V1 field stays empty, so nothing can read the old shape and
   // silently get undefined.
@@ -243,9 +247,9 @@ test('an unknown domain gets no tenant - fail closed, not a guess', async () => 
   assert.equal(claims['custom:onboarding'], 'pending');
 });
 
-test('home-realm discovery routes each carrier to its own IdP', () => {
-  assert.equal(resolveIdpForEmail('a@acme-freight.com'), 'AcmeSAML');
-  assert.equal(resolveIdpForEmail('b@northstar-logistics.com'), 'OktaOIDC');
+test('home-realm discovery routes each customer to its own IdP', () => {
+  assert.equal(resolveIdpForEmail('a@acme-networks.com'), 'AcmeSAML');
+  assert.equal(resolveIdpForEmail('b@northwind-utilities.com'), 'OktaOIDC');
   // An unknown domain falls back to the Cognito-native pool rather than
   // erroring - a new customer can sign up before their SSO is configured.
   assert.equal(resolveIdpForEmail('c@example.com'), 'COGNITO');

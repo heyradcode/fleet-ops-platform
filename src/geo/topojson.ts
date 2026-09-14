@@ -88,7 +88,7 @@ export function encode(fc: GeoFeatureCollection, quantisation = 10_000): Topolog
     type: 'Topology',
     transform: { scale, translate },
     arcs,
-    objects: { drivers: { type: 'GeometryCollection', geometries } },
+    objects: { devices: { type: 'GeometryCollection', geometries } },
   };
 }
 

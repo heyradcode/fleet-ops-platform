@@ -149,7 +149,7 @@ targets.
 
 ```json
 {
-  "source": ["meridian.detect"],
+  "source": ["netpulse.detect"],
   "detail-type": ["IncidentOpened"],
   "detail": { "severity": ["critical"] }
 }

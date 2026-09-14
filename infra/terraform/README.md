@@ -7,7 +7,7 @@ envs/       dev | test | stage | prod — backend, provider, one module call
 auth/       the only root meant to be APPLIED: a Cognito pool + token trigger
 ```
 
-`auth/` is the exception to everything below. It is a deliberately small subset
+`auth/` is the alarm to everything below. It is a deliberately small subset
 chosen so the board's identity can be real for pennies a month — see its own
 README. Applying `envs/` instead would bring up Aurora and Kinesis, which bill
 idle.
@@ -23,7 +23,7 @@ that small, the dependency-cycle fix, and the deploy pipeline.
    different each Lambda's permissions are; that difference is the whole point
    of not sharing one role.
 2. `modules/lambda/main.tf` — the module every function goes through, so the
-   fleet gets log retention, alarms and least-privilege IAM for free.
+   estate gets log retention, alarms and least-privilege IAM for free.
 3. `modules/cognito/main.tf` — five identity providers and a hardened app client.
 4. `modules/dynamodb/main.tf` — single-table keys, GSI projection, streams, TTL,
    and the `dynamodb:LeadingKeys` tenant-isolation policy.
@@ -43,7 +43,7 @@ an OpenSearch collection ARN. To make it real you would need:
 
 - Four AWS accounts (or one, with four state keys, if you must)
 - An S3 state bucket per account
-- A `meridian-deploy` IAM role per account trusting your GitHub repo via OIDC
+- A `netpulse-deploy` IAM role per account trusting your GitHub repo via OIDC
 - A VPC with private subnets for Aurora
 - An OpenSearch Serverless collection and vector index for the knowledge base
 - Bedrock model access enabled in the region

@@ -18,7 +18,7 @@ import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
 import { setMembershipLookup, membershipKey, type Membership } from './membership.ts';
 import { log } from './logger.ts';
 
-/** `TENANT_MEMBERSHIP#acme-freight.com`. Matches the seed rows in Terraform. */
+/** `TENANT_MEMBERSHIP#acme-networks.com`. Matches the seed rows in Terraform. */
 export function membershipPk(email: string): string {
   return 'TENANT_MEMBERSHIP#' + membershipKey(email);
 }
@@ -28,7 +28,7 @@ export function membershipPk(email: string): string {
  *
  * ConsistentRead is deliberately OFF. An eventually-consistent read costs half
  * as much and is served from any replica; the staleness window is milliseconds,
- * and a carrier onboarded a moment ago waiting one more moment to sign in is
+ * and a customer onboarded a moment ago waiting one more moment to sign in is
  * not a problem worth paying double for on every login in the system.
  */
 export function useDynamoMembership(tableName: string): void {
@@ -48,7 +48,7 @@ export function useDynamoMembership(tableName: string): void {
       return {
         tenantId: Item.tenantId?.S ?? '',
         roles: Item.roles?.SS ?? [],
-        ...(Item.district?.S ? { district: Item.district.S } : {}),
+        ...(Item.site?.S ? { site: Item.site.S } : {}),
       } satisfies Membership;
     } catch (err) {
       // FAIL CLOSED on a lookup error, and say so loudly.

@@ -28,9 +28,9 @@ if (table) {
   // Not fatal, and not silent. Terraform always sets this, so an unset
   // variable means something is wrong with the deployment rather than with
   // the request - and the built-in table WILL answer, which is the confusing
-  // outcome worth a line in the log: sign-ins keep working while carriers
+  // outcome worth a line in the log: sign-ins keep working while customers
   // added to DynamoDB are invisible.
-  log.warn('MEMBERSHIP_TABLE_NAME unset - falling back to the built-in carriers');
+  log.warn('MEMBERSHIP_TABLE_NAME unset - falling back to the built-in customers');
 }
 
 export { handler } from '../../../src/auth/pre-token-generation.ts';

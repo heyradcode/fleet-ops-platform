@@ -43,7 +43,7 @@ indexing and re-indexing.
 
 ### Chunking is the biggest quality lever
 
-- **Too small** → a chunk says "escalate to the carrier NOC" with no clue what
+- **Too small** → a chunk says "escalate to the customer NOC" with no clue what
   the symptom was. The model cites it and sounds unhinged.
 - **Too large** → one chunk covers three unrelated procedures, so its embedding
   is an average of all three and matches nothing well.
@@ -55,7 +55,7 @@ overlap so a sentence spanning a boundary survives intact.
 
 One trick worth stealing: **prepend the document and section titles into the
 chunk text** before embedding. Then a chunk about "escalate after 15 minutes"
-still matches a query about route deviation, because the topic is inside the
+still matches a query about link failure, because the topic is inside the
 embedded text.
 → `chunkMarkdown` in `src/ai/knowledge-base.ts`
 
@@ -63,7 +63,7 @@ embedded text.
 
 `overrideSearchType: 'HYBRID'` fuses two different things:
 
-- **Semantic** (embeddings) knows "choppy calls" relates to "route deviation", but
+- **Semantic** (embeddings) knows "choppy calls" relates to "link failure", but
   is bad at exact tokens — a model number, an error code, "SFP".
 - **Lexical** (BM25) is exactly the opposite.
 
@@ -94,7 +94,7 @@ AI systems.
 generates, and returns citations. Cheap, fast, predictable — use it for Q&A.
 
 `Retrieve` + your own model call is what you want when you need to mix retrieved
-text with **live data** (telemetry, in this case), control the prompt, or feed
+text with **live data** (observations, in this case), control the prompt, or feed
 an agent. → `src/ai/bedrock-rag.ts`
 
 ### Prompt structure for RAG
@@ -149,8 +149,8 @@ API contract.
    spend your money until the Lambda times out.
 2. **Per-tool authorisation, against the caller.** See below.
 3. **Errors returned as `tool_result` content**, not thrown. `ERROR: unknown
-   driverId "xyz-99". Valid ids: dal-01, aus-01, …` lets the model fix its own
-   call. A thrown exception just kills the turn.
+   deviceId "xyz-99". Valid ids: dal-01, aus-01, …` lets the model fix its own
+   call. A thrown alarm just kills the turn.
 4. **A trace.** For debugging, and as a product feature — users trust an agent
    far more when they can see which tools it called.
 

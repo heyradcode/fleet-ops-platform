@@ -83,10 +83,10 @@ locals {
   # route => whether it needs auth
   routes = {
     "GET /health"             = false
-    "GET /drivers"            = true
-    "GET /drivers/{driverId}" = true
-    "GET /drivers/near"       = true
-    "GET /telemetry"          = true
+    "GET /devices"            = true
+    "GET /devices/{deviceId}" = true
+    "GET /devices/near"       = true
+    "GET /observations"          = true
     "GET /incidents"          = true
     "GET /map"                = true
     "POST /ask"               = true

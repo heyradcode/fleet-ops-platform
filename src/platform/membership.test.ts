@@ -32,9 +32,9 @@ function event(email: string) {
 test('the default lookup needs no AWS, and answers from the built-in table', async () => {
   resetMembershipLookup();
 
-  const dispatcher = await lookupTenantMembership('anyone@acme-freight.com');
-  assert.equal(dispatcher?.tenantId, 'acme-freight');
-  assert.equal(dispatcher?.district, 'dal');
+  const operator = await lookupTenantMembership('anyone@acme-networks.com');
+  assert.equal(operator?.tenantId, 'acme-networks');
+  assert.equal(operator?.site, 'dal-01');
 
   // This is what keeps `pnpm start`, the offline board and the rest of the
   // suite working with no credentials - and it is the whole argument for the
@@ -43,32 +43,32 @@ test('the default lookup needs no AWS, and answers from the built-in table', asy
 });
 
 test('the key is the email domain, lowercased', () => {
-  assert.equal(membershipKey('Dispatcher@Acme-Freight.COM'), 'acme-freight.com');
+  assert.equal(membershipKey('Operator@Acme-Networks.COM'), 'acme-networks.com');
   assert.equal(membershipKey('not-an-email'), '');
 });
 
 test('an injected lookup replaces the built-in table entirely', async () => {
   setMembershipLookup(async (email) =>
     email === 'someone@newco.example'
-      ? { tenantId: 'newco', roles: ['viewer'], district: 'phx' }
+      ? { tenantId: 'newco', roles: ['viewer'], site: 'phx' }
       : undefined);
 
   try {
-    // A carrier the built-in table has never heard of now resolves - which is
+    // A customer the built-in table has never heard of now resolves - which is
     // the point of moving membership into data.
     const added = await lookupTenantMembership('someone@newco.example');
     assert.equal(added?.tenantId, 'newco');
 
     // And one it DOES know no longer does, because the adapter is the only
     // source. A lookup that quietly fell back would hide a broken table.
-    assert.equal(await lookupTenantMembership('a@acme-freight.com'), undefined);
+    assert.equal(await lookupTenantMembership('a@acme-networks.com'), undefined);
   } finally {
     resetMembershipLookup();
   }
 });
 
 test('the trigger reads through the registry, so a table change reaches the token', async () => {
-  setMembershipLookup(async () => ({ tenantId: 'newco', roles: ['admin'], district: 'phx' }));
+  setMembershipLookup(async () => ({ tenantId: 'newco', roles: ['admin'], site: 'phx' }));
 
   try {
     const out = await preTokenGeneration(event('whoever@newco.example'));
@@ -76,22 +76,22 @@ test('the trigger reads through the registry, so a table change reaches the toke
       ?.claimsToAddOrOverride;
 
     assert.equal(claims?.['custom:tenantId'], 'newco');
-    assert.equal(claims?.['custom:district'], 'phx');
+    assert.equal(claims?.['custom:site'], 'phx');
   } finally {
     resetMembershipLookup();
   }
 });
 
 test('the seed rows Terraform writes match the built-in table', () => {
-  // Two hand-maintained copies of the same four carriers WILL drift - a tenant
+  // Two hand-maintained copies of the same four customers WILL drift - a tenant
   // rename has caught this repository out once already. Terraform seeds from
   // the shape this constant documents; if someone edits one, this fails.
   assert.deepEqual(Object.keys(DEMO_MEMBERSHIPS).sort(), [
-    'acme-freight.com',
-    'meridian.io',
-    'northstar-logistics.com',
-    'safety.acme-freight.com',
+    'acme-networks.com',
+    'eng.acme-networks.com',
+    'netpulse.io',
+    'northwind-utilities.com',
   ]);
-  assert.equal(DEMO_MEMBERSHIPS['acme-freight.com'].district, 'dal');
-  assert.equal(DEMO_MEMBERSHIPS['meridian.io'].district, undefined);
+  assert.equal(DEMO_MEMBERSHIPS['acme-networks.com'].site, 'dal-01');
+  assert.equal(DEMO_MEMBERSHIPS['netpulse.io'].site, undefined);
 });

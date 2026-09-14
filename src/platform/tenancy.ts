@@ -22,7 +22,7 @@
  *      "dynamic tenant isolation" and is what a Solutions Architect will
  *      want to hear. Sketch below in `tenantScopedSessionPolicy`.
  */
-import type { DistrictId, Driver, Principal, TenantId } from './types.ts';
+import type { DeviceState, Principal, SiteId, TenantId } from './types.ts';
 
 export class CrossTenantAccessError extends Error {
   constructor(want: TenantId, got: TenantId) {
@@ -55,44 +55,44 @@ export class OutOfScopeError extends Error {
 }
 
 /**
- * Does this principal's scope admit this district?
+ * Does this principal's scope admit this site?
  *
  * The `Scope` union is what makes this checkable at all. With an optional
- * `districtId?: string` there would be no way to distinguish "no district
- * specified, show everything" from "no district specified, show nothing", and
- * every caller would have to remember which one it meant. Widening access has
- * to be a deliberate `kind: 'tenant'`.
+ * `siteId?: string` there would be no way to distinguish "no site specified,
+ * show everything" from "no site specified, show nothing", and every caller
+ * would have to remember which one it meant. Widening access has to be a
+ * deliberate `kind: 'tenant'`.
  */
-export function scopeAllowsDistrict(principal: Principal, districtId: DistrictId): boolean {
+export function scopeAllowsSite(principal: Principal, siteId: SiteId): boolean {
   switch (principal.scope.kind) {
     case 'tenant':   return true;
-    case 'region':   return true;   // region -> district needs the territory table
-    case 'district': return principal.scope.districtId === districtId;
-    case 'driver':   return false;  // a driver sees their own work, not a district
+    case 'region':   return true;   // region -> site needs the site table
+    case 'site':     return principal.scope.siteId === siteId;
+    case 'device':   return false;  // a field engineer sees one box, not a site
   }
 }
 
-export function assertDistrictInScope(principal: Principal, districtId: DistrictId): void {
-  if (!scopeAllowsDistrict(principal, districtId)) throw new OutOfScopeError(districtId);
+export function assertSiteInScope(principal: Principal, siteId: SiteId): void {
+  if (!scopeAllowsSite(principal, siteId)) throw new OutOfScopeError(siteId);
 }
 
 /**
- * Narrow a set of drivers to what this principal may actually see.
+ * Narrow a set of devices to what this principal may actually see.
  *
  * Applied in the repository layer rather than the resolver, for the same reason
  * the tenant key is: a filter you have to remember is a filter you will forget.
  */
-export function withinScope(principal: Principal, drivers: Driver[]): Driver[] {
+export function withinScope(principal: Principal, devices: DeviceState[]): DeviceState[] {
   switch (principal.scope.kind) {
-    case 'tenant':   return drivers;
-    case 'region':   return drivers;
-    case 'district': {
-      const { districtId } = principal.scope;
-      return drivers.filter((d) => d.districtId === districtId);
+    case 'tenant':   return devices;
+    case 'region':   return devices;
+    case 'site': {
+      const { siteId } = principal.scope;
+      return devices.filter((d) => d.siteId === siteId);
     }
-    case 'driver': {
-      const { driverId } = principal.scope;
-      return drivers.filter((d) => d.driverId === driverId);
+    case 'device': {
+      const { deviceId } = principal.scope;
+      return devices.filter((d) => d.deviceId === deviceId);
     }
   }
 }

@@ -13,38 +13,55 @@
    Browser / SPA ──── JWT ────┬────────────────────────────────┐
                               │                                │
                     ┌─────────▼──────────┐        ┌────────────▼─────────┐
-                    │   AppSync (GraphQL)│        │  API Gateway (REST)  │
+                    │  AppSync (GraphQL) │        │  API Gateway (REST)  │
                     │  • direct DynamoDB │        │  • Lambda authorizer │
                     │  • Lambda resolvers│        │  • webhooks          │
-                    │  • subscriptions ⚡│        └────────────┬─────────┘
+                    │  • subscriptions   │        └────────────┬─────────┘
                     └─────────┬──────────┘                     │
-                              └───────────┬─────────────────────┘
+                              └───────────┬────────────────────┘
                                           ▼
                     ┌──────────────────────────────────────────┐
-                    │              Lambda (Node / Python)       │
+                    │          Lambda (Node / Python)          │
                     └───┬───────────────┬──────────────┬───────┘
                         │               │              │
               ┌─────────▼──────┐ ┌──────▼───────┐ ┌────▼─────────────┐
-              │   DynamoDB     │ │    Aurora     │ │  Bedrock         │
-              │ single table   │ │  PostgreSQL   │ │  • Claude        │
-              │ + GSI1         │ │  + PostGIS    │ │  • Titan embed   │
-              │ + Streams      │ │  (Data API)   │ │  • Knowledge Base│
-              └────────────────┘ └───────────────┘ │  • Guardrails    │
-                                                   └──────────────────┘
+              │   DynamoDB     │ │    Aurora    │ │  Bedrock         │
+              │ single table   │ │  PostgreSQL  │ │  • Claude        │
+              │ + GSI1         │ │  + PostGIS   │ │  • Titan embed   │
+              │ + Streams      │ │  (Data API)  │ │  • Knowledge Base│
+              └────────────────┘ └──────────────┘ │  • Guardrails    │
+                                                  └──────────────────┘
+
    ═══════════════════════════ ingest side ═══════════════════════════
 
-   Samsara ──┐  telematics       (GPS, speed, engine)
-   Geotab    │
-   Verizon  ─┤
-   Motive   ─┐  ELD / hours-of-service
-   Omnitracs │
-   PlatformSc┤       A carrier runs ONE of each per truck, not all eight.
-   Lytx     ─┐  video safety     Which two or three is per-tenant config.
-   Netradyne │
-             │
-             ▼
+   THREE PLANES. The third is the one that survives a dead device.
+
+   DEVICE plane — push, UDP ───┐      IOS-XE, Junos and AOS-CX all speak
+     syslog 514                │      the same wire formats, so decoders
+     SNMP trap 162             │      are shared and only mappers differ.
+     IPFIX · gNMI              │
+                               │  ┌──────────────────────────────────┐
+   CONTROLLER plane — pull ────┼─▶│  collector ──▶ S3 landing zone   │
+     Meraki · Mist · Central   │  │  raw/tenant=…/vendor=…/          │
+     REST, on a schedule       │  │      encoding=…/dt=…/hh=…        │
+                               │  └────────────────┬─────────────────┘
+   EXTERNAL plane — ours ──────┘                   │ S3 event notification.
+     ICMP / TCP probe                              │ The ENCODING is read
+     the only thing that sees silence              │ from the KEY, so a
+                                                   │ 128MB object is never
+                                                   ▼ opened to choose a parser.
+              ┌──────────────────────────────────────────────────────┐
+              │  decoder per ENCODING      shared across all vendors │
+              │        │                                             │
+              │        ▼                                             │
+              │  mapper per (vendor, platform, encoding)             │
+              │        │                                             │
+              │        ▼                                             │
+              │  Observation      metric  ·  event  ·  flow          │
+              └───────────────────────────┬──────────────────────────┘
+                                          ▼
    ┌──────────────────────┐
-   │ Kinesis Data Streams │  partitioned by driverId - ordering where it
+   │ Kinesis Data Streams │  partitioned by deviceId - ordering where it
    │                      │  matters, parallelism everywhere else
    └──────────┬───────────┘
               │  BATCHED. 500 records per invocation, not one.
@@ -53,21 +70,26 @@
               ▼
    ┌────────────────────── batched consumer ───────────────────────┐
    │                                                               │
-   │  putCurrentPosition ──▶ DynamoDB   1 item/driver, OVERWRITTEN │
+   │  foldDeviceState ─────▶ DynamoDB  1 item/device, OVERWRITTEN  │
    │  appendHistory ───────▶ Firehose ──▶ S3 Parquet, append-only  │
-   │  resolveTerritory ────▶ district + geofences, bbox then exact │
-   │  evaluate ────────────▶ Exception[]  per-driver rules         │
-   │  detect ──────────────▶ Incident[]   corroborated + merged    │
+   │  appendFlows ─────────▶ S3 by exporter. Athena only, never    │
+   │                         the hot store — 100k+/sec would make  │
+   │                         storage scale with traffic            │
+   │  collapseDuplicates ──▶ one event per dedupeKey, BEFORE the   │
+   │                         rules ever count it as evidence       │
+   │  evaluate ────────────▶ Alarm[]     per-device rules          │
+   │  detectIncidents ─────▶ Incident[]  corroborated, then merged │
+   │                         by topology and anchored at the cause │
    └───────────────────────────────┬───────────────────────────────┘
                                    │
-                    ONLY EXCEPTIONS. Never telemetry.
+                    ONLY ALARMS. Never observations.
                                    ▼
                        ┌──────────────────────┐
                        │     EventBridge      │
                        └──┬────────┬──────┬───┘
                           │        │      │
-                       safety  dispatch  on-call
-                              (Step Functions saga)
+                        pager    Slack   Firehose
+                                        (analytics)
 ```
 
 ---
@@ -80,13 +102,13 @@ than being able to name them.
 | Service | Why it, specifically |
 |---|---|
 | **Lambda** | Spiky, event-shaped work. Nothing here runs continuously, so paying for idle EC2/Fargate would be waste. Limit to know: 15 min, 10GB, 1000 default concurrency. |
-| **Step Functions** | The ingest has 5 steps needing per-step retry, a fan-out and a branch. Expressing that in Lambda code means hand-rolling retry, state and error handling; expressing it in ASL gives you a visual execution history you can hand to a colleague at 3am. |
+| **Step Functions** | The ingest has half a dozen steps needing per-step retry, a fan-out and a branch. Expressing that in Lambda code means hand-rolling retry, state and error handling; expressing it in ASL gives you a visual execution history you can hand to a colleague at 3am. |
 | **EventBridge** | Producers do not know consumers. Adding "also post to Slack" is a *rule*, not a code change. Content-based filtering happens in the bus, so you never pay to start a Lambda that immediately decides the event was not for it. |
 | **AppSync** | A dashboard fetches ten related things; GraphQL makes that one round trip. The decisive feature is **managed subscriptions** — real-time push with server-side filtering, with no WebSocket infrastructure of your own. |
 | **API Gateway** | Webhooks and health checks. Third parties cannot speak GraphQL. HTTP API over REST API: ~70% cheaper and lower latency. |
-| **Cognito** | five identity providers, one issuer. Your API trusts exactly one token format no matter how the user signed in. |
-| **DynamoDB** | Position is written constantly and always read by known key. Single-digit-millisecond reads at any scale, no capacity planning on PAY_PER_REQUEST. |
-| **Aurora + PostGIS** | DynamoDB cannot answer "which drivers are within 75km of this point". Spatial indexes and ad-hoc joins are what a relational engine is for. Serverless v2 scales to zero in dev. |
+| **Cognito** | Five identity providers, one issuer. Your API trusts exactly one token format no matter how the user signed in. |
+| **DynamoDB** | Device status is overwritten constantly and always read by known key. Single-digit-millisecond reads at any scale, no capacity planning on PAY_PER_REQUEST. |
+| **Aurora + PostGIS** | Two questions DynamoDB cannot answer: "everything beneath this switch" (a recursive CTE, one round trip — against a key-value store it is one query per tier, and correlation asks it per alarm), and "which sites are within 75km of this point". Serverless v2 scales to zero in dev. |
 | **S3** | The raw archive. Cheap, durable, and it makes replay possible when a mapping bug is found. |
 | **Bedrock** | Managed model access with an IAM-shaped security story, plus Knowledge Bases and Guardrails. No API keys to rotate, and the data does not leave your account boundary. |
 
@@ -101,7 +123,7 @@ than being able to name them.
    Authorization: <access token>
 
    query Dashboard {
-     incidents(status: open) { incidentId title severity drivers { name } }
+     incidents(status: open) { incidentId title severity devices { name } }
      mapLayer { featureCollection bbox }
    }
 
@@ -111,7 +133,7 @@ than being able to name them.
 4. Per field, AppSync picks a resolver:
      incidents  -> Lambda data source  (needs joins + Aurora)
      mapLayer   -> Lambda data source  (needs PostGIS)
-     Driver.name  -> already in the parent object, no resolver at all
+     Device.name  -> already in the parent object, no resolver at all
 
 5. The Lambda receives event.identity.claims — already verified — and builds a
    Principal. Every repository call takes that Principal and derives the
@@ -121,44 +143,58 @@ than being able to name them.
 6. One response, one round trip, exactly the fields asked for.
 ```
 
-**The trap in step 4:** `drivers { telemetry { ... } }` invokes `Driver.telemetry` once
-per driver — the N+1 problem. Fixes in order of preference: a BatchInvoke resolver
+**The trap in step 4:** `devices { observations { ... } }` invokes `Device.observations` once
+per device — the N+1 problem. Fixes in order of preference: a BatchInvoke resolver
 (AppSync hands the Lambda an array of up to 2000 events, you do one Query per
-partition), per-resolver caching, or denormalising the top few telemetry onto the
-Driver item at write time.
+partition), per-resolver caching, or denormalising the top few observations onto the
+Device item at write time.
 
 ---
 
-## Request flow 2: a vendor's telemetry becomes a page
+## Request flow 2: a vendor's observations becomes a page
 
 ```
-1. EventBridge Scheduler fires every 5 minutes.
+1. EventBridge Scheduler fires every 5 minutes — the PULL half only. The push
+   feeds never wait for a schedule; their collector is already running and has
+   already landed their traffic in S3.
    FLEXIBLE time window jitters the start, so a thousand tenants do not all
-   hammer the vendor at :00.
+   hammer the controller API at :00.
 
-2. Step Functions Map state, MaxConcurrency 4, one branch per vendor.
-   ToleratedFailurePercentage 40 — a dead vendor must not fail the run.
-   Partial data beats no data in an ops dashboard.
+2. Step Functions Map state, MaxConcurrency 4, one branch per controller.
+   ToleratedFailurePercentage 40 — a dead controller must not fail the run.
+   Partial data beats no data on an operations board, and the device plane is
+   still flowing regardless.
 
 3. collect: fetch, then archive the untouched payload to
-   s3://…/raw/tenant=acme-freight-freight/provider=samsara/dt=2026-09-08/hh=14/….json
+   s3://…/raw/tenant=acme-networks/vendor=meraki/encoding=rest-json/dt=…/hh=…/….json
    Archive BEFORE normalising. Normalisation is code, code has bugs, and when
    you fix the bug you want to replay rather than beg the vendor for history.
+   `vendor=` in that key is a HINT for replay, never how a mapper is chosen.
 
-4. normalise: vendor JSON -> Telemetry[]. A pure function, so it is trivially
-   testable and safely replayable. telemetryId is a CONTENT HASH, which makes the
-   at-least-once pipeline idempotent at rest.
+4. normalise: raw payload -> Observation[]. Two paths that converge:
+     push   decoder per encoding, then mapper per (vendor, platform, encoding)
+     pull   one connector's normalise(), because a REST reply has no shared
+            framing for a decoder to own
+   Both pure, so both are trivially testable and safely replayable.
+   observationId is a CONTENT HASH, which makes the at-least-once pipeline
+   idempotent at rest — and it deliberately excludes receivedAt, or two
+   collectors behind one load balancer would write the same datagram twice.
 
-5. enrich: join driver coordinates from Aurora. Best-effort — a reading without a
-   location is still a valid reading, so this step Catches and continues.
+5. enrich: resolve the claimed hostname against the INVENTORY, collapse
+   duplicates on dedupeKey, and attach the site. Unresolved hosts are counted
+   and named rather than dropped in silence — an estate whose syslog half fails
+   to resolve looks exactly like a quiet estate.
 
 6. detect: deterministic correlation.
-     a) group non-OK telemetry by driver
-     b) require 2+ INDEPENDENT providers agreeing before opening an incident
-        (cross-vendor agreement is the cheapest noise filter there is)
-     c) merge affected drivers within 150km into ONE regional incident
-        (eleven pages for one carrier fault is how on-call teams learn to
-         ignore pages)
+     a) group non-OK observations by device
+     b) require 2+ INDEPENDENT PLANES before opening an incident — the device,
+        its controller, our probe, or the chassis at the far end of the link.
+        Not two feeds: a syslog line and an SNMP trap from one agent are one
+        witness talking twice, and counting feeds would page on every flap.
+     c) anchor each alarm at the highest ALARMING device in its uplink chain,
+        and merge everything sharing an anchor into ONE incident naming that
+        device. Forty pages for one dead distribution switch is how on-call
+        teams learn to ignore pages.
    No LLM here, on purpose. Detection must be explainable and testable.
 
 7. publish: BatchWriteItem to DynamoDB, THEN PutEvents to EventBridge.
@@ -207,8 +243,8 @@ Lambda's role permits it, it happens.
 
 Knowing what you left out — and why — is as much a reading as what you built.
 
-- **A production front-end.** `web/` is the dispatch board and it is real code
-  — sign-in included, with the district scope coming off a verified token —
+- **A production front-end.** `web/` is the operations board and it is real code
+  — sign-in included, with the site scope coming off a verified token —
   but it is one board rather than a product: no settings, no admin, no
   reporting. The board proves the API contract is usable, not that the product
   is finished.

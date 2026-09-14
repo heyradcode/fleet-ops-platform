@@ -23,8 +23,8 @@
  *     To push from a Lambda you must CALL THE MUTATION (usually with IAM auth).
  *     That is why `publishException` exists in the schema and is @aws_iam: the
  *     ingest pipeline calls it purely to trigger the subscription fan-out.
- *   - Filtering happens server-side, so a dispatcher watching one district is
- *     neither billed for nor woken by another district's traffic. At fleet
+ *   - Filtering happens server-side, so a operator watching one site is
+ *     neither billed for nor woken by another site's traffic. At estate
  *     scale that is a cost decision, not a nicety.
  *   - Limits worth remembering: 100 subscriptions per connection, 240KB max
  *     payload, and a connection idle timeout you must handle by reconnecting.
@@ -49,7 +49,7 @@ type Registration = {
 let nextId = 1;
 const registrations: Registration[] = [];
 
-/** Client side: `subscription { onDriverException(districtId: "dal") { .. } }` */
+/** Client side: `subscription { onDriverException(siteId: "dal") { .. } }` */
 export function subscribe(field: string, filter: Record<string, unknown>, handler: Handler): number {
   const id = nextId++;
   registrations.push({ id, field, filter, handler });

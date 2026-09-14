@@ -1,7 +1,7 @@
 # Real identity, on AWS
 
 The one directory in `infra/` meant to be applied. It creates a Cognito user
-pool and the PreTokenGeneration trigger that stamps tenant and district into
+pool and the PreTokenGeneration trigger that stamps tenant and site into
 the token — so the board's scope stops being a demonstration and becomes a
 fact about a signed credential.
 
@@ -84,7 +84,7 @@ If it mentions `aws_rds_cluster` you are in the wrong directory. Then swap
 
 If it fails saying the domain already exists, that is the one name here that is
 globally unique across every AWS account, and a stranger has it. Add
-`-var 'domain_prefix=meridian-<something-of-yours>'`.
+`-var 'domain_prefix=netpulse-<something-of-yours>'`.
 
 `app_urls` takes origins **without a trailing slash**; `/callback` is appended
 and `http://localhost:5180` is added for you. Cognito matches redirect URIs
@@ -96,20 +96,20 @@ as `redirect_mismatch` at the hosted UI rather than as anything more helpful.
 **1. Check the pool answers.** `terraform output hosted_ui_url`, open it. You
 should get a Cognito login page. Nobody can sign in yet — there are no users.
 
-**2. Make a user.** Self-signup is off (`admin_create_user_config`): a dispatcher does not sign
-themselves up for a carrier's fleet.
+**2. Make a user.** Self-signup is off (`admin_create_user_config`): a operator does not sign
+themselves up for a customer's estate.
 
 ```bash
 aws cognito-idp admin-create-user \
   --user-pool-id "$(terraform output -raw user_pool_id)" \
-  --username dispatcher@acme-freight.com \
-  --user-attributes Name=email,Value=dispatcher@acme-freight.com Name=email_verified,Value=true
+  --username operator@acme-networks.com \
+  --user-attributes Name=email,Value=operator@acme-networks.com Name=email_verified,Value=true
 ```
 
 The email domain is what the trigger looks up, so it has to be one the
 membership table in `src/auth/pre-token-generation.ts` knows:
-`acme-freight.com`, `safety.acme-freight.com`, `meridian.io` or
-`northstar-logistics.com`. Any other domain gets a token with no tenant, the
+`acme-networks.com`, `safety.acme-networks.com`, `netpulse.io` or
+`northwind-utilities.com`. Any other domain gets a token with no tenant, the
 verifier rejects it, and the board correctly shows nothing.
 
 **3. Point the board at it.** `terraform output vercel_env` prints three
@@ -123,28 +123,28 @@ VITE_COGNITO_ISSUER     https://cognito-idp.<region>.amazonaws.com/<poolId>
 
 With any of them missing the board keeps using the offline provider. That is
 the intended default, not a failure — the local issuer still mints and
-verifies tokens for the registered carrier domains, with no password.
+verifies tokens for the registered customer domains, with no password.
 
-### Onboarding a carrier
+### Onboarding a customer
 
 Membership lives in the DynamoDB table this root creates, not in code. Adding
-a carrier is a row:
+a customer is a row:
 
 ```bash
-aws dynamodb put-item --table-name meridian-demo-membership --item '{
+aws dynamodb put-item --table-name netpulse-demo-membership --item '{
   "PK":       {"S": "TENANT_MEMBERSHIP#newco.example"},
   "tenantId": {"S": "newco"},
-  "roles":    {"SS": ["dispatcher"]},
-  "district": {"S": "phx"}
+  "roles":    {"SS": ["operator"]},
+  "site": {"S": "phx"}
 }'
 ```
 
-No rebuild, no deploy. Terraform seeds the four demo carriers with
+No rebuild, no deploy. Terraform seeds the four demo customers with
 `aws_dynamodb_table_item`, which manages only the rows it declares — rows
 added this way survive the next `apply` rather than being destroyed.
 
-Omit `district` for tenant-wide scope. `roles` is a string SET, and only
-`admin`, `safety`, `dispatcher`, `driver` and `viewer` map to anything —
+Omit `site` for tenant-wide scope. `roles` is a string SET, and only
+`admin`, `safety`, `operator`, `device` and `viewer` map to anything —
 anything else degrades to `viewer` rather than failing.
 
 **4. Optional: Google sign-in.** Create an OAuth client in Google Cloud with

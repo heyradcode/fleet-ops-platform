@@ -67,8 +67,8 @@ export type CognitoClaims = {
   'cognito:groups': string[];
   /** Custom attributes are prefixed `custom:` and are how tenancy travels. */
   'custom:tenantId': TenantId;
-  /** The dispatcher's district. Signed by Cognito, so it cannot be widened. */
-  'custom:district'?: string;
+  /** The operator's site. Signed by Cognito, so it cannot be widened. */
+  'custom:site'?: string;
   /** Which IdP the user federated from. Cognito sets this for federated users. */
   identities?: Array<{ providerName: string; userId: string }>;
 };
@@ -264,8 +264,7 @@ export async function verifyTokenRs256(token: string, pool: PoolConfig): Promise
 function mapGroupsToRoles(groups: string[]): Principal['roles'] {
   const valid: Principal['roles'] = [];
   for (const g of groups) {
-    if (g === 'admin' || g === 'dispatcher' || g === 'safety' ||
-        g === 'driver' || g === 'viewer') valid.push(g);
+    if (g === 'admin' || g === 'operator' || g === 'engineer' || g === 'viewer') valid.push(g);
   }
   return valid.length > 0 ? valid : ['viewer'];
 }
@@ -273,27 +272,30 @@ function mapGroupsToRoles(groups: string[]): Principal['roles'] {
 /**
  * Derive the caller's scope from their claims.
  *
- * Cognito stamps `custom:district` in the PreTokenGeneration trigger, so the
- * scope arrives already signed - a dispatcher cannot widen their own board by
- * editing a request. Absence of a district is NOT treated as "see everything":
- * only an explicit admin role gets tenant-wide scope, and everyone else falls
- * back to the narrowest thing that still makes sense.
+ * Cognito stamps `custom:site` in the PreTokenGeneration trigger, so the scope
+ * arrives already signed - an operator cannot widen their own board by editing
+ * a request. Absence of a site is NOT treated as "see everything": only an
+ * explicit admin role gets tenant-wide scope, and everyone else falls back to
+ * the narrowest thing that still makes sense.
  */
 function scopeFromClaims(claims: CognitoClaims): Principal['scope'] {
   const roles = mapGroupsToRoles(claims['cognito:groups'] ?? []);
 
-  // SCOPE IS NOT PERMISSION, and conflating them is how safety teams end up
-  // unable to do their job. A safety reviewer has to read the whole carrier -
-  // a harsh-braking pattern is only visible across districts - but must not be
-  // able to move a load. Scope answers "what may they SEE"; requireRole() and
-  // canUseTool() answer "what may they DO", and they answer it separately.
-  if (roles.includes('admin') || roles.includes('safety')) return { kind: 'tenant' };
+  // SCOPE IS NOT PERMISSION, and conflating them is how network engineering
+  // teams end up unable to do their job. An engineer has to read the whole
+  // estate - a routing problem is only visible across sites - but must not be
+  // able to acknowledge an incident on someone else's behalf. Scope answers
+  // "what may they SEE"; requireRole() and canUseTool() answer "what may they
+  // DO", and they answer it separately.
+  if (roles.includes('admin') || roles.includes('engineer')) return { kind: 'tenant' };
 
-  const district = claims['custom:district'];
-  if (district) return { kind: 'district', districtId: district };
+  const site = claims['custom:site'];
+  if (site) return { kind: 'site', siteId: site };
 
-  // A driver with no district claim sees their own assignments and nothing else.
-  return { kind: 'driver', driverId: claims.sub };
+  // An operator with no site claim sees one device and nothing else. Failing
+  // closed here is deliberate: the alternative reading of a missing claim -
+  // "no restriction" - is how a misconfigured group becomes estate-wide access.
+  return { kind: 'device', deviceId: claims.sub };
 }
 
 function providerFromIdentities(identities: CognitoClaims['identities']): Principal['identityProvider'] {

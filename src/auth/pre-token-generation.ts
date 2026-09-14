@@ -66,20 +66,28 @@ type TokenClaimOverride = {
 export type { Membership };
 
 /**
- * Drivers authenticate differently from dispatchers, and the difference is
- * architectural rather than cosmetic:
+ * Field engineers authenticate differently from NOC operators, and the
+ * difference is architectural rather than cosmetic:
  *
- *                  Drivers                    Dispatchers
+ *                  Field engineer             NOC operator
  *   Auth           mobile app, device-bound   enterprise SSO (SAML / OIDC)
- *   Scope          their own assignments      a district or region
+ *   Scope          the box in front of them   a site or region
  *   Token          long refresh, short access short, revocable
  *   Offline        must keep working          always online
  *
- * A driver's token carries no district at all - they see their own work, not a
- * board. Handing a driver a district-scoped token would show them every other
- * truck in Dallas, which is neither useful to them nor anyone's intention.
+ * The offline row is the one that shapes the rest. Someone standing in a comms
+ * room with a dead uplink has no connectivity BY DEFINITION - the thing they
+ * are there to fix is the thing that would have carried their auth traffic. So
+ * their token has to survive without a refresh for the length of a site visit,
+ * which is only tolerable if its scope is correspondingly narrow.
+ *
+ * A device-bound token therefore carries no site claim at all. The verifier
+ * falls back to `{ kind: 'device' }`, and they see the box they were sent to
+ * rather than a board. Handing that token a site scope would put the whole
+ * estate on a phone that cannot be revoked promptly, which is the trade the
+ * long refresh window was bought with.
  */
-function isDriverDevice(event: PreTokenGenerationEvent): boolean {
+function isFieldDevice(event: PreTokenGenerationEvent): boolean {
   return event.request.userAttributes['custom:deviceBound'] === 'true';
 }
 
@@ -88,7 +96,7 @@ function isDriverDevice(event: PreTokenGenerationEvent): boolean {
  *
  * THIS IS NOT A COMPATIBILITY SHIM, it is the difference between a pool that
  * works and one that cannot sign anybody in. A V1 trigger writes claims to the
- * ID token only. Everything downstream reads tenant and district from the
+ * ID token only. Everything downstream reads tenant and site from the
  * ACCESS token - `token_use: 'access'` is check 4 in the verifier, because the
  * access token is what an API authorises on. Wire a pool to V1 and it happily
  * mints access tokens with no tenant claim, the verifier correctly rejects
@@ -133,7 +141,7 @@ export async function handler(event: PreTokenGenerationEvent): Promise<PreTokenG
   // was scoped the way it was, and on a login path it is written for every
   // user in the system - so it carries the lookup key and the decision, and
   // no PII. Without it the trigger is a black box at exactly the moment you
-  // need to see inside it: "authenticated fine, saw no fleet" and nothing to
+  // need to see inside it: "authenticated fine, saw no estate" and nothing to
   // say whether the domain missed, the version was wrong, or the claim was
   // dropped downstream.
   log.info('token claims resolved', {
@@ -141,7 +149,7 @@ export async function handler(event: PreTokenGenerationEvent): Promise<PreTokenG
     triggerVersion: event.version,
     triggerSource: event.triggerSource,
     tenantId: membership?.tenantId ?? '(unregistered)',
-    district: membership?.district ?? '(none)',
+    site: membership?.site ?? '(none)',
     roles: (membership?.roles ?? []).join(',') || '(none)',
   });
 
@@ -163,10 +171,10 @@ export async function handler(event: PreTokenGenerationEvent): Promise<PreTokenG
       'custom:tenantId': membership.tenantId,
       // A stable id the app can send to support without leaking the email.
       'custom:principalRef': b64urlEncode(email).slice(0, 16),
-      // The signed scope. A driver's device-bound token never gets a district;
+      // The signed scope. A field engineer's device-bound token never gets a site;
       // they see their own assignments and nothing else.
-      ...(membership.district && !isDriverDevice(event)
-        ? { 'custom:district': membership.district }
+      ...(membership.site && !isFieldDevice(event)
+        ? { 'custom:site': membership.site }
         : {}),
     },
     // Suppress claims the API does not need. Smaller tokens, less PII in logs.

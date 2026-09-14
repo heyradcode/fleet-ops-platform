@@ -1,6 +1,6 @@
 # Start here
 
-Meridian is a fleet dispatch platform: telematics in, exceptions out, a live
+NetPulse is an estate operations platform: network feeds in, incidents out, a live
 board and an assistant on top. This is the shortest path through it.
 
 ## 1. Run it (5 minutes)
@@ -11,7 +11,7 @@ pnpm start --only=scenarios
 
 Six situations go through the real pipeline. Each one exists to prove a claim
 about how the rules behave, and the second — a GPS spike that raises an
-exception and pages nobody — is the one worth pausing on. Any dashboard can
+alarm and pages nobody — is the one worth pausing on. Any dashboard can
 light up; a board that cries wolf is one people stop reading.
 
 Then the whole thing, and the board:
@@ -22,8 +22,8 @@ pnpm web
 ```
 
 The board opens on a sign-in page. There are no passwords offline — type any
-address at `acme-freight.com` (a district dispatcher), `meridian.io` (an
-admin, tenant-wide) or `northstar-logistics.com` (a different carrier), and
+address at `acme-networks.com` (a site operator), `netpulse.io` (an
+admin, tenant-wide) or `northwind-utilities.com` (a different customer), and
 notice that what each one can see is decided by the token it was issued, not
 by anything on the page. An unregistered domain signs in and sees nothing,
 which is the fail-closed rule rather than a bug.
@@ -35,7 +35,7 @@ which is the fail-closed rule rather than a bug.
 | 1 | `docs/01-architecture.md` | The whole system on one page |
 | 2 | `src/platform/types.ts` | The domain model. Everything is built on it |
 | 3 | `src/integrations/connector.ts` + one connector | Eight vendor dialects, one shape |
-| 4 | `src/pipeline/steps.ts` | Where readings become exceptions become incidents |
+| 4 | `src/pipeline/steps.ts` | Where readings become alarms become incidents |
 | 5 | `src/data/scenarios.ts` | The six claims, and the data that proves them |
 | 6 | `src/api/schema.graphql` | The API surface, with AppSync directives |
 | 7 | `src/ai/agent-core.ts` | The agent loop, in 90 lines |
@@ -51,7 +51,7 @@ codebase exists to serve.
 The architecture, IAM, SQL, schemas and integration logic are real.
 `src/aws/` contains local stand-ins for DynamoDB, S3, EventBridge, Step
 Functions, Kinesis and Bedrock so the whole thing runs offline, and all data is
-generated from a seed — real driver telemetry is a location trace of an
+generated from a seed — real device observations is a location trace of an
 identifiable person. Vendor payload shapes are modelled from published API
 references rather than captured from live accounts.
 

@@ -94,13 +94,13 @@ resource "aws_appsync_datasource" "none" {
 # Resolvers
 # -----------------------------------------------------------------------------
 
-# Query.telemetry: APPSYNC_JS unit resolver straight onto DynamoDB. No Lambda.
+# Query.observations: APPSYNC_JS unit resolver straight onto DynamoDB. No Lambda.
 resource "aws_appsync_resolver" "query_signals" {
   api_id      = aws_appsync_graphql_api.main.id
   type        = "Query"
-  field       = "telemetry"
+  field       = "observations"
   data_source = aws_appsync_datasource.dynamodb.name
-  code        = file("${var.resolver_code_dir}/Query.telemetry.js")
+  code        = file("${var.resolver_code_dir}/Query.observations.js")
 
   runtime {
     name            = "APPSYNC_JS"
@@ -108,30 +108,30 @@ resource "aws_appsync_resolver" "query_signals" {
   }
 }
 
-# Query.driver: the older VTL style, kept as a reference. You will meet it.
+# Query.device: the older VTL style, kept as a reference. You will meet it.
 resource "aws_appsync_resolver" "query_site" {
   api_id            = aws_appsync_graphql_api.main.id
   type              = "Query"
-  field             = "driver"
+  field             = "device"
   data_source       = aws_appsync_datasource.dynamodb.name
-  request_template  = file("${var.resolver_code_dir}/Query.driver.request.vtl")
-  response_template = file("${var.resolver_code_dir}/Query.driver.response.vtl")
+  request_template  = file("${var.resolver_code_dir}/Query.device.request.vtl")
+  response_template = file("${var.resolver_code_dir}/Query.device.response.vtl")
 }
 
 # Everything that needs real compute goes to the Lambda data source.
 resource "aws_appsync_resolver" "lambda_backed" {
   for_each = {
     "Query.mapLayer"               = "Query"
-    "Query.driversNear"            = "Query"
-    "Query.availableDriversNear"   = "Query"
-    "Query.exceptions"             = "Query"
+    "Query.devicesAtSite"            = "Query"
+    "Query.topology"   = "Query"
+    "Query.alarms"             = "Query"
     "Query.askRunbooks"            = "Query"
     "Query.incidents"              = "Query"
     "Mutation.openIncident"        = "Mutation"
     "Mutation.acknowledgeIncident" = "Mutation"
-    "Mutation.reassignDriver"      = "Mutation"
+    "Mutation.suppressAlarm"      = "Mutation"
     "Mutation.askAgent"            = "Mutation"
-    "Driver.telemetry"             = "Driver"
+    "Device.observations"             = "Device"
   }
 
   api_id      = aws_appsync_graphql_api.main.id
@@ -145,7 +145,7 @@ resource "aws_appsync_resolver" "lambda_backed" {
 # Caching
 # -----------------------------------------------------------------------------
 # PER_RESOLVER_CACHING lets you set a TTL on the resolvers that are safe to
-# cache (the map layer, the driver list) and leave the rest uncached. The cache
+# cache (the map layer, the device list) and leave the rest uncached. The cache
 # key includes $context.identity by default, so one tenant cannot be served
 # another tenant's cached response - verify this if you ever set caching_keys
 # by hand, because getting it wrong is a cross-tenant data leak.

@@ -124,8 +124,8 @@ resource "aws_cognito_user_pool" "main" {
   # Cognito default is to allow it, so omitting this leaves the hosted UI's
   # "Sign up" link live for anyone on the internet.
   #
-  # It is also the setting the product model depends on. A dispatcher does not
-  # sign themselves up for a carrier's fleet platform: the carrier is
+  # It is also the setting the product model depends on. A operator does not
+  # sign themselves up for a customer's estate platform: the customer is
   # onboarded, its SSO is configured, and its people arrive through it. Without
   # this, a stranger creates an account, the PreTokenGeneration trigger finds
   # no tenant for their domain and fails closed - so they see nothing, which
@@ -207,7 +207,7 @@ resource "aws_cognito_identity_provider" "apple" {
   provider_type = "SignInWithApple"
 
   provider_details = {
-    client_id        = "com.meridian.web"
+    client_id        = "com.netpulse.web"
     team_id          = "ABCDE12345"
     key_id           = "FGHIJ67890"
     private_key      = var.google_client_secret # .p8 contents from Secrets Manager
@@ -356,7 +356,7 @@ resource "aws_cognito_user_pool_ui_customization" "this" {
 # Groups become the `cognito:groups` claim, which mapGroupsToRoles() in
 # auth/cognito-jwt-verifier.ts maps to roles - and this list has to BE that
 # list. It carried an "operator" group the platform has never heard of, and
-# omitted dispatcher, safety and driver, which it uses constantly. The trigger
+# omitted operator, safety and device, which it uses constantly. The trigger
 # overrides the claim on every login so nothing was visibly broken, which is
 # exactly why it survived: a pool advertising roles the code cannot map, and
 # missing the ones it can.
@@ -364,14 +364,14 @@ resource "aws_cognito_user_pool_ui_customization" "this" {
 # An unmapped group degrades to `viewer` rather than crashing, so the failure
 # mode of getting this wrong is silent under-permissioning.
 resource "aws_cognito_user_group" "roles" {
-  for_each = toset(["admin", "safety", "dispatcher", "driver", "viewer"])
+  for_each = toset(["admin", "safety", "operator", "device", "viewer"])
 
   name         = each.key
   user_pool_id = aws_cognito_user_pool.main.id
 
   # Lower is higher priority. Cognito puts the lowest-precedence group first in
   # the claim, which matters when a user is in more than one.
-  precedence = index(["admin", "safety", "dispatcher", "driver", "viewer"], each.key) + 1
+  precedence = index(["admin", "safety", "operator", "device", "viewer"], each.key) + 1
 }
 
 # -----------------------------------------------------------------------------

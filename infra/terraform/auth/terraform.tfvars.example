@@ -11,4 +11,4 @@ alert_email = "you@example.com"
 
 # The hosted UI domain prefix is globally unique across every AWS account, so
 # a good name is probably taken. Empty derives it from the env name.
-# domain_prefix = "meridian-something-yours"
+# domain_prefix = "netpulse-something-yours"

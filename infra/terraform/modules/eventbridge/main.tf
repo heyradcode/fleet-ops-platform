@@ -95,7 +95,7 @@ resource "aws_cloudwatch_event_rule" "critical_incidents" {
   event_bus_name = aws_cloudwatch_event_bus.main.name
 
   event_pattern = jsonencode({
-    source        = ["meridian.detect", "meridian.api"]
+    source        = ["netpulse.detect", "netpulse.api"]
     "detail-type" = ["IncidentOpened"]
     detail = {
       severity = ["critical"]

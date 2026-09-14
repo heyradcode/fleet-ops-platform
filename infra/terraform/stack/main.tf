@@ -23,7 +23,7 @@ data "aws_caller_identity" "current" {}
 
 data "aws_vpc" "main" {
   tags = {
-    Name = "meridian-${var.env}"
+    Name = "netpulse-${var.env}"
   }
 }
 
@@ -43,7 +43,7 @@ data "aws_subnets" "private" {
 # ingress rule references it. Creating it here also means the "which SG may
 # reach the database" question has exactly one answer, in one file.
 resource "aws_security_group" "lambda" {
-  name        = "meridian-${var.env}-lambda"
+  name        = "netpulse-${var.env}-lambda"
   description = "Lambdas that need VPC access (Aurora only)"
   vpc_id      = data.aws_vpc.main.id
 
@@ -61,7 +61,7 @@ resource "aws_security_group" "lambda" {
 }
 
 locals {
-  name_prefix = "meridian-${var.env}"
+  name_prefix = "netpulse-${var.env}"
   src_root    = "${path.module}/../../../src"
 
   # Stamped onto every resource that takes tags. Cost allocation is the reason
@@ -69,7 +69,7 @@ locals {
   # tell you what dev costs against prod, and that is the number that starts
   # the conversation about switching dev off overnight.
   tags = {
-    Project     = "meridian"
+    Project     = "netpulse"
     Environment = var.env
     ManagedBy   = "terraform"
   }
@@ -131,7 +131,7 @@ module "storage" {
 }
 
 # ---------------------------------------------------------------------------
-# Telemetry ingest: the stream, and the cold path it feeds
+# Observations ingest: the stream, and the cold path it feeds
 # ---------------------------------------------------------------------------
 module "kinesis" {
   source = "../modules/kinesis"
@@ -153,7 +153,7 @@ module "firehose" {
 
   source_stream_arn  = module.kinesis.stream_arn
   history_bucket_arn = module.storage.history_bucket_arn
-  glue_table_arn     = "arn:aws:glue:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/meridian/telemetry_history"
+  glue_table_arn     = "arn:aws:glue:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/netpulse/telemetry_history"
   role_arn           = module.storage.firehose_role_arn
 }
 

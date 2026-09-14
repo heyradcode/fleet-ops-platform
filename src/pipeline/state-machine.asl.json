@@ -1,9 +1,9 @@
 {
-  "Comment": "Meridian ingest pipeline. The deployable Amazon States Language definition matching src/pipeline/ingest-workflow.ts. Deployed by infra/terraform/modules/step-functions.",
-  "StartAt": "PrepareConnectorList",
+  "Comment": "NetPulse ingest pipeline. The deployable Amazon States Language definition matching src/pipeline/ingest-workflow.ts. Deployed by infra/terraform/modules/step-functions.",
+  "StartAt": "PrepareControllerList",
   "TimeoutSeconds": 900,
   "States": {
-    "PrepareConnectorList": {
+    "PrepareControllerList": {
       "Type": "Pass",
       "Comment": "The vendors THIS carrier runs - one GPS unit, one ELD, one dashcam. Kept in the definition so onboarding a vendor is a Terraform change with an audit trail, not a code deploy. Per-tenant subsets live in DynamoDB; this is the default.",
       "Result": {
@@ -14,10 +14,10 @@
         ]
       },
       "ResultPath": "$.config",
-      "Next": "CollectFromProviders"
+      "Next": "PollControllers"
     },
 
-    "CollectFromProviders": {
+    "PollControllers": {
       "Type": "Map",
       "Comment": "Fan out one Lambda per vendor. MaxConcurrency 4 keeps us inside every vendor rate limit. ToleratedFailurePercentage lets the run succeed on partial data - a dead dashcam feed must not block position data.",
       "ItemsPath": "$.config.providers",
@@ -49,7 +49,7 @@
                 "JitterStrategy": "FULL"
               },
               {
-                "ErrorEquals": ["Lambda.ServiceException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+                "ErrorEquals": ["Lambda.ServiceAlarm", "Lambda.SdkClientAlarm", "Lambda.TooManyRequestsAlarm"],
                 "IntervalSeconds": 1,
                 "MaxAttempts": 3,
                 "BackoffRate": 2
@@ -60,13 +60,13 @@
                 "Comment": "Never fail the whole run for one vendor.",
                 "ErrorEquals": ["States.ALL"],
                 "ResultPath": "$.error",
-                "Next": "MarkProviderFailed"
+                "Next": "MarkControllerFailed"
               }
             ],
             "OutputPath": "$.Payload",
             "End": true
           },
-          "MarkProviderFailed": {
+          "MarkControllerFailed": {
             "Type": "Pass",
             "Parameters": {
               "failed.$": "$.provider",
@@ -77,10 +77,10 @@
         }
       },
       "ResultPath": "$.collected",
-      "Next": "NormaliseToTelemetry"
+      "Next": "NormaliseToObservations"
     },
 
-    "NormaliseToTelemetry": {
+    "NormaliseToObservations": {
       "Type": "Task",
       "Comment": "Vendor payloads -> canonical Telemetry[]. Pure function; safe to retry.",
       "Resource": "arn:aws:states:::lambda:invoke",
@@ -96,14 +96,14 @@
           "BackoffRate": 2
         }
       ],
-      "ResultSelector": { "telemetry.$": "$.Payload.telemetry" },
+      "ResultSelector": { "observations.$": "$.Payload.telemetry" },
       "ResultPath": "$.normalised",
-      "Next": "ResolveTerritory"
+      "Next": "EnrichAndDeduplicate"
     },
 
-    "ResolveTerritory": {
+    "EnrichAndDeduplicate": {
       "Type": "Task",
-      "Comment": "Which district and geofences does this point fall in. Best-effort: an ELD reports a clock and has no coordinates at all, so failure continues rather than aborts. The hot path does a bbox pre-filter in memory against geofences cached at module scope - a PostGIS round trip per ping is neither fast nor cheap at 11,000/sec.",
+      "Comment": "Which site and geofences does this point fall in. Best-effort: an ELD reports a clock and has no coordinates at all, so failure continues rather than aborts. The hot path does a bbox pre-filter in memory against geofences cached at module scope - a PostGIS round trip per ping is neither fast nor cheap at 11,000/sec.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${resolve_function_arn}",
@@ -113,15 +113,15 @@
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.resolveError",
-          "Next": "AnyTelemetry"
+          "Next": "AnyObservations"
         }
       ],
-      "ResultSelector": { "telemetry.$": "$.Payload.telemetry" },
+      "ResultSelector": { "observations.$": "$.Payload.telemetry" },
       "ResultPath": "$.resolved",
-      "Next": "AnyTelemetry"
+      "Next": "AnyObservations"
     },
 
-    "AnyTelemetry": {
+    "AnyObservations": {
       "Type": "Choice",
       "Comment": "A quiet polling window is a success, not a failure.",
       "Choices": [
@@ -140,33 +140,33 @@
 
     "EvaluateRules": {
       "Type": "Task",
-      "Comment": "Per-driver deterministic rules -> Exception[], and fold the newest position into hot state. No LLM here on purpose: what pages a human at 4am must be identical every time and explainable to the person it woke.",
+      "Comment": "Per-device deterministic rules -> Alarm[], and fold the newest position into hot state. No LLM here on purpose: what pages a human at 4am must be identical every time and explainable to the person it woke.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${evaluate_function_arn}",
         "Payload.$": "$.resolved"
       },
       "ResultSelector": {
-        "telemetry.$": "$.Payload.telemetry",
-        "drivers.$": "$.Payload.drivers",
-        "exceptions.$": "$.Payload.exceptions"
+        "observations.$": "$.Payload.telemetry",
+        "devices.$": "$.Payload.devices",
+        "alarms.$": "$.Payload.alarms"
       },
       "ResultPath": "$.evaluated",
-      "Next": "DetectIncidents"
+      "Next": "CorrelateIncidents"
     },
 
-    "DetectIncidents": {
+    "CorrelateIncidents": {
       "Type": "Task",
-      "Comment": "Corroborate and merge exceptions into incidents. Two independent vendors before raising, and one road closure is one incident with fourteen drivers rather than fourteen pages.",
+      "Comment": "Corroborate and merge alarms into incidents. Two independent vendors before raising, and one road closure is one incident with fourteen devices rather than fourteen pages.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${detect_function_arn}",
         "Payload.$": "$.evaluated"
       },
       "ResultSelector": {
-        "telemetry.$": "$.Payload.telemetry",
-        "drivers.$": "$.Payload.drivers",
-        "exceptions.$": "$.Payload.exceptions",
+        "observations.$": "$.Payload.telemetry",
+        "devices.$": "$.Payload.devices",
+        "alarms.$": "$.Payload.alarms",
         "incidents.$": "$.Payload.incidents"
       },
       "ResultPath": "$.detected",
@@ -175,7 +175,7 @@
 
     "PersistAndPublish": {
       "Type": "Task",
-      "Comment": "BatchWriteItem to DynamoDB, then PutEvents to EventBridge. Write before publish, so a subscriber that immediately queries cannot 404. NOTE what is published: exceptions and incidents only. Telemetry is persisted and folded into hot state but never reaches the bus - at 11,000 readings/sec it would make bus cost scale with fleet size instead of with incidents.",
+      "Comment": "BatchWriteItem to DynamoDB, then PutEvents to EventBridge. Write before publish, so a subscriber that immediately queries cannot 404. NOTE what is published: alarms and incidents only. Telemetry is persisted and folded into hot state but never reaches the bus - at 11,000 readings/sec it would make bus cost scale with fleet size instead of with incidents.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${publish_function_arn}",
@@ -184,7 +184,7 @@
       "Retry": [
         {
           "ErrorEquals": [
-            "DynamoDB.ProvisionedThroughputExceededException",
+            "DynamoDB.ProvisionedThroughputExceededAlarm",
             "States.TaskFailed"
           ],
           "IntervalSeconds": 2,
@@ -211,7 +211,7 @@
         "Entries": [
           {
             "EventBusName": "${event_bus_name}",
-            "Source": "meridian.ingest",
+            "Source": "netpulse.ingest",
             "DetailType": "IngestFailed",
             "Detail": {
               "executionArn.$": "$$.Execution.Id",

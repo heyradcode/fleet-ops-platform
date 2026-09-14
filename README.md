@@ -1,24 +1,24 @@
-# Meridian
+# NetPulse
 
-**A real-time fleet dispatch platform on AWS serverless.** Telematics ingest,
-deterministic exception detection, a live dispatch board, and an AI assistant
-that shows its working.
+**A network operations intelligence platform on AWS serverless.** Multi-vendor
+ingest, deterministic alarm detection, topology-aware correlation, a live
+operations board, and an AI assistant that shows its working.
 
 It runs on your machine with **no AWS account and no network**:
 
 ```bash
 pnpm install
 pnpm start       # the backend, narrated, in your terminal
-pnpm web         # the dispatch board, at localhost:5180
+pnpm web         # the operations board, at localhost:5180
 ```
 
-The board opens on a sign-in page. Offline there are no passwords - type any
-address at one of four registered carrier domains (`acme-freight.com`,
-`safety.acme-freight.com`, `meridian.io`, `northstar-logistics.com`) and the
-same Cognito logic the Lambdas run mints and verifies a token locally. What you
-see afterwards is decided by that token, not by anything on the page: a
-dispatcher gets one district, an admin the whole carrier, and an unregistered
-domain gets nothing at all.
+The board opens on a sign-in page. Offline there are no passwords — type any
+address at one of four registered customer domains (`acme-networks.com`,
+`eng.acme-networks.com`, `netpulse.io`, `northwind-utilities.com`) and the same
+Cognito logic the Lambdas run mints and verifies a token locally. What you see
+afterwards is decided by that token, not by anything on the page: an operator
+gets one site, an admin the whole estate, and an unregistered domain gets
+nothing at all.
 
 <sub>Node 22+ for the backend — it is TypeScript and Node runs it directly via
 type-stripping, so there is no build step. The board is a separate workspace
@@ -28,85 +28,84 @@ with its own dependencies.</sub>
 
 ## What it is
 
-Meridian monitors and dispatches a fleet. It pulls telemetry from the vendors a
-carrier actually runs — one GPS unit, one electronic logging device and one
-dashcam per truck — normalises eight different vendor dialects into one shape,
-decides deterministically what deserves a human's attention, and lets a
-dispatcher ask *"this driver is off their route — is it real, and what are my
-options?"*
+NetPulse watches a mixed Cisco / Juniper / Aruba estate. It takes in what the
+network already emits — syslog, SNMP traps, the vendors' controller APIs — adds
+one thing the network cannot emit about itself, normalises three vendor dialects
+into one shape, decides deterministically what deserves a human, and lets an
+engineer ask *"forty devices are alarming — which one do I actually go and
+look at?"*
 
-The architecture is sized for **330,000 drivers**. This repository runs a
-60-driver synthetic fleet offline, so the whole thing fits in a terminal and in
-your head. Where a number is derived from the larger figure rather than
-measured, it says so.
+The architecture is sized for **40,000 devices**. This repository runs a
+60-device synthetic estate offline, so the whole thing fits in a terminal and in
+your head.
 
 ### The constraint everything follows from
 
-```
-330,000 drivers ÷ one ping per 30s   ≈  11,000 readings/sec sustained
-                                        ~950 million/day
-peak (shift change, wave dispatch)   ≈  3-5× that
-```
+A network tells you about itself constantly and unreliably, and the two hard
+problems are both consequences of that.
 
-Three consequences, and most of the design is one of them:
+**Everything reports twice.** One Cisco link failure produces a `%LINK` syslog
+line, a `%LINEPROTO` syslog line, and an SNMP `linkDown` trap — three records,
+one event, one witness. A platform that counts records as evidence pages
+somebody for every port flap in the building.
 
-1. **A Lambda per reading is the wrong shape.** Batch from a stream.
-2. **Every reading cannot be a durable operational write.** Current position is
-   overwritten in DynamoDB; history is appended to S3 as Parquet.
-3. **Fan-out must be filtered server-side.** A dispatcher watching one district
-   must not receive — or pay for — 11,000 events/sec of national traffic.
-
-And the decision that falls out of all three: **telemetry does not become
-events. Only exceptions do.** That keeps the event bus and everything
-downstream proportional to *incidents* rather than to *fleet size*.
+**A dead device reports nothing at all.** Silence is not an observation, and the
+failure that matters most is the one the failing thing cannot describe. So the
+platform maintains three independent vantage points — the device, its
+controller, and its own probe — and corroboration is defined over *those*, never
+over feeds.
 
 ---
 
 ## The thing worth looking at first
 
-Run `pnpm start --only=scenarios`. Six situations go through the real
-pipeline, and each proves one claim:
-
-```
-Road closure on I-35E, Dallas
-Fourteen affected drivers produce ONE incident, not fourteen pages
-    42 readings   28 exceptions   1 incidents
-  -> Route deviation affecting 14 drivers in dal
-
-A single GPS spike, Austin
-An uncorroborated deviation raises NO incident - the noise filter working
-     2 readings    1 exceptions   0 incidents
-  -> nothing paged. 1 exception(s) raised, none corroborated.
+```bash
+pnpm start --only=scenarios
 ```
 
-The second one is the point. Any dashboard can light up. A board that pages a
-dispatcher fourteen times for one road closure, or wakes them for GPS drift, is
-one they learn to ignore — and a board people have learned to ignore is worse
-than no board.
+Six situations, each proving one claim, all travelling the real
+decode → map → collapse → evaluate → correlate path from real vendor payloads:
+
+| | Proves |
+|---|---|
+| One failure reported twice by one box | 2 records → 1 event → **held back**, not paged |
+| The same failure from three vantage points | device + controller + probe → **1 incident** |
+| A distribution switch dies | 8 alarms across 4 devices → **1 incident, root cause named** |
+| One access port flaps alone | recorded, shown, **nobody woken** |
+| Three vendors, one event kind | a mnemonic, a structured-data element, an English sentence → one shape |
+| A device nobody registered | dropped, **counted and named** — never silently |
+
+The fourth one is the point of the other five. A board that alerts on everything
+is a board people learn to ignore.
 
 ---
 
 ## How it fits together
 
 ```
-  Driver app · telematics · ELD · dashcam
-        │
-        │  8 vendor adapters, one normalise() each; a carrier runs 2-3
-        ▼
-  Kinesis ──▶ batched consumer ──┬──▶ DynamoDB   current position, overwritten
-  (by driverId)                  ├──▶ S3         history, append-only, Parquet
-                                 └──▶ rules ──▶ Exception ──▶ Incident
-                                                                │
-                              only exceptions ──▶ EventBridge ──┤
-                                                                ▼
-                              AppSync subscription, filtered by district
-                                                                │
-                                                                ▼
-                                                     the dispatch board
+  PUSH  syslog · SNMP traps · IPFIX · gNMI          PULL  Meraki · Mist · Central
+        │  UDP, into a persistent collector               │  polled on a schedule
+        ▼                                                 ▼
+  S3 landing zone ──▶ decoder per ENCODING ──▶ mapper per (vendor, platform)
+        │                                                 │
+        │             + our own probe: the external plane │
+        ▼                                                 ▼
+  Kinesis ──▶ batched consumer ──┬──▶ DynamoDB   current status, overwritten
+  (by deviceId)                  ├──▶ S3         observation history, Parquet
+                                 ├──▶ S3         flows, by exporter, Athena only
+                                 └──▶ rules ──▶ Alarm ──▶ Incident
+                                                             │
+                            only alarms ──▶ EventBridge ─────┤
+                                                             ▼
+                              AppSync subscription, filtered by site
+                                                             │
+                                                             ▼
+                                                   the operations board
 ```
 
-Aurora PostGIS holds territories, geofences and route corridors — the questions
-DynamoDB cannot answer. Cognito carries the district scope in a signed claim.
+Aurora PostGIS holds the inventory and the topology — "everything beneath this
+switch" is a recursive CTE and one round trip. Cognito carries the site scope in
+a signed claim.
 
 ---
 
@@ -116,16 +115,17 @@ You have limited time, so:
 
 | Read | For |
 |---|---|
-| `src/platform/types.ts` | The domain model. Everything is built on these types |
-| `src/pipeline/steps.ts` | Where readings become exceptions become incidents |
+| `src/platform/types.ts` | The domain model. `ObservationPlane` is the load-bearing one |
+| `src/integrations/wire.ts` | Why decoders key on encoding and mappers on vendor |
+| `src/platform/inventory.ts` | The alias→device join — the genuinely hard part |
+| `src/pipeline/steps.ts` | Where observations become alarms become incidents |
 | `src/data/scenarios.ts` | Six scenarios, each proving one claim about the rules |
-| `src/aws/kinesis.ts` | Batching, sharding, and the poison-record bisect |
 | `web/src/transport/` | Why the whole backend runs inside the browser tab |
 
 One vertical slice, end to end:
-`integrations/telematics/samsara.ts` → `pipeline/steps.ts` →
-`platform/repository.ts` → `api/appsync-resolvers.ts`. That path touches most
-of the stack.
+`integrations/decode/syslog.ts` → `integrations/map/cisco-ios-xe.syslog.ts` →
+`pipeline/steps.ts` → `platform/repository.ts` → `api/appsync-resolvers.ts`.
+That path touches most of the stack.
 
 The comments are the documentation. They explain *why*, name the trade-offs,
 and flag the mistakes that are easy to make.
@@ -134,27 +134,34 @@ and flag the mistakes that are easy to make.
 
 ## Design decisions
 
-- **Telemetry never reaches the event bus.** Readings are persisted and folded
-  into hot state; only exceptions are published. A test asserts it, because it
-  is the claim most easily broken by a well-meaning edit.
-- **Corroboration means two independent signals, not two vendors.** A truck
-  carries one GPS unit, so a route deviation can never be seen by two
-  telematics vendors — demanding that would make deviations undetectable. What
-  makes one real is *different evidence pointing the same way*: off-route **and**
-  stationary. Hours-of-service and panic are exempt entirely; a regulatory
-  clock is not a sensor to be double-checked.
-- **One road closure is one incident.** Exceptions merge on corridor, 3km and a
-  15-minute window. An earlier cut of this rule merged within 150km, which is
-  wider than a whole district — it would have collapsed every exception in
-  Dallas into one permanent incident.
+- **Decoders key on ENCODING, mappers on (vendor, platform, encoding).** "Cisco"
+  is not a format — it is syslog *and* SNMP *and* gNMI *and* two REST APIs, and
+  Juniper and Aruba send most of the same ones. Three vendors and two encodings
+  is 2 decoders + 4 mappers, not 6 files each re-implementing RFC 5424.
+- **Observations never reach the event bus.** They are persisted and folded into
+  hot state; only alarms are published. A test asserts it, because it is the
+  claim most easily broken by a well-meaning edit.
+- **Flows never reach the operational store at all.** IPFIX goes to its own
+  bucket, partitioned by exporter, and is read with Athena. It is the one class
+  whose volume would make DynamoDB scale with traffic rather than with
+  incidents.
+- **Corroboration means two independent planes, not two feeds.** A syslog line
+  and an SNMP trap from one agent are one witness talking twice. What counts is
+  a different vantage point — the controller, the probe — or the chassis at the
+  *other* end of the link. A failed power supply is exempt: nothing else is
+  positioned to see it.
+- **One dead switch is one incident.** Alarms anchor at the highest alarming
+  device in their uplink chain, and everything sharing an anchor is one page
+  naming the device to go and look at. The obvious seed-and-sweep algorithm is
+  wrong here in a way it is not on a map — see the note in `steps.ts`.
 - **Tenancy is a type, not a filter.** Every repository function takes a
   `Principal` and derives the partition key itself. `dynamodb:LeadingKeys`
-  enforces the same boundary at AWS, and Postgres row-level security enforces
-  it a third time.
-- **Scope is signed, not asserted.** A dispatcher's district is stamped into
-  the token by a Cognito trigger, so it cannot be widened by editing a request.
-  A dispatcher with *no* district gets their own assignments, not the fleet —
-  widening access has to be a deliberate grant.
+  enforces the same boundary at AWS, and Postgres row-level security enforces it
+  a third time.
+- **Scope is signed, not asserted.** An operator's site is stamped into the
+  token by a Cognito trigger, so it cannot be widened by editing a request. An
+  operator with *no* site claim gets one device, not the estate — widening
+  access has to be a deliberate grant.
 - **An agent acts with the caller's permissions, never the platform's.** That
   one rule is what stops prompt injection from becoming privilege escalation,
   and the board renders refused tool calls so you can watch it happen.
@@ -175,20 +182,22 @@ Being clear about this matters.
 
 **Real:** every design decision, the AWS resource definitions, the IAM
 policies, the GraphQL schema and resolvers, the SQL and its row-level security,
-the normalisation logic, the retry and circuit-breaker behaviour, the
-corroboration and merge rules, the RAG chunking and hybrid-search maths, the
-agent loop, and all the Terraform and GitHub Actions.
+the syslog and SNMP decoding, the vendor mapping, the retry and circuit-breaker
+behaviour, the corroboration and merge rules, the RAG chunking and hybrid-search
+maths, the agent loop, and all the Terraform and GitHub Actions.
 
 **Simulated, so it runs offline:** `src/aws/` stands in for DynamoDB, S3,
 EventBridge, Step Functions, Kinesis and Bedrock. Each fake mirrors the real
 SDK's method names, and each file's header shows the call it replaces. Vendor
 HTTP calls return fixtures instead of hitting the network.
 
-**Synthetic, deliberately:** every driver, position and reading is generated
-from a seed. Real driver telemetry is a location trace of an identifiable
-person and has no business in a public repository. Vendor payload shapes are
-**modelled from published API references, not captured from live accounts** —
-Samsara, Motive, Lytx and the rest gate API access behind a customer contract.
+**Synthetic, deliberately:** every site, device and observation is generated
+from a seed. A real device inventory is a map of an identifiable organisation's
+internal network and has no business in a public repository. Vendor payload
+shapes are **modelled from published API references, not captured from live
+accounts** — Meraki, Mist and Aruba Central all gate API access behind a
+customer contract. The AOS-CX message wording is the least well covered
+publicly; verify it against a real switch before relying on it.
 
 **Deployable, but only one part:** `infra/terraform/auth/` creates a real
 Cognito user pool and the token trigger, and costs pennies — see its README.
@@ -219,10 +228,10 @@ pnpm start --only=ingest           # auth | ingest | scenarios | data | events
 pnpm start --only=ai               # graphql | rest | geo | ai
 pnpm dev                           # the same, restarting on every save
 
-pnpm test                          # 96 tests, no network
+pnpm test                          # 104 tests, no network
 pnpm typecheck
 
-pnpm web                           # the dispatch board
+pnpm web                           # the operations board
 pnpm web:build
 
 pnpm verify                        # all four, in the order that catches most
@@ -258,17 +267,17 @@ and not free to deploy.
 
 ```
 src/          the platform. Zero runtime dependencies.
-  platform/     domain model, and the injected primitives
-  integrations/ 8 vendor connectors, 3 families
-  pipeline/     collect → normalise → resolve → evaluate → detect → publish
-  geo/          spatial maths, PostGIS queries, GeoJSON/TopoJSON
+  platform/     domain model, the inventory join, and the injected primitives
+  integrations/ decoders by encoding, mappers by vendor, controllers, the probe
+  pipeline/     collect → normalise → stream → enrich → evaluate → correlate
+  geo/          spatial maths, PostGIS queries, GeoJSON/TopoJSON, topology walks
   ai/           RAG, the agent loop, guardrails
   aws/          local stand-ins for six AWS services
-  data/         seeded generator, road corridors, scenarios, runbooks
-web/          the dispatch board. React + MapLibre, its own dependencies.
+  data/         seeded estate generator, scenarios, health trace, runbooks
+web/          the operations board. React + MapLibre, its own dependencies.
   auth/         sign-in: home-realm discovery, the token trigger, the verifier
   transport/    the boundary that lets the backend run in the browser tab
-infra/        Terraform. Read-only.
+infra/        Terraform. Read-only, apart from auth/.
 python/       the same designs as Lambdas, with real boto3 calls.
 docs/         how each part of the stack works.
 ```

@@ -13,7 +13,7 @@
  *     without it, every client that failed at the same moment retries at the
  *     same moment, and the thundering herd takes the vendor down again. It must
  *     be genuinely random in production and reproducible in a demo.
- *   - The synthetic data generator, which has to produce the same fleet every
+ *   - The synthetic data generator, which has to produce the same estate every
  *     run or the scenario tests cannot assert anything about it.
  *
  * mulberry32 is used rather than something stronger because the requirement is

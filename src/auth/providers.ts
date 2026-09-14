@@ -2,8 +2,8 @@
  * ---------------------------------------------------------------------------
  * Cognito identity federation: social + enterprise SSO
  * ---------------------------------------------------------------------------
- * A fleet platform needs social providers (Google, Apple) for owner-operators
- * AND enterprise SSO (SAML 2.0, OIDC) for the carriers. Cognito handles all of
+ * A estate platform needs social providers (Google, Apple) for small operators
+ * AND enterprise SSO (SAML 2.0, OIDC) for the customers. Cognito handles all of
  * them the same way: each is an "identity provider" attached to the user pool,
  * and each needs an ATTRIBUTE MAPPING from the provider's claim names to your
  * user pool's attributes.
@@ -94,14 +94,14 @@ export const IDENTITY_PROVIDERS: Array<SocialProvider | SamlProvider | OidcProvi
   {
     kind: 'saml',
     name: 'AcmeSAML',
-    metadataUrl: 'https://sso.acme-freight.example.com/FederationMetadata/2007-06/FederationMetadata.xml',
+    metadataUrl: 'https://sso.acme-networks.example.com/FederationMetadata/2007-06/FederationMetadata.xml',
     attributeMapping: {
       email: 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress',
-      'custom:tenantId': 'http://schemas.acme-freight.com/claims/carrier',
-      // The dispatcher's district, straight out of the corporate directory.
+      'custom:tenantId': 'http://schemas.acme-networks.com/claims/customer',
+      // The operator's site, straight out of the corporate directory.
       // Mapping it here means the board's scope is signed by Cognito rather
       // than asserted by the client.
-      'custom:district': 'http://schemas.acme-freight.com/claims/district',
+      'custom:site': 'http://schemas.acme-networks.com/claims/site',
     },
     notes:
       'SAML claim names are URIs - copy them exactly from the IdP metadata. ' +
@@ -111,12 +111,12 @@ export const IDENTITY_PROVIDERS: Array<SocialProvider | SamlProvider | OidcProvi
   {
     kind: 'oidc',
     name: 'OktaOIDC',
-    issuer: 'https://northstar-logistics.okta.com/oauth2/default',
+    issuer: 'https://northwind-utilities.okta.com/oauth2/default',
     scopes: ['openid', 'profile', 'email', 'groups'],
     attributeMapping: {
       email: 'email',
       'custom:tenantId': 'org_id',
-      'custom:district': 'district',
+      'custom:site': 'site',
       'cognito:groups': 'groups',
     },
     notes:
@@ -133,9 +133,9 @@ export const IDENTITY_PROVIDERS: Array<SocialProvider | SamlProvider | OidcProvi
  * and pass the result as `identity_provider` on the /authorize call.
  */
 const DOMAIN_TO_IDP: Record<string, string> = {
-  'acme-freight.com': 'AcmeSAML',
-  'acme-freight.co.uk': 'AcmeSAML',
-  'northstar-logistics.com': 'OktaOIDC',
+  'acme-networks.com': 'AcmeSAML',
+  'acme-networks.co.uk': 'AcmeSAML',
+  'northwind-utilities.com': 'OktaOIDC',
 };
 
 export function resolveIdpForEmail(email: string): string {
@@ -168,7 +168,7 @@ export function authorizeUrl(opts: {
   // The email typed on OUR page is only a discovery input; the hosted UI has
   // its own field, and the browser will happily autofill a different saved
   // account into it. Cognito then authenticates that one, the trigger finds no
-  // carrier for its domain, and the board rejects a token the person believes
+  // customer for its domain, and the board rejects a token the person believes
   // they requested for someone else entirely. `login_hint` prefills the field
   // so the two agree.
   if (opts.loginHint) params.set('login_hint', opts.loginHint);

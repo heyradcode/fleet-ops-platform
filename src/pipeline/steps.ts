@@ -1,62 +1,79 @@
 /**
  * ---------------------------------------------------------------------------
- * The ingest pipeline: collect -> normalise -> resolve -> evaluate -> detect
+ * The ingest pipeline: collect -> normalise -> stream -> enrich -> evaluate -> detect
  * ---------------------------------------------------------------------------
  * Each exported handler is one Lambda function. They are pure-ish and take
- * plain objects, which means you can unit test the whole pipeline without
- * AWS, without mocks, and without a deploy. That testability is the reason to
- * split them at all - a single "do everything" Lambda is cheaper to invoke and
- * far more expensive to own.
+ * plain objects, which means you can unit test the whole pipeline without AWS,
+ * without mocks, and without a deploy. That testability is the reason to split
+ * them at all - a single "do everything" Lambda is cheaper to invoke and far
+ * more expensive to own.
  *
- * THE STRUCTURAL DECISION THAT MATTERS: telemetry does not become events.
- * Only exceptions do. At full fleet scale this pipeline sees ~11,000 readings
- * per second; pushing those through a content-filtered event bus would be both
- * slow and ruinous. They go to a key-value overwrite and a batched rules pass
- * instead, and only the handful that turn into exceptions ever reach
- * EventBridge. See `publish()`.
+ * THE STRUCTURAL DECISION THAT MATTERS: observations do not become events.
+ * Only alarms and incidents do. A syslog-heavy estate pushes tens of thousands
+ * of records per second, and putting those through a content-filtered event bus
+ * would be both slow and ruinous. They go to a key-value overwrite and a
+ * batched rules pass instead, and only the handful that turn into alarms ever
+ * reach EventBridge. See `publish()`.
+ *
+ * THE SECOND DECISION: there are two collection paths and they are not
+ * symmetrical. Controllers are POLLED on a schedule and their round trip is
+ * owned by one connector. Devices PUSH into a collector that has already landed
+ * their traffic in S3 before this pipeline runs, so the push path starts from
+ * an object key rather than from a socket. Both converge on `Observation`, and
+ * nothing downstream can tell which way a record arrived except by reading its
+ * `plane` - which is exactly the property correlation depends on.
  */
 import type {
-  Driver, Exception, Incident, Principal, RawRecord, Telemetry,
+  Alarm, AlarmKind, DeviceState, Incident, Observation, ObservationPlane, Principal, Severity,
 } from '../platform/types.ts';
-import { connectorsFor, breakers } from '../integrations/registry.ts';
-import { withRetry, severityFor, type Connector } from '../integrations/connector.ts';
-import { archiveRaw, appendHistory } from '../aws/s3.ts';
-import { telemetryStream, type Batch, type BatchResult } from '../aws/kinesis.ts';
+import { isEvent, isFlow, isMetric } from '../platform/types.ts';
+import type { Inventory } from '../platform/inventory.ts';
+import type { Connector } from '../integrations/connector.ts';
+import type { RawBatch } from '../integrations/wire.ts';
+import { connectorsFor, breakers } from '../integrations/controller/registry.ts';
+import { withRetry } from '../integrations/connector.ts';
+import { normaliseBatch } from '../integrations/wire-registry.ts';
+import { probeEstate } from '../integrations/probe.ts';
+import { archiveRaw, appendHistory, appendFlows } from '../aws/s3.ts';
+import { observationStream, type Batch, type BatchResult } from '../aws/kinesis.ts';
 import { bus } from '../aws/eventbridge.ts';
-import { putTelemetry, putDrivers, putExceptions, putIncident } from '../platform/repository.ts';
-import { allDrivers, districtContaining, locationOf } from '../geo/driver-repository.ts';
-import { haversineKm } from '../geo/spatial.ts';
-import { nearestCorridor } from '../data/polylines.ts';
-import { exceptionId, incidentId, telemetryId } from '../platform/ids.ts';
+import {
+  putObservations, putDeviceStates, putAlarms, putIncident,
+} from '../platform/repository.ts';
+import {
+  allDeviceStates, getInventory, locationOf, isUpstreamOf, uplinkChain,
+  putDeviceStates as cacheDeviceStates,
+} from '../geo/device-repository.ts';
+import { alarmId, incidentId } from '../platform/ids.ts';
 import { nowIso } from '../platform/clock.ts';
 import { log } from '../platform/logger.ts';
 
 export type PipelineInput = { principal: Principal; since: string };
 
 // ---------------------------------------------------------------------------
-// 1. COLLECT - one invocation per connector (the Map state's iterator)
+// 1. COLLECT - the pull half, one invocation per controller (the Map iterator)
 // ---------------------------------------------------------------------------
 
 /**
- * Fetch one vendor and archive the raw payload.
+ * Poll one controller and archive the raw payload.
  *
  * Order matters: archive to S3 BEFORE normalising. If normalise() throws, the
  * data is already durable and you can replay it once the bug is fixed. Archive
  * afterwards and a mapping bug loses the data permanently.
  *
  * The retry wrapper and the circuit breaker are both here rather than in the
- * connector so that every vendor gets identical resilience behaviour.
+ * connector so that every controller gets identical resilience behaviour.
  */
 export async function collectOne(args: {
   connector: Connector;
   input: PipelineInput;
-}): Promise<{ raw: RawRecord; s3Uri: string } | { failed: string }> {
+}): Promise<{ raw: RawBatch; s3Uri: string } | { failed: string }> {
   const { connector, input } = args;
-  const breaker = breakers.get(connector.provider)!;
+  const breaker = breakers.get(connector.controller)!;
 
   try {
     const raw = await breaker.run(() =>
-      withRetry('fetch:' + connector.provider, () =>
+      withRetry('fetch:' + connector.controller, () =>
         connector.fetchRaw({
           tenantId: input.principal.tenantId,
           secrets: {},                       // Secrets Manager in production
@@ -65,45 +82,93 @@ export async function collectOne(args: {
       ),
     );
 
-    return { raw, s3Uri: archiveRaw(raw) };
+    return { raw, s3Uri: archiveRaw(raw, connector.controller) };
   } catch (err) {
-    // One dead vendor must not fail the run. Partial data beats no data on a
-    // dispatch board - a missing dashcam feed is survivable, a blank map is not.
+    // One dead controller must not fail the run. Partial data beats no data on
+    // an operations board - a missing Central feed is survivable, a blank map
+    // is not. And the device plane is still flowing regardless.
     const message = err instanceof Error ? err.message : String(err);
-    log.error('collector failed, continuing', { provider: connector.provider, error: message });
-    return { failed: connector.provider };
+    log.error('collector failed, continuing', { controller: connector.controller, error: message });
+    return { failed: connector.controller };
   }
 }
 
 // ---------------------------------------------------------------------------
-// 2. NORMALISE - vendor payload -> canonical Telemetry
+// 2. NORMALISE - vendor payloads -> canonical Observations
 // ---------------------------------------------------------------------------
 
-export function normaliseAll(
+/**
+ * The pull half: controller replies.
+ *
+ * A mapping bug in ONE controller must not lose the others. The raw payload is
+ * already in S3, so this is recoverable by replay.
+ */
+export function normaliseControllers(
   principal: Principal,
-  collected: Array<{ raw: RawRecord } | { failed: string }>,
-): Telemetry[] {
-  const readings: Telemetry[] = [];
+  inventory: Inventory,
+  collected: Array<{ raw: RawBatch } | { failed: string }>,
+): Observation[] {
+  const out: Observation[] = [];
   const available = connectorsFor(principal);
 
   for (const item of collected) {
     if (!('raw' in item)) continue;
 
-    const connector = available.find((c) => c.provider === item.raw.provider);
+    // Which connector produced this batch is recorded on the object key rather
+    // than in the payload, so it is matched back by collector name.
+    const connector = available.find((c) => item.raw.source.collector.startsWith(c.controller));
     if (!connector) continue;
 
     try {
-      readings.push(...connector.normalise(item.raw));
+      out.push(...connector.normalise(item.raw, inventory));
     } catch (err) {
-      // A mapping bug in ONE vendor must not lose the others. The raw payload
-      // is already in S3, so this is recoverable by replay.
-      log.error('normalise failed', {
-        provider: item.raw.provider,
+      log.error('controller normalise failed', {
+        controller: connector.controller,
         error: err instanceof Error ? err.message : String(err),
       });
     }
   }
-  return readings;
+  return out;
+}
+
+/**
+ * The push half: objects the collector already landed in S3.
+ *
+ * This is what an S3 event notification invokes. The decoder is chosen from the
+ * key's `encoding=` partition without opening the object; see wire-registry.ts
+ * for why that matters at 128MB per object.
+ */
+export function normalisePushed(
+  inventory: Inventory,
+  batches: RawBatch[],
+): { observations: Observation[]; unresolvedHosts: string[] } {
+  const observations: Observation[] = [];
+  const unresolved = new Set<string>();
+
+  for (const batch of batches) {
+    const result = normaliseBatch(batch, inventory);
+    observations.push(...result.observations);
+    for (const host of result.unresolvedHosts) unresolved.add(host);
+
+    // Unresolved hosts are the number that tells you the inventory has drifted,
+    // and an estate whose syslog silently fails to resolve looks exactly like a
+    // quiet estate. Logged at warn precisely so it is visible without anyone
+    // going looking.
+    if (result.stats.unresolvedHost > 0) {
+      log.warn('records dropped - device not in inventory', {
+        encoding: batch.encoding,
+        dropped: result.stats.unresolvedHost,
+        hosts: result.unresolvedHosts.join(', '),
+      });
+    }
+  }
+
+  return { observations, unresolvedHosts: [...unresolved] };
+}
+
+/** The external plane. Ours, not any vendor's. */
+export function collectProbes(principal: Principal, inventory: Inventory): Observation[] {
+  return probeEstate(principal, inventory);
 }
 
 // ---------------------------------------------------------------------------
@@ -111,17 +176,18 @@ export function normaliseAll(
 // ---------------------------------------------------------------------------
 
 /**
- * Put normalised readings on the stream, partitioned by driver.
+ * Put normalised observations on the stream, partitioned by device.
  *
- * Partitioning by driverId is the decision that matters: it gives ordering
- * where ordering is meaningful (one driver's pings must not overtake each
- * other) and parallelism everywhere else. Partitioning by district instead
- * would concentrate a large district's thousands of drivers onto one shard -
- * the classic hot-partition mistake.
+ * Partitioning by deviceId is the decision that matters: it gives ordering
+ * where ordering is meaningful (one device's link up and link down must not
+ * overtake each other, or the board shows a port permanently down that came
+ * back seconds later) and parallelism everywhere else. Partitioning by site
+ * instead would concentrate a large site's thousands of devices onto one shard
+ * - the classic hot-partition mistake.
  */
-export function enqueue(readings: Telemetry[]): void {
-  telemetryStream.putRecords(
-    readings.map((r) => ({ partitionKey: r.driverId, data: r })),
+export function enqueue(observations: Observation[]): void {
+  observationStream.putRecords(
+    observations.map((o) => ({ partitionKey: o.deviceId, data: o })),
   );
 }
 
@@ -130,8 +196,8 @@ export function enqueue(readings: Telemetry[]): void {
  *
  * This is the shape an event-source mapping delivers, and writing the handler
  * to take an array rather than a record is what makes the arithmetic work: at
- * 11,000 readings/sec, a batch size of 500 is ~22 invocations/sec instead of
- * 11,000.
+ * 30,000 records/sec, a batch size of 500 is ~60 invocations/sec instead of
+ * 30,000.
  *
  * It reports per-record failures (ReportBatchItemFailures) rather than throwing.
  * Throwing fails the whole batch, and a batch that always fails is a shard that
@@ -139,28 +205,33 @@ export function enqueue(readings: Telemetry[]): void {
  * metric hours later.
  */
 export function processBatch(
-  batch: Batch<Telemetry>,
-): { result: BatchResult; readings: Telemetry[] } {
-  const good: Telemetry[] = [];
+  batch: Batch<Observation>,
+): { result: BatchResult; observations: Observation[] } {
+  const good: Observation[] = [];
   const failedIds: string[] = [];
 
   for (const record of batch.records) {
-    const reading = record.data;
-    // A record that cannot be understood is isolated, not fatal. In production
-    // the parse happens here too, and this is where a malformed payload from a
-    // vendor's bad deploy gets quarantined instead of stopping the fleet.
-    if (!reading || typeof reading.driverId !== 'string' || !Number.isFinite(reading.value)) {
-      failedIds.push(record.partitionKey + ':' + String(reading?.telemetryId));
+    const obs = record.data;
+    // A record that cannot be understood is isolated, not fatal. This is where
+    // a malformed payload from a vendor's bad firmware release gets quarantined
+    // instead of stopping the estate.
+    if (!obs || typeof obs.deviceId !== 'string' || !obs.observedAt) {
+      failedIds.push(record.partitionKey + ':' + String(obs?.observationId));
       continue;
     }
-    good.push(reading);
+    good.push(obs);
   }
 
-  // The cold path. Append every reading to history regardless of whether it
-  // becomes an exception - history is the analytics and safety-review asset.
-  appendHistory(good);
+  // The cold path, and the fork that keeps the operational store affordable.
+  // Flows go to their OWN prefix in a different layout: they are the class
+  // whose volume would otherwise make storage scale with traffic rather than
+  // with incidents, and nothing operational ever reads them back.
+  const flows = good.filter(isFlow);
+  const operational = good.filter((o) => !isFlow(o));
+  appendFlows(flows);
+  appendHistory(operational);
 
-  return { result: { failedIds }, readings: good };
+  return { result: { failedIds }, observations: operational };
 }
 
 /**
@@ -169,23 +240,23 @@ export function processBatch(
  * In production these are two separate systems - a producer Lambda writes to
  * Kinesis, an event-source mapping invokes a consumer Lambda - and nothing
  * calls them in sequence like this. Doing so here is what makes the whole path
- * observable in one run: how many records, how many invocations, how many
- * bisections, and what ended up in the failure destination.
+ * observable in one run.
  */
 export async function streamAndCollect(
-  readings: Telemetry[],
+  observations: Observation[],
   options?: { batchSize?: number },
-): Promise<Telemetry[]> {
-  enqueue(readings);
+): Promise<Observation[]> {
+  enqueue(observations);
 
-  const collected: Telemetry[] = [];
-  await telemetryStream.consume(
-    (batch) => {
-      const { result, readings: good } = processBatch(batch as Batch<Telemetry>);
+  const collected: Observation[] = [];
+  await observationStream.consume(
+    (batch: Batch<unknown>) => {
+      const { result, observations: good } = processBatch(batch as Batch<Observation>);
       collected.push(...good);
       return result;
     },
-    (record) => record.partitionKey + ':' + String((record.data as Telemetry)?.telemetryId),
+    (record: { partitionKey: string; data: unknown }) =>
+      record.partitionKey + ':' + String((record.data as Observation)?.observationId),
     { batchSize: options?.batchSize ?? 500 },
   );
 
@@ -193,368 +264,484 @@ export async function streamAndCollect(
 }
 
 // ---------------------------------------------------------------------------
-// 3. RESOLVE TERRITORY - which district does this point fall in
+// 3. ENRICH - collapse duplicate witnesses, attach coordinates
 // ---------------------------------------------------------------------------
 
 /**
- * Devices know coordinates; they do not know your dispatch geography.
- * Resolution is the join, and doing it once at write time means every
- * downstream read - the board, the agent, the incident - gets district for free.
+ * Collapse events that describe the same real-world transition.
  *
- * At fleet scale this is the hot path, and it is why the two-phase spatial
- * check in geo/spatial.ts exists: a PostGIS round trip per ping is neither fast
- * nor cheap, so the bounding-box pre-filter runs in memory against geofences
- * cached at module scope, and only the survivors get an exact test.
+ * A Cisco link failure arrives as a syslog line AND an SNMP trap from the same
+ * agent, milliseconds apart, and %LINK and %LINEPROTO add a third and fourth.
+ * They share a `dedupeKey` precisely so this step can fold them into one record
+ * that remembers every witness.
+ *
+ * DOING THIS BEFORE THE RULES IS THE WHOLE POINT. Skip it and `evaluate` counts
+ * four observations as four pieces of evidence, `isCorroborated` sees a well
+ * corroborated alarm, and one unremarkable port flap pages somebody. The
+ * surviving record keeps the union of planes, which is what makes the
+ * corroboration check honest rather than inflated.
  */
-export function resolveTerritory(principal: Principal, readings: Telemetry[]): Telemetry[] {
-  return readings.map((t) => {
-    if (!t.location) return t;                    // an ELD reports a clock, not a place
-    const district = districtContaining(principal, t.location) ?? '';
-    return { ...t, location: { ...t.location, district } };
-  });
-}
+export function collapseDuplicates(observations: Observation[]): Observation[] {
+  const events = new Map<string, Observation>();
+  const out: Observation[] = [];
 
-/**
- * Derive route adherence: how far off the planned corridor is this driver?
- *
- * DERIVED, not reported. No vendor knows your route plan - they know where the
- * truck is. Distance from the corridor is something the platform computes, and
- * that is exactly why a route deviation can never be corroborated by "a second
- * telematics vendor": there is only one position, and only one derivation from
- * it. What corroborates a deviation is a DIFFERENT KIND of evidence - the
- * vehicle also being stationary, a missed stop - which is the rule
- * isCorroborated() implements.
- *
- * Emitted as its own reading rather than an attribute on the position, so it
- * gets its own threshold, its own severity, and its own place in the timeline.
- */
-export function deriveRouteAdherence(readings: Telemetry[]): Telemetry[] {
-  const derived: Telemetry[] = [];
+  for (const o of observations) {
+    if (!isEvent(o)) { out.push(o); continue; }
 
-  for (const t of readings) {
-    if (t.kind !== 'position' || !t.location) continue;
+    const existing = events.get(o.dedupeKey);
+    if (!existing || !isEvent(existing)) { events.set(o.dedupeKey, o); continue; }
 
-    const nearest = nearestCorridor(t.location, t.location.district);
-    if (!nearest) continue;
+    // Keep the earliest sighting - it is closest to when the thing happened -
+    // but remember that the other feed saw it too.
+    const keep = Date.parse(o.observedAt) < Date.parse(existing.observedAt) ? o : existing;
+    const other = keep === o ? existing : o;
 
-    derived.push({
-      ...t,
-      telemetryId: telemetryId(t.provider, t.sourceRef + ':adherence', t.observedAt),
-      kind: 'route-adherence',
-      value: nearest.metres,
-      unit: 'metres',
-      severity: severityFor('route-adherence', nearest.metres),
+    events.set(o.dedupeKey, {
+      ...keep,
       attributes: {
-        corridorId: nearest.corridor.corridorId,
-        corridorName: nearest.corridor.name,
+        ...keep.attributes,
+        witnesses: String(Number(keep.attributes.witnesses ?? 1) + 1),
+        alsoSeenBy: [String(keep.attributes.alsoSeenBy ?? ''), other.encoding]
+          .filter(Boolean).join(','),
       },
     });
   }
 
-  return [...readings, ...derived];
+  return [...out, ...events.values()];
 }
 
 /**
- * Fold the newest reading for each driver into the hot-state item.
+ * Attach the site's coordinates so an alarm can be put on a map.
+ *
+ * Devices know their own name, not their geography. Resolution is the join, and
+ * doing it once at write time means every downstream read - the board, the
+ * agent, the incident - gets a location for free.
+ */
+export function resolveLocations(principal: Principal, observations: Observation[]): Observation[] {
+  return observations.map((o) => {
+    if (o.siteId) return o;
+    const where = locationOf(principal, o.deviceId);
+    return where ? { ...o, siteId: where.siteId } : o;
+  });
+}
+
+/**
+ * Fold the newest observation for each device into the hot-state item.
  *
  * OVERWRITE, never append. This is the write that keeps the operational store
- * bounded by fleet size rather than by ping rate.
+ * bounded by estate size rather than by message rate.
  */
-export function foldDriverState(principal: Principal, readings: Telemetry[]): Driver[] {
-  const current = new Map(allDrivers(principal).map((d) => [d.driverId, { ...d }]));
+export function foldDeviceState(principal: Principal, observations: Observation[]): DeviceState[] {
+  const current = new Map(allDeviceStates(principal).map((d) => [d.deviceId, { ...d }]));
 
-  for (const t of readings) {
-    const driver = current.get(t.driverId);
-    if (!driver) continue;
+  // Down-ness has to be counted per interface, not accumulated: a port that
+  // goes down and comes back within one batch is not two failures, and a
+  // counter that only ever increments turns a flap into a permanent red light.
+  const linkState = new Map<string, Map<string, string>>();
 
-    if (t.kind === 'position' && t.location) {
-      driver.lon = t.location.lon;
-      driver.lat = t.location.lat;
-      driver.updatedAt = t.observedAt;
+  for (const o of observations) {
+    const device = current.get(o.deviceId);
+    if (!device) continue;
+
+    if (isMetric(o) && o.kind === 'cpu-utilisation') {
+      device.cpuUtilisation = o.value;
+      device.updatedAt = o.observedAt;
     }
-    if (t.kind === 'hos-remaining') {
-      driver.hosRemainingMinutes = t.value;
-      driver.updatedAt = t.observedAt;
+    if (isMetric(o) && o.kind === 'reachability') {
+      device.status = o.value === 0 ? 'down' : device.status === 'down' ? 'healthy' : device.status;
+      device.updatedAt = o.observedAt;
+    }
+    if (isEvent(o) && o.kind === 'link-state' && o.interfaceId) {
+      const ports = linkState.get(o.deviceId) ?? new Map<string, string>();
+      ports.set(o.interfaceId, o.state);
+      linkState.set(o.deviceId, ports);
+      device.updatedAt = o.observedAt;
     }
   }
-  return [...current.values()];
+
+  for (const [deviceId, ports] of linkState) {
+    const device = current.get(deviceId);
+    if (!device) continue;
+    device.interfacesDown = [...ports.values()].filter((s) => s !== 'up').length;
+    if (device.status !== 'down' && device.interfacesDown > 0) device.status = 'degraded';
+  }
+
+  const next = [...current.values()];
+  cacheDeviceStates(next);
+  return next;
 }
 
 // ---------------------------------------------------------------------------
-// 4. EVALUATE - deterministic rules, one driver at a time -> Exception[]
+// 4. EVALUATE - deterministic rules, one device at a time -> Alarm[]
 // ---------------------------------------------------------------------------
 
 /**
- * Rules, applied per driver. Deliberately NOT an LLM: what counts as an
- * exception must be identical every time and explainable to the person it
- * paged at 4am. The model's job starts afterwards.
+ * Rules, applied per device. Deliberately NOT an LLM: what counts as an alarm
+ * must be identical every time and explainable to the person it paged at 4am.
+ * The model's job starts afterwards.
  *
- * An Exception here is a CANDIDATE. It is not yet a page - corroboration and
+ * An Alarm here is a CANDIDATE. It is not yet a page - corroboration and
  * merging happen in detectIncidents().
  */
-export function evaluate(principal: Principal, readings: Telemetry[]): Exception[] {
-  const byDriver = new Map<string, Telemetry[]>();
-  for (const t of readings) {
-    const list = byDriver.get(t.driverId) ?? [];
-    list.push(t);
-    byDriver.set(t.driverId, list);
+export function evaluate(principal: Principal, observations: Observation[]): Alarm[] {
+  const byDevice = new Map<string, Observation[]>();
+  for (const o of observations) {
+    const list = byDevice.get(o.deviceId) ?? [];
+    list.push(o);
+    byDevice.set(o.deviceId, list);
   }
 
-  const exceptions: Exception[] = [];
+  const alarms: Alarm[] = [];
 
-  for (const [driverId, driverReadings] of byDriver) {
-    const located = driverReadings.find((t) => t.location);
-    const fallback = locationOf(principal, driverId);
-    const location = located?.location
-      ? { lon: located.location.lon, lat: located.location.lat }
-      : { lon: fallback?.lon ?? 0, lat: fallback?.lat ?? 0 };
-    const districtId = located?.location?.district || fallback?.district || '';
+  for (const [deviceId, deviceObs] of byDevice) {
+    const where = locationOf(principal, deviceId);
+    const location = { lon: where?.lon ?? 0, lat: where?.lat ?? 0 };
+    const siteId = where?.siteId ?? deviceObs.find((o) => o.siteId)?.siteId ?? '';
+    const uplink = uplinkChain(principal, deviceId)[0];
 
-    const raise = (
-      kind: Exception['kind'],
-      matching: Telemetry[],
-      severity: Exception['severity'],
-    ) => {
-      exceptions.push({
+    const raise = (kind: AlarmKind, matching: Observation[], severity: Severity) => {
+      alarms.push({
         tenantId: principal.tenantId,
-        exceptionId: exceptionId(),
-        driverId,
-        districtId,
+        alarmId: alarmId(),
+        deviceId,
+        interfaceId: matching.find((m) => m.interfaceId)?.interfaceId,
+        siteId,
         kind,
         severity,
-        telemetryIds: matching.map((t) => t.telemetryId),
-        // The DISTINCT vendors that saw it. This is the field detectIncidents
-        // corroborates on, so it has to be a set - two readings from one vendor
-        // is one witness, not two.
-        providers: [...new Set(matching.map((t) => t.provider))],
+        observationIds: matching.map((m) => m.observationId),
+        // The DISTINCT vantage points that saw it. This is the field
+        // detectIncidents corroborates on, so it has to be a set - two feeds
+        // from the same box is one witness, not two.
+        planes: [...new Set(matching.map((m) => m.plane))],
         location,
+        uplinkDeviceId: uplink,
         raisedAt: nowIso(),
       });
     };
 
-    const braking = driverReadings.filter((t) => t.kind === 'harsh-brake' && t.severity !== 'ok');
-    if (braking.length > 0) raise('harsh-braking', braking, worst(braking));
-
-    const idling = driverReadings.filter((t) => t.kind === 'idle' && t.severity !== 'ok');
-    if (idling.length > 0) raise('prolonged-idle', idling, worst(idling));
-
-    const hos = driverReadings.filter((t) => t.kind === 'hos-remaining' && t.severity !== 'ok');
-    if (hos.length > 0) raise('hos-risk', hos, worst(hos));
-
-    const deviation = driverReadings.filter(
-      (t) => t.kind === 'route-adherence' && t.severity !== 'ok',
+    const linksDown = deviceObs.filter(
+      (o) => isEvent(o) && o.kind === 'link-state' && o.state !== 'up',
     );
-    if (deviation.length > 0) raise('route-deviation', deviation, worst(deviation));
+    if (linksDown.length > 0) raise('link-down', linksDown, worst(linksDown));
 
-    const panic = driverReadings.filter((t) => t.kind === 'panic');
-    if (panic.length > 0) raise('panic', panic, 'critical');
+    const unreachable = deviceObs.filter(
+      (o) => isMetric(o) && o.kind === 'reachability' && o.value === 0,
+    );
+    if (unreachable.length > 0) raise('device-unreachable', unreachable, 'critical');
+
+    const adjacency = deviceObs.filter(
+      (o) => isEvent(o) && o.kind === 'protocol-adjacency' && o.state === 'lost',
+    );
+    if (adjacency.length > 0) raise('adjacency-lost', adjacency, worst(adjacency));
+
+    const errors = deviceObs.filter(
+      (o) => isMetric(o) && o.kind === 'interface-errors' && o.severity !== 'ok',
+    );
+    if (errors.length > 0) raise('interface-errors', errors, worst(errors));
+
+    const saturated = deviceObs.filter(
+      (o) => isMetric(o)
+        && (o.kind === 'cpu-utilisation' || o.kind === 'interface-utilisation')
+        && o.severity !== 'ok',
+    );
+    if (saturated.length > 0) raise('capacity-saturation', saturated, worst(saturated));
+
+    const optical = deviceObs.filter(
+      (o) => isMetric(o) && o.kind === 'optical-rx-power' && o.severity !== 'ok',
+    );
+    if (optical.length > 0) raise('optical-degradation', optical, worst(optical));
+
+    const power = deviceObs.filter(
+      (o) => isEvent(o) && o.kind === 'power-supply' && o.state === 'failed',
+    );
+    if (power.length > 0) raise('power-fault', power, 'critical');
   }
 
-  return exceptions;
+  return alarms;
 }
 
-function worst(readings: Telemetry[]): Exception['severity'] {
+function worst(observations: Observation[]): Severity {
   const rank = { ok: 0, info: 1, warning: 2, critical: 3 } as const;
-  return readings.reduce<Exception['severity']>(
-    (acc, t) => (rank[t.severity] > rank[acc] ? t.severity : acc),
+  return observations.reduce<Severity>(
+    (acc, o) => (rank[o.severity] > rank[acc] ? o.severity : acc),
     'ok',
   );
 }
 
 // ---------------------------------------------------------------------------
-// 5. DETECT - corroborate and merge exceptions into incidents
+// 5. DETECT - corroborate and merge alarms into incidents
 // ---------------------------------------------------------------------------
 
 /**
- * Exception kinds caused by WHERE the driver is.
+ * Alarm kinds caused by something UPSTREAM of the device reporting them.
  *
- * These merge with each other, because one external cause produces several of
- * them at once: a closed road makes drivers leave the corridor AND sit still.
- * Raising "route deviation affecting 14" and "prolonged idle affecting 14" as
- * two separate pages for one closure is the same double-paging the merge rule
- * exists to prevent, one level up.
+ * These merge with each other, because one failure produces all of them at
+ * once: a distribution switch dying makes its access switches unreachable, its
+ * links go down, and its routing adjacencies drop. Raising "link down affecting
+ * 40", "device unreachable affecting 40" and "adjacency lost affecting 12" as
+ * three separate pages for one dead switch is the same double-paging the merge
+ * rule exists to prevent, one level up.
  *
- * Everything else - hours-of-service, panic - is about that DRIVER rather than
- * that place, and never merges with anything. A driver running out of legal
- * hours next to a pile-up has two unrelated problems, and a dispatcher needs to
- * see both.
+ * Everything else - interface errors, saturation, optical degradation, a failed
+ * PSU - is about THAT box rather than its position in the tree, and never
+ * merges. A switch with a dying optic next to an unrelated outage has two
+ * separate problems, and an engineer needs to see both.
  */
-const LOCATION_CAUSED = new Set<Exception['kind']>([
-  'route-deviation', 'prolonged-idle', 'geofence-breach', 'harsh-braking',
+const TOPOLOGY_CAUSED = new Set<AlarmKind>([
+  'link-down', 'device-unreachable', 'adjacency-lost',
 ]);
 
-/** How close two exceptions must be to be the same event. */
-const MERGE_RADIUS_KM = 3;
-/** And how close in time. Drivers move; sites do not. */
-const MERGE_WINDOW_MS = 15 * 60 * 1000;
+/**
+ * How far apart in time two alarms may be and still be one event.
+ *
+ * TEN MINUTES, and the bound is chosen from how failures actually propagate. A
+ * dead distribution switch does not take its downstream estate offline
+ * instantly: access switches notice within seconds, their access points time
+ * out over a minute or two, and a routing adjacency can take three minutes to
+ * be declared dead. Anything under about five minutes splits one outage into
+ * several incidents that arrive as separate pages.
+ *
+ * An hour, the obvious safer-looking choice, is worse than it looks: a port
+ * that flaps every few minutes all afternoon would collapse into a single
+ * permanent incident, and the merge would stop being evidence of anything.
+ */
+const MERGE_WINDOW_MS = 10 * 60 * 1000;
 
 /**
- * Correlation, kept deliberately simple and explainable:
+ * Alarm kinds that do NOT need a second opinion.
  *
- *   a) an exception needs a SECOND INDEPENDENT SIGNAL before it becomes a
- *      page - either a second vendor, or a different kind of evidence for the
- *      same driver at the same moment. See isCorroborated() for why "a second
- *      vendor" alone is too narrow a rule.
- *   b) exceptions close in SPACE and TIME are one incident. A road closure
- *      affecting fourteen drivers is one page, not fourteen.
+ * A power supply failure is a hardware fault reported by the chassis itself. It
+ * is not a noisy inference from a sensor reading, there is nothing else in the
+ * estate positioned to see it, and waiting for corroboration before acting on
+ * it would be indefensible.
  *
- * WHY 3km AND 15 MINUTES - and why this is not the site model's 150km radius:
- * sites are cities and never move, so a wide radius merged genuinely related
- * outages. Drivers sit inside a district that is itself only ~50km across, so a
- * 150km radius would merge every exception in the district into one incident,
- * always - and the merge would stop being evidence of anything. The time window
- * is needed for the same reason: two drivers passing the same point an hour
- * apart are two events, not one.
- *
- * Panic and hours-of-service are exempt - see NEEDS_NO_CORROBORATION.
+ * NOTE HOW SHORT THIS LIST IS compared with the equivalent in a fleet platform,
+ * and why. A truck's hours-of-service clock has exactly one source and no
+ * second opinion is physically available, so the exemption carries real weight
+ * there. Here almost everything genuinely can be corroborated - the device, its
+ * controller and our own probe are three separate vantage points - so an
+ * exemption is close to an admission that we did not look.
  */
-/**
- * Exception kinds that do NOT need a second opinion.
- *
- * Both come from authoritative sources rather than noisy sensors:
- *
- *   panic     a person pressed a button. Waiting for corroboration before
- *             escalating that would be indefensible.
- *   hos-risk  the hours-of-service clock is a legally mandated, tamper-evident
- *             device, and a truck carries exactly one. There is no second ELD
- *             to agree with it, and treating a compliance record as a sensor
- *             reading to be double-checked misunderstands what it is.
- *
- * Everything else is a sensor and must be corroborated.
- */
-const NEEDS_NO_CORROBORATION = new Set<Exception['kind']>(['panic', 'hos-risk']);
+const NEEDS_NO_CORROBORATION = new Set<AlarmKind>(['power-fault']);
 
-/** How close two exceptions must be to count as evidence of the same thing. */
+/** How close two alarms must be to count as evidence of the same thing. */
 const CORROBORATION_WINDOW_MS = 5 * 60 * 1000;
 
 /**
- * Is there independent evidence for this exception?
+ * Is there independent evidence for this alarm?
  *
- * TWO INDEPENDENT SIGNALS, and it matters that "independent" is broader than
- * "a second vendor". A truck carries one GPS unit, so a route deviation can
- * never be witnessed by two telematics vendors - demanding that would make
- * route deviations permanently undetectable. What makes a deviation real is
- * different evidence pointing the same way:
+ * TWO INDEPENDENT WITNESSES, and it matters enormously that "independent" is
+ * not "two feeds". A Cisco switch losing a link emits a syslog line and an SNMP
+ * trap from the same agent on the same box; that is one witness talking twice,
+ * and a rule that counted feeds would treat every single port flap in the
+ * estate as fully corroborated.
  *
- *   deviation alone                       -> GPS drift. Noise.
- *   deviation + the vehicle is stationary -> something actually happened.
- *   hard braking on the accelerometer AND on the dashcam -> two devices agree.
+ * What counts:
  *
- * So: two distinct vendors, OR a second exception of a different kind for the
- * same driver at the same time. Either one is a second witness.
+ *   two PLANES        the device said so and its controller agrees, or our
+ *                     probe cannot reach it. Genuinely different vantage points.
+ *   the far end       the device at the OTHER end of the link raised the same
+ *                     alarm. Same plane, but a different box - and two switches
+ *                     agreeing a link is down is two witnesses by any reading.
+ *   different evidence a second alarm of a different kind on the same device in
+ *                     the same window. Saturation plus errors is a story;
+ *                     either alone is noise.
+ *
+ * The hardest case is the one the external plane exists for: a device that is
+ * powered off reports nothing, and its controller only knows it stopped
+ * checking in. Without a probe there is no second witness available at all,
+ * which is why `orbital-health` in the controller registry - a tenant with no
+ * cloud controller - is worth keeping in the fixtures.
  */
-function isCorroborated(exception: Exception, all: Exception[]): boolean {
-  if (NEEDS_NO_CORROBORATION.has(exception.kind)) return true;
+function isCorroborated(principal: Principal, alarm: Alarm, all: Alarm[]): boolean {
+  if (NEEDS_NO_CORROBORATION.has(alarm.kind)) return true;
 
-  // Two independent vendors saw the same thing.
-  if (exception.providers.length >= 2) return true;
+  // Two independent vantage points saw it.
+  if (alarm.planes.length >= 2) return true;
 
-  // Or a different kind of evidence for the same driver, at the same moment.
-  const at = Date.parse(exception.raisedAt);
-  return all.some((other) =>
-    other.exceptionId !== exception.exceptionId &&
-    other.driverId === exception.driverId &&
-    other.kind !== exception.kind &&
-    Math.abs(Date.parse(other.raisedAt) - at) <= CORROBORATION_WINDOW_MS);
+  const at = Date.parse(alarm.raisedAt);
+  const inWindow = (other: Alarm) =>
+    Math.abs(Date.parse(other.raisedAt) - at) <= CORROBORATION_WINDOW_MS;
+
+  return all.some((other) => {
+    if (other.alarmId === alarm.alarmId) return false;
+    if (!inWindow(other)) return false;
+
+    // The far end of the same link agreeing - a different box, so a different
+    // witness even though both are on the device plane.
+    if (other.kind === alarm.kind && other.deviceId !== alarm.deviceId) {
+      return isUpstreamOf(principal, other.deviceId, alarm.deviceId)
+        || isUpstreamOf(principal, alarm.deviceId, other.deviceId);
+    }
+
+    // Or a different kind of evidence for the same device, at the same moment.
+    return other.deviceId === alarm.deviceId && other.kind !== alarm.kind;
+  });
 }
 
-export function detectIncidents(principal: Principal, exceptions: Exception[]): Incident[] {
-  const corroborated = exceptions.filter((e) => isCorroborated(e, exceptions));
+/**
+ * Correlate alarms into incidents by ANCHORING each one at its cause.
+ *
+ * THE OBVIOUS ALGORITHM IS WRONG, and it is worth recording why, because it
+ * looks right and it half-works. Seeding a cluster from one alarm and pulling
+ * in everything "related" to it fails on the commonest case of all: two access
+ * switches under one dead distribution switch are not related TO EACH OTHER -
+ * neither sits above the other - so whichever one seeds first claims the
+ * distribution switch, and the rest each become their own page. A dead switch
+ * with three orphans below it produced three incidents instead of one.
+ *
+ * Geometry hides this. Two trucks near the same closure ARE near each other,
+ * so a radius-based merge is symmetric and transitive by construction and a
+ * seed-and-sweep works. Topology is a tree, and "is related to" across siblings
+ * only holds THROUGH their parent - so the cluster has to be defined by the
+ * parent, not discovered from a member.
+ *
+ * So: walk each alarm's uplink chain and anchor it at the HIGHEST device that
+ * is also alarming. Every device beneath one failure anchors on that failure,
+ * and one group falls out regardless of which alarm happened to be first in the
+ * list. Alarms about the box itself rather than its position anchor on
+ * themselves and never merge.
+ */
+export function detectIncidents(principal: Principal, alarms: Alarm[]): Incident[] {
+  const corroborated = alarms.filter((a) => isCorroborated(principal, a, alarms));
+
+  const topological = corroborated.filter((a) => TOPOLOGY_CAUSED.has(a.kind));
+  const alarmingDevices = new Set(topological.map((a) => a.deviceId));
+
+  /** The highest alarming device at or above this one. */
+  const anchorOf = (alarm: Alarm): string => {
+    if (!TOPOLOGY_CAUSED.has(alarm.kind)) return 'self:' + alarm.alarmId;
+
+    let anchor = alarm.deviceId;
+    // [self, parent, grandparent, ...] - the LAST alarming entry is the highest.
+    for (const deviceId of [alarm.deviceId, ...uplinkChain(principal, alarm.deviceId)]) {
+      if (alarmingDevices.has(deviceId)) anchor = deviceId;
+    }
+    return 'topo:' + alarm.siteId + ':' + anchor;
+  };
+
+  const groups = new Map<string, Alarm[]>();
+  for (const alarm of corroborated) {
+    const key = anchorOf(alarm);
+    const list = groups.get(key);
+    if (list) list.push(alarm); else groups.set(key, [alarm]);
+  }
 
   const incidents: Incident[] = [];
-  const claimed = new Set<string>();
 
-  for (const seed of corroborated) {
-    if (claimed.has(seed.exceptionId)) continue;
+  // Sorted so the output is deterministic: two runs of the demo must produce
+  // identical incident ordering, or a diff of the output is noise.
+  const ordered = [...groups.entries()].sort((a, b) =>
+    Date.parse(earliest(a[1])) - Date.parse(earliest(b[1])) || a[0].localeCompare(b[0]));
 
-    const seedTime = Date.parse(seed.raisedAt);
-    const mergeable = LOCATION_CAUSED.has(seed.kind);
+  for (const [key, group] of ordered) {
+    // Within one anchor, split on TIME. A port that flaps every few minutes all
+    // afternoon anchors identically each time, and collapsing a whole
+    // afternoon into one permanent incident would make the merge meaningless.
+    for (const run of splitByWindow(group)) {
+      const deviceIds = [...new Set(run.map((m) => m.deviceId))].sort();
+      const anchorDevice = key.startsWith('topo:') ? key.split(':')[2] : deviceIds[0];
+      const siteId = run[0].siteId;
 
-    const merged = corroborated.filter((e) => {
-      if (claimed.has(e.exceptionId)) return false;
-      if (e.exceptionId === seed.exceptionId) return true;
-      // A driver-specific exception is an incident of its own, always.
-      if (!mergeable || !LOCATION_CAUSED.has(e.kind)) return false;
-      if (e.districtId !== seed.districtId) return false;
-      if (Math.abs(Date.parse(e.raisedAt) - seedTime) > MERGE_WINDOW_MS) return false;
-      return haversineKm(seed.location, e.location) <= MERGE_RADIUS_KM;
-    });
-
-    for (const m of merged) claimed.add(m.exceptionId);
-
-    const driverIds = [...new Set(merged.map((m) => m.driverId))];
-    incidents.push({
-      tenantId: principal.tenantId,
-      incidentId: incidentId(),
-      // Name the incident after the most severe kind in it, not the seed - the
-      // seed is just whichever exception happened to be first in the list.
-      title: driverIds.length > 1
-        ? titleFor(dominantKind(merged)) + ' affecting ' + driverIds.length +
-          ' drivers in ' + seed.districtId
-        : titleFor(dominantKind(merged)) + ' - driver ' + driverIds[0],
-      severity: worstException(merged),
-      status: 'open',
-      districtId: seed.districtId,
-      driverIds,
-      exceptionIds: merged.map((m) => m.exceptionId),
-      openedAt: nowIso(),
-    });
+      incidents.push({
+        tenantId: principal.tenantId,
+        incidentId: incidentId(),
+        // Named after the most severe kind in the cluster, not the first alarm
+        // in it - the first is just whichever arrived soonest.
+        title: deviceIds.length > 1
+          ? titleFor(dominantKind(run)) + ' affecting ' + deviceIds.length +
+            ' devices at ' + siteId
+          : titleFor(dominantKind(run)) + ' - ' + deviceIds[0],
+        severity: worstAlarm(run),
+        status: 'open',
+        siteId,
+        deviceIds,
+        alarmIds: run.map((m) => m.alarmId),
+        // The anchor IS the root cause: it is the highest thing alarming, and
+        // everything else in the cluster hangs off it. This is the single most
+        // useful thing correlation can tell a human at 4am.
+        rootCauseDeviceId: anchorDevice,
+        openedAt: nowIso(),
+      });
+    }
   }
 
   return incidents;
 }
 
+function earliest(alarms: Alarm[]): string {
+  return alarms.reduce((acc, a) => (a.raisedAt < acc ? a.raisedAt : acc), alarms[0].raisedAt);
+}
+
+/**
+ * Split one anchor's alarms into time-contiguous runs.
+ *
+ * Contiguous rather than bucketed on purpose. Fixed buckets put two alarms a
+ * minute apart into different incidents whenever they straddle a boundary,
+ * which is arbitrary and shows up as an intermittent, unreproducible split.
+ */
+function splitByWindow(group: Alarm[]): Alarm[][] {
+  const sorted = [...group].sort((a, b) => Date.parse(a.raisedAt) - Date.parse(b.raisedAt));
+  const runs: Alarm[][] = [];
+  let run: Alarm[] = [sorted[0]];
+
+  for (let i = 1; i < sorted.length; i++) {
+    const gap = Date.parse(sorted[i].raisedAt) - Date.parse(run[run.length - 1].raisedAt);
+    if (gap <= MERGE_WINDOW_MS) run.push(sorted[i]);
+    else { runs.push(run); run = [sorted[i]]; }
+  }
+  runs.push(run);
+  return runs;
+}
+
 /**
  * Which kind names a merged incident.
  *
- * Ordered by how much it tells the dispatcher. "Route deviation affecting 14
- * drivers" is actionable; "prolonged idle affecting 14 drivers" describes the
- * same closure far less usefully.
+ * Ordered by how much it tells the engineer. "Device unreachable affecting 40"
+ * sends someone to the right rack; "link down affecting 40" describes the same
+ * outage far less usefully.
  */
-const KIND_PRIORITY: Exception['kind'][] = [
-  'panic', 'harsh-braking', 'route-deviation', 'geofence-breach',
-  'hos-risk', 'prolonged-idle',
+const KIND_PRIORITY: AlarmKind[] = [
+  'power-fault', 'device-unreachable', 'link-down', 'adjacency-lost',
+  'optical-degradation', 'interface-errors', 'capacity-saturation',
 ];
 
-function dominantKind(exceptions: Exception[]): Exception['kind'] {
+function dominantKind(alarms: Alarm[]): AlarmKind {
   for (const kind of KIND_PRIORITY) {
-    if (exceptions.some((e) => e.kind === kind)) return kind;
+    if (alarms.some((a) => a.kind === kind)) return kind;
   }
-  return exceptions[0].kind;
+  return alarms[0].kind;
 }
 
-function titleFor(kind: Exception['kind']): string {
-  const titles: Record<Exception['kind'], string> = {
-    'geofence-breach': 'Geofence breach',
-    'harsh-braking': 'Harsh braking',
-    'route-deviation': 'Route deviation',
-    'prolonged-idle': 'Prolonged idle',
-    'hos-risk': 'Hours-of-service risk',
-    'panic': 'PANIC ALERT',
+function titleFor(kind: AlarmKind): string {
+  const titles: Record<AlarmKind, string> = {
+    'link-down': 'Link down',
+    'device-unreachable': 'Device unreachable',
+    'adjacency-lost': 'Routing adjacency lost',
+    'interface-errors': 'Interface errors',
+    'capacity-saturation': 'Capacity saturation',
+    'optical-degradation': 'Optical degradation',
+    'power-fault': 'POWER FAULT',
   };
   return titles[kind];
 }
 
-function worstException(exceptions: Exception[]): Incident['severity'] {
+function worstAlarm(alarms: Alarm[]): Severity {
   const rank = { ok: 0, info: 1, warning: 2, critical: 3 } as const;
-  return exceptions.reduce<Incident['severity']>(
-    (acc, e) => (rank[e.severity] > rank[acc] ? e.severity : acc),
+  return alarms.reduce<Severity>(
+    (acc, a) => (rank[a.severity] > rank[acc] ? a.severity : acc),
     'ok',
   );
 }
 
-/** How far apart the affected drivers are - useful context for the responder. */
-export function incidentSpreadKm(principal: Principal, incident: Incident): number {
-  const points = incident.driverIds
-    .map((id) => locationOf(principal, id))
-    .filter((p): p is NonNullable<typeof p> => p !== undefined);
-  if (points.length < 2) return 0;
-
-  let maxKm = 0;
-  for (const a of points) {
-    for (const b of points) maxKm = Math.max(maxKm, haversineKm(a, b));
-  }
-  return Number(maxKm.toFixed(1));
+/** How deep the affected subtree runs - useful context for the responder. */
+export function incidentDepth(principal: Principal, incident: Incident): number {
+  if (!incident.rootCauseDeviceId) return 0;
+  return incident.deviceIds.reduce((deepest, deviceId) => {
+    const hops = uplinkChain(principal, deviceId)
+      .indexOf(incident.rootCauseDeviceId!);
+    return Math.max(deepest, hops + 1);
+  }, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -564,64 +751,71 @@ export function incidentSpreadKm(principal: Principal, incident: Incident): numb
 /**
  * Write first, publish second. If the event fires before the write lands, a
  * subscriber can query for the incident and get a 404 - a real and very
- * annoying race. (The rigorous fix is the transactional outbox pattern:
- * write the event into the same DynamoDB transaction and let a DynamoDB
- * Streams handler publish it. Worth naming if asked about exactly-once.)
+ * annoying race. (The rigorous fix is the transactional outbox pattern: write
+ * the event into the same DynamoDB transaction and let a DynamoDB Streams
+ * handler publish it. Worth naming if asked about exactly-once.)
  *
- * NOTHING HERE PUBLISHES TELEMETRY, and that is the load-bearing decision of
- * the whole architecture. Readings are persisted and folded into hot state;
- * only exceptions and incidents reach the bus. That is what keeps bus and
- * consumer cost proportional to *incidents* rather than to *fleet size*.
+ * NOTHING HERE PUBLISHES OBSERVATIONS, and that is the load-bearing decision of
+ * the whole architecture. Observations are persisted and folded into hot state;
+ * only alarms and incidents reach the bus. That is what keeps bus and consumer
+ * cost proportional to *incidents* rather than to *estate size*.
  */
 export async function publish(
   principal: Principal,
-  readings: Telemetry[],
-  drivers: Driver[],
-  exceptions: Exception[],
+  observations: Observation[],
+  devices: DeviceState[],
+  alarms: Alarm[],
   incidents: Incident[],
 ) {
-  putTelemetry(principal, readings);
-  putDrivers(principal, drivers);
-  putExceptions(principal, exceptions);
+  putObservations(principal, observations);
+  putDeviceStates(principal, devices);
+  putAlarms(principal, alarms);
   for (const incident of incidents) putIncident(principal, incident);
 
-  for (const exception of exceptions) {
+  for (const alarm of alarms) {
     await bus.putEvents({
-      source: 'meridian.evaluate',
-      detailType: 'ExceptionRaised',
+      source: 'netpulse.evaluate',
+      detailType: 'AlarmRaised',
       // Put the fields rules will filter on at the TOP level of detail -
       // EventBridge patterns match on structure, and deeply nested fields make
       // for fragile patterns.
       detail: {
-        tenantId: exception.tenantId,
-        exceptionId: exception.exceptionId,
-        driverId: exception.driverId,
-        districtId: exception.districtId,
-        kind: exception.kind,
-        severity: exception.severity,
+        tenantId: alarm.tenantId,
+        alarmId: alarm.alarmId,
+        deviceId: alarm.deviceId,
+        siteId: alarm.siteId,
+        kind: alarm.kind,
+        severity: alarm.severity,
       },
     });
   }
 
   for (const incident of incidents) {
     await bus.putEvents({
-      source: 'meridian.detect',
+      source: 'netpulse.detect',
       detailType: 'IncidentOpened',
       detail: {
         tenantId: incident.tenantId,
         incidentId: incident.incidentId,
         severity: incident.severity,
-        districtId: incident.districtId,
-        driverIds: incident.driverIds,
+        siteId: incident.siteId,
+        deviceIds: incident.deviceIds,
+        rootCauseDeviceId: incident.rootCauseDeviceId,
         title: incident.title,
       },
     });
   }
 
   return {
-    telemetry: readings.length,
-    drivers: drivers.length,
-    exceptions: exceptions.length,
+    observations: observations.length,
+    devices: devices.length,
+    alarms: alarms.length,
     incidents: incidents.length,
   };
 }
+
+/** Convenience for callers that just want the estate's inventory. */
+export { getInventory };
+
+/** Re-exported so the workflow and the demo agree on what a plane is. */
+export type { ObservationPlane };

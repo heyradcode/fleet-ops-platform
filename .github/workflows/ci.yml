@@ -71,7 +71,7 @@ jobs:
 
       # Nothing outside src/platform/runbook-loader.node.ts and the tests may
       # import a node: builtin. That invariant is what lets the whole backend
-      # run inside the browser for the dispatch board - and a bundler will not
+      # run inside the browser for the operations board - and a bundler will not
       # tell you it broke until the build fails, so check it here.
       - name: Browser-portability invariant
         run: |
@@ -104,7 +104,7 @@ jobs:
 
   # ---------------------------------------------------------------------------
   web:
-    name: dispatch board
+    name: operations board
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

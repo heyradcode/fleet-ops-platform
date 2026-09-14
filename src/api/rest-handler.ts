@@ -18,10 +18,10 @@
  */
 import type { Principal } from '../platform/types.ts';
 import { principalFromContext } from '../auth/authorizer.ts';
-import { recentTelemetry, openIncidents } from '../platform/repository.ts';
-import { allDrivers, driversWithinRadius, getDriver } from '../geo/driver-repository.ts';
-import { driversToFeatureCollection } from '../geo/geojson.ts';
-import { telemetryForDriver } from '../platform/repository.ts';
+import { recentObservations, openIncidents } from '../platform/repository.ts';
+import { allDeviceStates, deviceState, devicesWithinRadius } from '../geo/device-repository.ts';
+import { devicesToFeatureCollection } from '../geo/geojson.ts';
+import { observationsForDevice } from '../platform/repository.ts';
 import { mapPayload } from '../geo/mapbox.ts';
 import { encode as toTopoJson, compressionRatio } from '../geo/topojson.ts';
 import { askWithRag } from '../ai/bedrock-rag.ts';
@@ -31,7 +31,7 @@ import { random } from '../platform/random.ts';
 
 export type ApiGatewayEvent = {
   version: '2.0';
-  routeKey: string;               // e.g. "GET /drivers"
+  routeKey: string;               // e.g. "GET /devices"
   rawPath: string;
   headers: Record<string, string>;
   queryStringParameters?: Record<string, string>;
@@ -64,15 +64,15 @@ export async function handler(event: ApiGatewayEvent): Promise<ApiGatewayResult>
         // health check hits, and it must not depend on Cognito being up.
         return json(200, { status: 'ok', ts: new Date().toISOString() });
 
-      case 'GET /drivers':
-        return json(200, { items: allDrivers(principal) });
+      case 'GET /devices':
+        return json(200, { items: allDeviceStates(principal) });
 
-      case 'GET /drivers/{driverId}': {
-        const driver = getDriver(principal, String(event.pathParameters?.driverId));
-        return driver ? json(200, driver) : json(404, { message: 'driver not found' });
+      case 'GET /devices/{deviceId}': {
+        const device = deviceState(principal, String(event.pathParameters?.deviceId));
+        return device ? json(200, device) : json(404, { message: 'device not found' });
       }
 
-      case 'GET /drivers/near': {
+      case 'GET /devices/near': {
         // Validate at the edge. In a REST API you would attach a JSON Schema
         // request validator so API Gateway rejects this before your Lambda is
         // ever invoked - cheaper, and one less code path to test.
@@ -87,12 +87,12 @@ export async function handler(event: ApiGatewayEvent): Promise<ApiGatewayResult>
           return json(400, { message: 'coordinates out of range - did you swap lon and lat?' });
         }
 
-        return json(200, { items: driversWithinRadius(principal, { lon, lat }, radiusKm) });
+        return json(200, { items: devicesWithinRadius(principal, { lon, lat }, radiusKm) });
       }
 
-      case 'GET /telemetry': {
+      case 'GET /observations': {
         const limit = Math.min(Number(query.limit ?? 25), 100);
-        return json(200, { items: recentTelemetry(principal, limit) });
+        return json(200, { items: recentObservations(principal, limit) });
       }
 
       case 'GET /incidents':
@@ -104,9 +104,9 @@ export async function handler(event: ApiGatewayEvent): Promise<ApiGatewayResult>
        * parameter rather than Accept keeps it debuggable from a browser bar.
        */
       case 'GET /map': {
-        const fleet = allDrivers(principal);
-        const byDriver = new Map(fleet.map((d) => [d.driverId, telemetryForDriver(principal, d.driverId)]));
-        const fc = driversToFeatureCollection(fleet, byDriver);
+        const estate = allDeviceStates(principal);
+        const byDriver = new Map(estate.map((d) => [d.deviceId, observationsForDevice(principal, d.deviceId)]));
+        const fc = devicesToFeatureCollection(estate, byDriver);
 
         if (query.format === 'topojson') {
           const topo = toTopoJson(fc);
@@ -128,7 +128,7 @@ export async function handler(event: ApiGatewayEvent): Promise<ApiGatewayResult>
       }
 
       case 'POST /incidents': {
-        requireRole(principal, 'admin', 'dispatcher');
+        requireRole(principal, 'admin', 'operator');
         return json(501, { message: 'use the GraphQL openIncident mutation - it drives the subscription' });
       }
 

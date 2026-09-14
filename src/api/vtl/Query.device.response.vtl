@@ -1,0 +1,41 @@
+## ============================================================================
+## Query.device - response mapping
+## ============================================================================
+## Two things happen here, and both matter.
+##
+## 1. THE SCOPE CHECK. Tenancy was enforced by the partition key in the request
+##    template; this is the SECOND boundary, inside the tenant. A site-scoped
+##    operator reaching for another site's switch gets null, not the device.
+##
+## 2. THE KEY ATTRIBUTES ARE STRIPPED. PK/SK/GSI1PK/GSI1SK are storage detail.
+##    Returning them teaches clients the key layout, and a client that starts
+##    parsing `TENANT#acme#DEVICE` is a client that breaks the day the layout
+##    changes.
+## ============================================================================
+
+#if($ctx.error)
+  $util.error($ctx.error.message, $ctx.error.type)
+#end
+
+#if($util.isNullOrEmpty($ctx.result))
+  #return
+#end
+
+#set($callerSite = $ctx.identity.claims.get("custom:site"))
+
+## Absent means tenant-wide, which only an admin or engineer token carries -
+## the PreTokenGeneration trigger does not stamp a site for those roles. A
+## refusal returns null rather than an error, so "outside your scope" and "no
+## such device" look identical from outside. Distinguishing them would leak
+## the existence of devices the caller may not see.
+#if(!$util.isNullOrEmpty($callerSite) && $callerSite != $ctx.result.siteId)
+  #return
+#end
+
+$util.qr($ctx.result.remove("PK"))
+$util.qr($ctx.result.remove("SK"))
+$util.qr($ctx.result.remove("GSI1PK"))
+$util.qr($ctx.result.remove("GSI1SK"))
+$util.qr($ctx.result.remove("entity"))
+
+$util.toJson($ctx.result)

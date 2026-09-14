@@ -15,113 +15,119 @@
  * have a privileged back door into the data.
  */
 import { keys, mainTable, type Item } from '../aws/dynamodb.ts';
-import type { Driver, Exception, Incident, Principal, Severity, Telemetry } from './types.ts';
+import type {
+  Alarm, DeviceState, Incident, Observation, Principal, Severity,
+} from './types.ts';
 
 // ---------------------------------------------------------------------------
-// Drivers - THE HOT STATE
+// Devices - THE HOT STATE
 // ---------------------------------------------------------------------------
 
 /**
- * Overwrite one driver's current position and status.
+ * Overwrite one device's current condition.
  *
- * This is the write that happens 11,000 times a second at full fleet scale, and
- * the reason it stays affordable is that it OVERWRITES. The item count is
- * bounded by the number of drivers, not by the number of pings. History goes to
- * S3 via appendHistory() instead - see pipeline/steps.ts.
+ * This is the write that happens on every observation, and the reason it stays
+ * affordable is that it OVERWRITES. The item count is bounded by the number of
+ * devices, not by the number of syslog lines. History goes to S3 via
+ * appendHistory() instead - see pipeline/steps.ts.
  */
-export function putDriver(principal: Principal, driver: Driver): void {
+export function putDeviceState(principal: Principal, device: DeviceState): void {
   mainTable.put({
-    ...keys.driver(principal, driver.driverId),
-    ...keys.driverByDistrict(principal, driver.districtId, driver.driverId),
-    entity: 'Driver',
-    ...driver,
+    ...keys.device(principal, device.deviceId),
+    ...keys.deviceBySite(principal, device.siteId, device.deviceId),
+    entity: 'DeviceState',
+    ...device,
   });
 }
 
-export function putDrivers(principal: Principal, drivers: Driver[]): void {
-  mainTable.batchPut(drivers.map((d) => ({
-    ...keys.driver(principal, d.driverId),
-    ...keys.driverByDistrict(principal, d.districtId, d.driverId),
-    entity: 'Driver',
+export function putDeviceStates(principal: Principal, devices: DeviceState[]): void {
+  mainTable.batchPut(devices.map((d) => ({
+    ...keys.device(principal, d.deviceId),
+    ...keys.deviceBySite(principal, d.siteId, d.deviceId),
+    entity: 'DeviceState',
     ...d,
   })));
 }
 
 /**
- * "Every driver in this district" - one Query on GSI1.
+ * "Every device at this site" - one Query on GSI1.
  *
- * This is the dispatch board's first load. Without the GSI you would read the
- * whole fleet and filter, which costs read units proportional to your data
- * rather than to your answer - the difference between one district and 330,000
- * drivers.
+ * This is the operations board's first load. Without the GSI you would read the
+ * whole estate and filter, which costs read units proportional to your data
+ * rather than to your answer - the difference between one site and forty
+ * thousand devices.
  */
-export function driversInDistrict(principal: Principal, districtId: string): Driver[] {
+export function devicesAtSite(principal: Principal, siteId: string): DeviceState[] {
   return mainTable
-    .query({ index: 'GSI1', pk: 'TENANT#' + principal.tenantId + '#DISTRICT#' + districtId })
-    .map(strip<Driver>);
+    .query({ index: 'GSI1', pk: 'TENANT#' + principal.tenantId + '#SITE#' + siteId })
+    .map(strip<DeviceState>);
 }
 
 // ---------------------------------------------------------------------------
-// Telemetry
+// Observations
 // ---------------------------------------------------------------------------
 
-export function putTelemetry(principal: Principal, readings: Telemetry[]): void {
-  const items: Item[] = readings.map((t) => ({
-    ...keys.telemetry(principal, t.observedAt, t.telemetryId),
-    ...keys.telemetryByDriver(principal, t.driverId, t.observedAt),
-    entity: 'Telemetry',
-    ...t,
+export function putObservations(principal: Principal, observations: Observation[]): void {
+  const items: Item[] = observations.map((o) => ({
+    ...keys.observation(principal, o.observedAt, o.observationId),
+    ...keys.observationByDevice(principal, o.deviceId, o.observedAt),
+    entity: 'Observation',
+    ...o,
   }));
   mainTable.batchPut(items);
 }
 
-/** "Newest N readings for this tenant" - one Query, descending, limited. */
-export function recentTelemetry(principal: Principal, limit = 25): Telemetry[] {
+/** "Newest N observations for this tenant" - one Query, descending, limited. */
+export function recentObservations(principal: Principal, limit = 25): Observation[] {
   return mainTable
-    .query({ pk: 'TENANT#' + principal.tenantId + '#TELEMETRY', scanIndexForward: false, limit })
-    .map(strip<Telemetry>);
+    .query({ pk: 'TENANT#' + principal.tenantId + '#OBSERVATION', scanIndexForward: false, limit })
+    .map(strip<Observation>);
 }
 
 /**
- * "All readings for one driver" - this is what GSI1 is for. It is also the
- * query the agent runs when a dispatcher asks why a driver is behind.
+ * "Everything seen about one device" - this is what GSI1 is for. It is also the
+ * query the agent runs when an operator asks why a site went quiet.
+ *
+ * Note that this crosses PLANES as well as feeds: the device's own syslog, the
+ * controller's opinion of it, and our probe all come back together, which is
+ * exactly what makes the corroboration story legible to a human reading it.
  */
-export function telemetryForDriver(
+export function observationsForDevice(
   principal: Principal,
-  driverId: string,
+  deviceId: string,
   sinceIso?: string,
-): Telemetry[] {
+): Observation[] {
   return mainTable.query({
     index: 'GSI1',
-    pk: 'TENANT#' + principal.tenantId + '#DRIVER#' + driverId,
+    pk: 'TENANT#' + principal.tenantId + '#DEVICE#' + deviceId,
     skBetween: sinceIso ? [sinceIso, '9999'] : undefined,
     scanIndexForward: false,
-  }).map(strip<Telemetry>);
+  }).map(strip<Observation>);
 }
 
-export function telemetryBySeverity(principal: Principal, severity: Severity): Telemetry[] {
+export function observationsBySeverity(principal: Principal, severity: Severity): Observation[] {
   // A filter, applied after the Query. Filters do NOT reduce read cost - the
   // items are read and then discarded. Fine for a small partition; if this were
   // hot, severity would belong in a sort key or a sparse GSI instead.
-  return recentTelemetry(principal, 500).filter((t) => t.severity === severity);
+  return recentObservations(principal, 500).filter((o) => o.severity === severity);
 }
 
 // ---------------------------------------------------------------------------
-// Exceptions and incidents
+// Alarms and incidents
 // ---------------------------------------------------------------------------
 
-export function putExceptions(principal: Principal, exceptions: Exception[]): void {
-  mainTable.batchPut(exceptions.map((e) => ({
-    ...keys.exception(principal, e.raisedAt, e.exceptionId),
-    entity: 'Exception',
-    ...e,
+export function putAlarms(principal: Principal, alarms: Alarm[]): void {
+  mainTable.batchPut(alarms.map((a) => ({
+    ...keys.alarm(principal, a.raisedAt, a.alarmId),
+    entity: 'Alarm',
+    ...a,
   })));
 }
 
-export function recentExceptions(principal: Principal, limit = 50): Exception[] {
+export function recentAlarms(principal: Principal, limit = 50): Alarm[] {
   return mainTable
-    .query({ pk: 'TENANT#' + principal.tenantId + '#EXCEPTION', scanIndexForward: false, limit })
-    .map(strip<Exception>);
+    .query({ pk: 'TENANT#' + principal.tenantId + '#ALARM', scanIndexForward: false, limit })
+    .map(strip<Alarm>);
 }
 
 export function putIncident(principal: Principal, incident: Incident): void {

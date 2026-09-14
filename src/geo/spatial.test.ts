@@ -7,17 +7,37 @@ import assert from 'node:assert/strict';
 
 import { haversineKm, bboxAround, inBBox, pointInPolygon, centroid } from './spatial.ts';
 import { encode, decodePoint, compressionRatio } from './topojson.ts';
-import { driversToFeatureCollection, computeBBox, polygon } from './geojson.ts';
-import { driversWithinRadius, regionContaining } from './driver-repository.ts';
-import { US_SOUTH_REGION } from '../data/districts.ts';
+import { devicesToFeatureCollection, computeBBox, polygon } from './geojson.ts';
+import { devicesWithinRadius, regionContaining, loadEstate } from './device-repository.ts';
+import { US_SOUTH_REGION } from '../data/estate.ts';
 import { verifyToken, signDemoToken } from '../auth/cognito-jwt-verifier.ts';
+import type { DeviceState, Observation } from '../platform/types.ts';
 
 const principal = verifyToken(signDemoToken({
-  sub: 'u1', 'custom:tenantId': 'acme', 'cognito:groups': ['dispatcher'],
+  sub: 'u1', 'custom:tenantId': 'acme-networks', 'cognito:groups': ['engineer'],
 }));
 
 const DALLAS = { lon: -96.7970, lat: 32.7767 };
 const AUSTIN = { lon: -97.7431, lat: 30.2672 };
+
+loadEstate('acme-networks');
+
+function deviceAt(where: { lon: number; lat: number }): DeviceState {
+  return {
+    tenantId: 'acme-networks',
+    deviceId: 'dev-cor-dal01-01',
+    name: 'cor-dal01-01',
+    siteId: 'dal-01',
+    role: 'core',
+    vendor: 'cisco',
+    status: 'healthy',
+    lon: where.lon,
+    lat: where.lat,
+    cpuUtilisation: 22,
+    interfacesDown: 0,
+    updatedAt: '2026-09-08T14:30:00.000Z',
+  };
+}
 
 test('haversine matches the known Dallas-Austin distance', () => {
   const km = haversineKm(DALLAS, AUSTIN);
@@ -45,21 +65,21 @@ test('the bbox pre-filter never excludes a point that is genuinely in range', ()
   assert.ok(haversineKm(DALLAS, AUSTIN) < radiusKm);
 });
 
-test('driversWithinRadius returns results sorted by distance', () => {
-  const near = driversWithinRadius(principal, DALLAS, 1200);
-  const distances = near.map((d) => d.distanceKm);
+test('a radius search over the estate is really a search over SITES', () => {
+  const near = devicesWithinRadius(principal, DALLAS, 400);
+  const far = devicesWithinRadius(principal, DALLAS, 50);
 
-  assert.ok(near.length > 1);
-  assert.deepEqual(distances, [...distances].sort((a, b) => a - b));
+  // Dallas and Austin are both inside 400km; only Dallas is inside 50km.
+  assert.ok(new Set(near.map((d) => d.siteId)).size >= 2);
+  assert.deepEqual([...new Set(far.map((d) => d.siteId))], ['dal-01']);
 
-  // Assert the PROPERTY, not a particular driver. Which truck happens to be
-  // closest to the Dallas depot is an artifact of the generator's seed, and
-  // pinning it here would make an unrelated change to the fleet look like a
-  // spatial-query regression.
-  assert.ok(near.every((d) => d.distanceKm <= 1200));
+  // Assert the PROPERTY, not a particular device. Which box the generator put
+  // where is an artifact of the seed, and pinning it would make an unrelated
+  // change to the estate look like a spatial regression.
+  assert.ok(far.length > 1, 'a site contains many devices at one coordinate');
 });
 
-test('point-in-polygon puts only the southern districts in the us-south region', () => {
+test('point-in-polygon puts only the southern sites in the us-south region', () => {
   assert.ok(pointInPolygon(DALLAS, US_SOUTH_REGION));
   assert.ok(pointInPolygon(AUSTIN, US_SOUTH_REGION));
   assert.ok(!pointInPolygon({ lon: -87.6298, lat: 41.8781 }, US_SOUTH_REGION)); // Chicago
@@ -82,16 +102,9 @@ test('centroid of two points is their midpoint', () => {
 });
 
 test('TopoJSON round-trips within the quantisation error, and shrinks polygons', () => {
-  const fc = driversToFeatureCollection(
-    [{
-      tenantId: 'acme', driverId: 'drv-0142', name: 'A. Okafor', districtId: 'dal',
-      vehicleId: 'TRK-8891', status: 'driving', ...DALLAS, hosRemainingMinutes: 300,
-      updatedAt: '2026-09-08T14:30:00.000Z',
-    }],
-    new Map(),
-  );
+  const fc = devicesToFeatureCollection([deviceAt(DALLAS)], new Map());
   const topo = encode(fc);
-  const [lon, lat] = decodePoint(topo, topo.objects.drivers.geometries[0]);
+  const [lon, lat] = decodePoint(topo, topo.objects.devices.geometries[0]);
 
   // Lossy by design: quantisation trades sub-metre precision for bytes.
   assert.ok(Math.abs(lon - DALLAS.lon) < 0.01);
@@ -114,22 +127,44 @@ test('TopoJSON round-trips within the quantisation error, and shrinks polygons',
   assert.ok(compressionRatio(detailed, encode(detailed)) > 0.5);
 });
 
-test('FeatureCollection properties carry what MapBox styles read', () => {
-  const fc = driversToFeatureCollection(
-    [{
-      tenantId: 'acme', driverId: 'drv-0142', name: 'A. Okafor', districtId: 'dal',
-      vehicleId: 'TRK-8891', status: 'driving', ...DALLAS, hosRemainingMinutes: 30,
-      updatedAt: '2026-09-08T14:30:00.000Z',
-    }],
-    new Map([['drv-0142', [{
-      tenantId: 'acme', telemetryId: 't1', provider: 'samsara', domain: 'telematics',
-      kind: 'harsh-brake', driverId: 'drv-0142', sourceRef: 'x', value: 0.62, unit: 'g',
-      severity: 'critical', observedAt: '2026-09-08T14:30:00.000Z', attributes: {},
-    }]]]),
+test('FeatureCollection properties carry what MapLibre styles read', () => {
+  const critical: Observation = {
+    tenantId: 'acme-networks',
+    observationId: 'o1',
+    vendor: 'cisco',
+    platform: 'ios-xe',
+    encoding: 'syslog',
+    plane: 'device',
+    deviceId: 'dev-cor-dal01-01',
+    sourceRef: 'GigabitEthernet1/0/1',
+    observedAt: '2026-09-08T14:30:00.000Z',
+    receivedAt: '2026-09-08T14:30:00.000Z',
+    severity: 'critical',
+    attributes: {},
+    class: 'event',
+    kind: 'link-state',
+    state: 'down',
+    message: 'link down',
+    dedupeKey: 'k',
+  };
+
+  const fc = devicesToFeatureCollection(
+    [deviceAt(DALLAS)],
+    new Map([['dev-cor-dal01-01', [critical]]]),
   );
 
   const props = fc.features[0].properties as { severity: string; urgency: number };
   assert.equal(props.severity, 'critical'); // drives circle-color
   assert.ok(props.urgency > 0);             // drives circle-radius
+
+  // Role weighting: a core switch outranks an access point at the same
+  // severity, because the blast radius is not the same.
+  const accessPoint = { ...deviceAt(DALLAS), role: 'wireless-ap' as const };
+  const apFc = devicesToFeatureCollection(
+    [accessPoint], new Map([['dev-cor-dal01-01', [critical]]]),
+  );
+  const apProps = apFc.features[0].properties as { urgency: number };
+  assert.ok(props.urgency > apProps.urgency);
+
   assert.deepEqual(fc.features[0].geometry, { type: 'Point', coordinates: [DALLAS.lon, DALLAS.lat] });
 });

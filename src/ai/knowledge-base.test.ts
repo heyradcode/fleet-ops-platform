@@ -15,21 +15,21 @@ import { chunkMarkdown, KnowledgeBase } from './knowledge-base.ts';
 import { embed, cosineSimilarity } from '../aws/bedrock.ts';
 import { setRunbooks } from '../platform/runbook-loader.ts';
 
-const RUNBOOK = `# Runbook: Route deviation
+const RUNBOOK = `# Runbook: Link down
 
-A driver has left their planned corridor.
+An interface has stopped forwarding.
 
 ## Symptoms
 
-A \`route-adherence\` reading above 400m.
+A \`link-state\` event with state down.
 
 ## Triage
 
-Check the exception timeline for the driver.
+Check the alarm timeline for the device.
 `;
 
 test('chunks split on headings, and carry the titles INTO the embedded text', () => {
-  const chunks = chunkMarkdown(RUNBOOK, 'route-deviation.md', 'acme-freight');
+  const chunks = chunkMarkdown(RUNBOOK, 'link-down.md', 'acme-networks');
 
   assert.deepEqual(
     chunks.map((c) => c.metadata.section),
@@ -37,35 +37,35 @@ test('chunks split on headings, and carry the titles INTO the embedded text', ()
   );
 
   // The topic has to live inside the chunk, or a chunk about "check the
-  // timeline" matches nothing that mentions route deviation.
+  // timeline" matches nothing that mentions a link going down.
   const triage = chunks.find((c) => c.metadata.section === 'Triage');
   assert.ok(triage);
-  assert.match(triage.text, /Route deviation/);
+  assert.match(triage.text, /Link down/);
   assert.match(triage.text, /## Triage/);
 });
 
 test('retrieval is filtered by tenant, always', async () => {
-  setRunbooks([{ source: 'route-deviation.md', text: RUNBOOK }]);
+  setRunbooks([{ source: 'link-down.md', text: RUNBOOK }]);
 
   const kb = new KnowledgeBase();
-  await kb.ingestRunbooks('acme-freight');
+  await kb.ingestRunbooks('acme-networks');
   assert.ok(kb.size > 0);
 
-  const mine = await kb.retrieve('driver off route', { tenantId: 'acme-freight' });
+  const mine = await kb.retrieve('interface stopped forwarding', { tenantId: 'acme-networks' });
   assert.ok(mine.length > 0);
 
   // Another carrier's query reaches none of it. Not "ranked lower" - absent.
-  const theirs = await kb.retrieve('driver off route', { tenantId: 'northstar-logistics' });
+  const theirs = await kb.retrieve('interface stopped forwarding', { tenantId: 'northwind-utilities' });
   assert.equal(theirs.length, 0);
 });
 
 test('results come back ranked, best first', async () => {
-  setRunbooks([{ source: 'route-deviation.md', text: RUNBOOK }]);
+  setRunbooks([{ source: 'link-down.md', text: RUNBOOK }]);
   const kb = new KnowledgeBase();
-  await kb.ingestRunbooks('acme-freight');
+  await kb.ingestRunbooks('acme-networks');
 
-  const hits = await kb.retrieve('symptoms route adherence reading', {
-    tenantId: 'acme-freight',
+  const hits = await kb.retrieve('symptoms link state event down', {
+    tenantId: 'acme-networks',
     topK: 3,
   });
 
@@ -81,7 +81,7 @@ test('the offline embedder is lexical, NOT semantic - synonyms score zero', asyn
   // Titan should see these two assertions start to disagree with each other,
   // and should then change this test deliberately rather than delete it.
   const synonyms = cosineSimilarity(
-    await embed('driver left the planned route'),
+    await embed('interface stopped forwarding'),
     await embed('truck is off course'),
   );
   assert.equal(synonyms, 0, 'no shared tokens, so a hashed bag-of-words sees nothing');

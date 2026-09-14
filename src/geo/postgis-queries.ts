@@ -2,22 +2,28 @@
  * ---------------------------------------------------------------------------
  * PostGIS on Aurora Serverless v2 - the queries that matter
  * ---------------------------------------------------------------------------
- * Why Aurora at all when we have DynamoDB? Because DynamoDB cannot answer
- * "which drivers are within 75km of this point", and it cannot answer "which
- * territory contains this position" at all. Spatial indexes and ad-hoc joins
- * are exactly what a relational engine is for. The split:
+ * Why Aurora at all when we have DynamoDB? Two questions it simply cannot
+ * answer: "which sites are within 75km of this storm front", and - the one
+ * asked far more often - "everything beneath this switch". Spatial indexes and
+ * recursive joins are exactly what a relational engine is for. The split:
  *
- *   DynamoDB - hot, high-volume, known-key reads. Current driver position,
- *              telemetry, exceptions, incidents.
- *   Aurora   - reference data and anything spatial or analytical. Territories,
- *              geofences, route corridors, facilities.
+ *   DynamoDB - hot, high-volume, known-key reads. Current device status,
+ *              recent observations, alarms, incidents.
+ *   Aurora   - the inventory, the topology, and anything spatial or
+ *              analytical. Sites, devices, interfaces, aliases, regions.
  *
- * NOTE WHAT IS *NOT* HERE: the per-ping geofence check. At 11,000 readings a
- * second, a PostGIS round trip per ping is neither fast nor affordable. The hot
- * path does a bounding-box pre-filter in memory against geofences cached at
- * module scope (geo/spatial.ts), and PostGIS stays the source of truth for the
- * queries that are genuinely relational. Knowing which work belongs where is
- * most of the value of having both stores.
+ * THE TOPOLOGY IS THE STRONGER ARGUMENT of the two. "Everything beneath this
+ * switch" is one recursive CTE and one round trip; against a key-value store it
+ * is one query per tier, and correlation asks it for every alarm it considers.
+ * The spatial half is real but small - sites are the only thing with
+ * coordinates worth indexing, because every device at a site shares one point.
+ *
+ * NOTE WHAT IS *NOT* HERE: a per-record lookup on the ingest path. At tens of
+ * thousands of records a second, a round trip per syslog line costs more than
+ * the pipeline it feeds. The hot path resolves against an inventory snapshot
+ * held in memory (platform/inventory.ts), and Aurora stays the source of truth
+ * that snapshot is built from. Knowing which work belongs where is most of the
+ * value of having both stores.
  *
  * Connecting from Lambda - the one thing people get wrong: a Lambda per request
  * means a Postgres connection per request, and Postgres dies at a few hundred.
@@ -44,175 +50,128 @@
  */
 export const SQL = {
   /**
-   * "Which drivers are within N metres of this point?"
+   * Every device at one site, with its current status.
    *
-   * ST_DWithin is index-assisted: the planner uses the GiST index to do a bbox
-   * pre-filter, then refines. Writing `ST_Distance(...) < n` instead LOSES the
-   * index and forces a full scan - a very common and very expensive mistake.
+   * The workhorse. Note that this is a plain indexed lookup, not a spatial one:
+   * every device at a site shares the site's coordinate, so PostGIS has nothing
+   * to contribute here. Reaching for ST_DWithin because the table happens to
+   * have geometry in it is how a b-tree lookup becomes a sequential scan.
    */
-  driversWithinRadius: `
-    SELECT
-      driver_id,
-      name,
-      district_id,
-      status,
-      hos_remaining_minutes,
-      ST_X(location::geometry) AS lon,
-      ST_Y(location::geometry) AS lat,
-      ROUND((ST_Distance(location, ST_MakePoint($2, $3)::geography) / 1000)::numeric, 2) AS distance_km
-    FROM drivers
-    WHERE tenant_id = $1
-      AND ST_DWithin(location, ST_MakePoint($2, $3)::geography, $4)
-    ORDER BY location <-> ST_MakePoint($2, $3)::geography
-    LIMIT $5;
+  devicesAtSite: `
+    SELECT d.device_id, d.name, d.role, d.vendor, d.status,
+           s.name AS site_name, ST_X(s.location::geometry) AS lon,
+                                ST_Y(s.location::geometry) AS lat
+      FROM devices d
+      JOIN sites   s ON s.site_id = d.site_id AND s.tenant_id = d.tenant_id
+     WHERE d.tenant_id = $1
+       AND d.site_id   = $2
+     ORDER BY d.role, d.name;
   `,
 
   /**
-   * "Who could actually take this load?"
+   * Sites within a radius - the query that IS spatial.
    *
-   * The reassignment query, and the filters are not cosmetic: dispatching a
-   * driver with no legal hours left is an hours-of-service violation, so the
-   * platform must never surface the option. Enforcing that in SQL rather than
-   * in the caller means every path gets it right, including the AI agent's
-   * findNearbyAvailableDrivers tool.
+   * `ST_DWithin` on `geography` takes metres and uses the index; `ST_Distance`
+   * in a WHERE clause does not. The difference is a scan of every site versus
+   * an index lookup, and it is the single most common PostGIS mistake.
    */
-  availableDriversNear: `
-    SELECT
-      driver_id,
-      name,
-      status,
-      hos_remaining_minutes,
-      ROUND((ST_Distance(location, ST_MakePoint($2, $3)::geography) / 1000)::numeric, 2) AS distance_km
-    FROM drivers
-    WHERE tenant_id = $1
-      AND ST_DWithin(location, ST_MakePoint($2, $3)::geography, $4)
-      AND status <> 'off-duty'
-      AND hos_remaining_minutes > $5
-    ORDER BY location <-> ST_MakePoint($2, $3)::geography
-    LIMIT 20;
+  sitesWithinRadius: `
+    SELECT site_id, name, region, headcount,
+           ST_Distance(location, ST_MakePoint($2, $3)::geography) / 1000 AS distance_km
+      FROM sites
+     WHERE tenant_id = $1
+       AND ST_DWithin(location, ST_MakePoint($2, $3)::geography, $4 * 1000)
+     ORDER BY distance_km;
+  `,
+
+  /** Which service region contains this point. */
+  regionContainingPoint: `
+    SELECT region_id, name
+      FROM regions
+     WHERE tenant_id = $1
+       AND ST_Contains(boundary::geometry, ST_MakePoint($2, $3)::geometry)
+     LIMIT 1;
   `,
 
   /**
-   * "Which district contains this position?" - a spatial join.
-   * ST_Contains is the polygon-membership test; pointInPolygon in spatial.ts
-   * is the same algorithm, done in JS on the hot path.
+   * The topology walk, and the reason this is Postgres rather than DynamoDB.
+   *
+   * A recursive CTE answers "everything beneath this device" in one round trip.
+   * The same question against a key-value store is one query per level, which
+   * at four tiers is four sequential round trips per incident - and correlation
+   * asks it for every alarm it considers.
+   *
+   * CYCLE is not decoration. LLDP discovery genuinely produces loops when a
+   * link is mis-cabled, and without it this recurses until the connection dies.
    */
-  districtContainingPoint: `
-    SELECT t.district_id, t.name, t.region
-    FROM territories t
-    WHERE t.tenant_id = $1
-      AND ST_Contains(t.boundary, ST_SetSRID(ST_MakePoint($2, $3), 4326));
+  subtreeOfDevice: `
+    WITH RECURSIVE subtree AS (
+      SELECT device_id, uplink_device_id, name, role, 0 AS depth
+        FROM devices
+       WHERE tenant_id = $1 AND device_id = $2
+      UNION ALL
+      SELECT d.device_id, d.uplink_device_id, d.name, d.role, s.depth + 1
+        FROM devices d
+        JOIN subtree s ON d.uplink_device_id = s.device_id
+       WHERE d.tenant_id = $1 AND s.depth < 8
+    ) CYCLE device_id SET is_cycle USING path
+    SELECT device_id, name, role, depth
+      FROM subtree
+     WHERE depth > 0 AND NOT is_cycle
+     ORDER BY depth, name;
   `,
 
   /**
-   * "Which geofences is this driver inside?"
+   * Open incidents as GeoJSON, assembled by the database.
    *
-   * The authoritative version of the check the ingest path does in memory.
-   * Used for reconciliation and for anything that must be exactly right rather
-   * than merely fast - a compliance report, a customer dispute.
-   */
-  geofencesContainingPoint: `
-    SELECT g.geofence_id, g.name, g.kind
-    FROM geofences g
-    WHERE g.tenant_id = $1
-      AND ST_Contains(g.boundary, ST_SetSRID(ST_MakePoint($2, $3), 4326));
-  `,
-
-  /**
-   * "How far off the planned route is this driver?"
-   *
-   * ST_Distance against a LINESTRING geography returns metres to the nearest
-   * point on the line - which IS route adherence. This is the query
-   * deriveRouteAdherence() stands in for on the hot path.
-   *
-   * The `<->` operator in the ORDER BY is the KNN index operator: it uses the
-   * GiST index to find nearest neighbours without measuring every row.
-   */
-  distanceFromCorridor: `
-    SELECT
-      c.corridor_id,
-      c.name,
-      ROUND(ST_Distance(c.path, ST_MakePoint($2, $3)::geography)::numeric, 0) AS metres
-    FROM route_corridors c
-    WHERE c.tenant_id = $1
-      AND c.district_id = $4
-    ORDER BY c.path <-> ST_MakePoint($2, $3)::geography
-    LIMIT 1;
-  `,
-
-  /**
-   * The dispatch board's map payload, built straight to GeoJSON in the database.
-   *
-   * ST_AsGeoJSON + json_build_object means Postgres hands you a
-   * FeatureCollection the map can render with zero transformation in Lambda.
-   * Less code, less CPU-time billed, no chance of a coordinate-order bug.
+   * `ST_AsGeoJSON` plus `json_build_object` means the API hands the client a
+   * FeatureCollection without ever materialising one in application memory.
+   * For a few hundred incidents that is a nicety; for the observation history
+   * table it is the difference between a query and an out-of-memory kill.
    */
   incidentsAsGeoJSON: `
     SELECT json_build_object(
-      'type', 'FeatureCollection',
-      'features', COALESCE(json_agg(
-        json_build_object(
-          'type', 'Feature',
-          'id', d.driver_id,
-          'geometry', ST_AsGeoJSON(d.location)::json,
-          'properties', json_build_object(
-            'driverId',   d.driver_id,
-            'name',       d.name,
-            'districtId', d.district_id,
-            'status',     d.status,
-            'severity',   i.severity,
-            'title',      i.title,
-            'openedAt',   i.opened_at
-          )
-        )
-      ), '[]'::json)
-    ) AS geojson
-    FROM incidents i
-    JOIN drivers d ON d.driver_id = ANY(i.driver_ids) AND d.tenant_id = i.tenant_id
-    WHERE i.tenant_id = $1
-      AND i.status <> 'resolved';
+             'type', 'FeatureCollection',
+             'features', COALESCE(json_agg(
+               json_build_object(
+                 'type', 'Feature',
+                 'geometry', ST_AsGeoJSON(s.location::geometry)::json,
+                 'properties', json_build_object(
+                   'incidentId',  i.incident_id,
+                   'title',       i.title,
+                   'severity',    i.severity,
+                   'siteId',      i.site_id,
+                   'rootCause',   i.root_cause_device_id,
+                   'deviceCount', COALESCE(array_length(i.device_ids, 1), 0)
+                 )
+               )
+             ), '[]'::json)
+           ) AS feature_collection
+      FROM incidents i
+      JOIN sites s ON s.site_id = i.site_id AND s.tenant_id = i.tenant_id
+     WHERE i.tenant_id = $1
+       AND i.status <> 'resolved';
   `,
 
   /**
-   * Cluster nearby open incidents. ST_ClusterDBSCAN groups points that are
-   * within `eps` metres of at least `minpoints` neighbours - which is how you
-   * turn "fourteen alerts" into "one road closure" on a zoomed-out map.
+   * Interface error rates over a window, for the capacity view.
    *
-   * This is the same idea as the merge rule in pipeline/steps.ts, applied at
-   * render time rather than at detection time. Note the eps: metres, not
-   * kilometres, and sized to a road closure rather than to a district.
+   * Runs against the observation history in Aurora rather than DynamoDB: this
+   * is an analytical question over a time range, which is the access pattern a
+   * key-value store is worst at and a relational one is built for.
    */
-  clusterIncidents: `
-    SELECT
-      ST_ClusterDBSCAN(location::geometry, eps := $2, minpoints := 2) OVER () AS cluster_id,
-      driver_id,
-      ST_AsGeoJSON(location)::json AS geometry
-    FROM drivers
-    WHERE tenant_id = $1;
+  interfaceErrorRates: `
+    SELECT o.device_id, o.interface_id,
+           SUM(o.value)                       AS errors,
+           MAX(o.observed_at)                 AS last_seen,
+           COUNT(*)                           AS samples
+      FROM observations o
+     WHERE o.tenant_id   = $1
+       AND o.kind        = 'interface-errors'
+       AND o.observed_at > NOW() - ($2 || ' hours')::interval
+     GROUP BY o.device_id, o.interface_id
+    HAVING SUM(o.value) > 0
+     ORDER BY errors DESC
+     LIMIT 50;
   `,
 };
-
-/**
- * Aurora Data API call. No connection pool, no VPC networking headache, IAM
- * auth, and the credentials never leave Secrets Manager.
- *
- *   import { RDSDataClient, ExecuteStatementCommand } from '@aws-sdk/client-rds-data';
- *
- *   const res = await new RDSDataClient({}).send(new ExecuteStatementCommand({
- *     resourceArn: process.env.AURORA_CLUSTER_ARN,
- *     secretArn:   process.env.AURORA_SECRET_ARN,
- *     database:    'meridian',
- *     sql:         SQL.availableDriversNear,
- *     parameters: [
- *       { name: 'tenantId', value: { stringValue: principal.tenantId } },
- *       { name: 'lon',      value: { doubleValue: lon } },
- *       { name: 'lat',      value: { doubleValue: lat } },
- *       { name: 'radiusM',  value: { doubleValue: radiusKm * 1000 } },
- *       { name: 'minHos',   value: { longValue: 60 } },
- *     ],
- *   }));
- *
- * Note the tenantId is bound from the verified JWT, not from the request body.
- * Row-level security in schema.sql enforces the same boundary a second time, so
- * even a query that forgot its tenant filter returns nothing.
- */

@@ -1,25 +1,22 @@
 /**
- * Deterministic-ish id helpers.
+ * Id helpers for the things the platform creates itself.
  *
- * `telemetryId` is a CONTENT HASH, not a random uuid. That is deliberate: the
- * ingest pipeline is at-least-once (EventBridge and Step Functions both retry,
- * and a driver's device replays its offline buffer), so the same vendor reading
- * can arrive twice. Hashing provider+ref+timestamp makes the DynamoDB PutItem
- * naturally idempotent - the second write simply overwrites the first with
- * identical bytes instead of creating a duplicate.
+ * The id that matters most - `observationId` - is NOT here. It lives in
+ * types.ts next to the model, because it is a content hash rather than a
+ * generated value and the tuple it hashes is part of the model's contract. See
+ * the note there about at-least-once delivery and idempotent writes.
  *
- * This is one of the most commonly asked serverless design questions:
- *   "your Lambda is retried - how do you avoid double-processing?"
+ * What is left are ids for records the platform authors rather than receives.
+ * An alarm and an incident are our own conclusions, created exactly once at the
+ * moment we reach them, so a random id is correct and a content hash would be
+ * actively wrong - two genuinely separate outages that happen to look alike
+ * must not collide.
  *
- * The hash comes from `platform/crypto.ts` rather than `node:crypto` because
- * this runs in the browser too, and it has to stay synchronous. See that file.
+ * `uuid` comes from `platform/crypto.ts` rather than `node:crypto` because this
+ * runs in the browser too, and it has to stay synchronous. See that file.
  */
-import { sha256, uuid } from './crypto.ts';
+import { uuid } from './crypto.ts';
 
-export function telemetryId(provider: string, sourceRef: string, observedAt: string): string {
-  return sha256(provider + '|' + sourceRef + '|' + observedAt).slice(0, 24);
-}
-
-export function exceptionId(): string { return 'exc_' + uuid().slice(0, 8); }
+export function alarmId(): string { return 'alm_' + uuid().slice(0, 8); }
 export function incidentId(): string { return 'inc_' + uuid().slice(0, 8); }
 export function traceId(): string { return uuid().slice(0, 8); }

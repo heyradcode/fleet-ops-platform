@@ -13,8 +13,8 @@
  *   2. Make bad calls impossible via the schema - enums, required fields,
  *      bounded numbers. A constraint in the schema beats a plea in the prompt.
  *   3. Return errors as data (`is_error: true`), not exceptions. The model can
- *      read "driver drv-9999 not found - valid ids are drv-1000, ..." and fix
- *      its own call. A thrown exception just kills the turn.
+ *      read "device dev-9999 not found - valid ids are ..." and fix its own
+ *      call. A thrown exception just kills the turn.
  *
  * Every executor takes the caller's `Principal`. The agent has no ambient
  * authority: it can only see what the human who asked could already see, and
@@ -22,13 +22,15 @@
  */
 import type { ToolSpec } from '../aws/bedrock.ts';
 import type { Principal } from '../platform/types.ts';
-import { telemetryForDriver, openIncidents, putIncident } from '../platform/repository.ts';
-import { availableDriversNear, getDriver, locationOf } from '../geo/driver-repository.ts';
+import { observationsForDevice, openIncidents, putIncident } from '../platform/repository.ts';
+import {
+  allDeviceStates, deviceState, subtreeOf, uplinkChain,
+} from '../geo/device-repository.ts';
 import { knowledgeBase } from './knowledge-base.ts';
 import { incidentId } from '../platform/ids.ts';
 import { now, nowIso } from '../platform/clock.ts';
 import { canUseTool } from './guardrails.ts';
-import { HOS_THRESHOLD_MINUTES } from '../integrations/connector.ts';
+import { isEvent, isMetric } from '../platform/types.ts';
 
 export type ToolExecutor = (
   input: Record<string, unknown>,
@@ -36,6 +38,11 @@ export type ToolExecutor = (
 ) => Promise<string> | string;
 
 export type Tool = { spec: ToolSpec; execute: ToolExecutor };
+
+/** A few real ids, so an error message can teach the model to correct itself. */
+function sampleDeviceIds(principal: Principal): string {
+  return allDeviceStates(principal).slice(0, 5).map((d) => d.deviceId).join(', ');
+}
 
 export const TOOLS: Tool[] = [
   {
@@ -71,45 +78,53 @@ export const TOOLS: Tool[] = [
 
   {
     spec: {
-      name: 'queryDriverTelemetry',
+      name: 'queryDeviceObservations',
       description:
-        'Fetch recent normalised telemetry for one driver across every ' +
-        'connected system - GPS, hours-of-service and dashcam. Use this to ' +
-        'find out what is actually happening to a driver before explaining why.',
+        'Fetch recent normalised observations for one device across every feed ' +
+        'and every observation plane - what the device said about itself, what ' +
+        'its controller reported, and what our own probe found. Use this to ' +
+        'establish what is actually happening before explaining why.',
       input_schema: {
         type: 'object',
         properties: {
-          driverId: { type: 'string', description: 'Driver id such as drv-1000.' },
+          deviceId: { type: 'string', description: 'Device id such as dev-cor-dal01-01.' },
           hours: { type: 'number', description: 'How many hours back to look. 1-24.' },
         },
-        required: ['driverId', 'hours'],
+        required: ['deviceId', 'hours'],
       },
     },
     execute(input, principal) {
-      const driverId = String(input.driverId);
-      const driver = getDriver(principal, driverId);
-      if (!driver) {
+      const deviceId = String(input.deviceId);
+      const device = deviceState(principal, deviceId);
+      if (!device) {
         // Error-as-data: tell the model how to correct itself.
-        return 'ERROR: unknown driverId "' + driverId + '". Valid ids: drv-1000, ' +
-          'drv-1016, drv-1027, drv-1038, drv-1049.';
+        return 'ERROR: unknown deviceId "' + deviceId + '". Valid ids include: ' +
+          sampleDeviceIds(principal) + '.';
       }
 
       const since = new Date(now() - Number(input.hours ?? 6) * 3600_000).toISOString();
-      const readings = telemetryForDriver(principal, driverId, since);
-      if (readings.length === 0) return 'No telemetry for ' + driverId + ' in that window.';
+      const observations = observationsForDevice(principal, deviceId, since);
+      if (observations.length === 0) return 'No observations for ' + deviceId + ' in that window.';
 
-      const lines = readings
-        .filter((t) => t.severity !== 'ok')
-        .map((t) => [
-          t.severity.toUpperCase(), t.provider, t.kind,
-          t.value + t.unit, 'at ' + t.observedAt,
-        ].join(' | '));
+      const lines = observations
+        .filter((o) => o.severity !== 'ok')
+        .map((o) => {
+          const what = isMetric(o) ? o.kind + ' ' + o.value + o.unit
+            : isEvent(o) ? o.kind + ' ' + o.state
+              : 'flow';
+          // The PLANE is included deliberately. "Three records, all device
+          // plane" and "three records across three planes" are completely
+          // different evidence, and the model cannot tell them apart without it.
+          return [o.severity.toUpperCase(), o.plane, o.encoding, what, 'at ' + o.observedAt]
+            .join(' | ');
+        });
 
       return [
-        driver.name + ' (' + driverId + '), vehicle ' + driver.vehicleId +
-          ', district ' + driver.districtId + ', status ' + driver.status +
-          ', ' + driver.hosRemainingMinutes + ' minutes of drive time left.',
-        readings.length + ' readings, ' + lines.length + ' non-OK:',
+        device.name + ' (' + deviceId + '), ' + device.role + ' at ' + device.siteId +
+          ', vendor ' + device.vendor + ', status ' + device.status +
+          ', ' + device.interfacesDown + ' interfaces down, CPU ' +
+          device.cpuUtilisation + '%.',
+        observations.length + ' observations, ' + lines.length + ' non-OK:',
         ...lines.slice(0, 12),
       ].join('\n');
     },
@@ -117,37 +132,52 @@ export const TOOLS: Tool[] = [
 
   {
     spec: {
-      name: 'findNearbyAvailableDrivers',
+      name: 'traceTopology',
       description:
-        'Find drivers near a given driver who could take over their work, ' +
-        'using a spatial query. Use this when the user asks what their options ' +
-        'are for reassigning a load, or whether help is close by. Only returns ' +
-        'drivers with enough legal hours remaining to actually accept work.',
+        'Walk the network topology around a device: everything upstream of it ' +
+        'toward the site core, and everything downstream that depends on it. ' +
+        'Use this to decide whether a device is the CAUSE of an outage or ' +
+        'merely a symptom of one further up, and to size the blast radius ' +
+        'before recommending action.',
       input_schema: {
         type: 'object',
         properties: {
-          driverId: { type: 'string', description: 'The driver at the centre of the search.' },
-          radiusKm: { type: 'number', description: 'Search radius in kilometres, 1-500.' },
+          deviceId: { type: 'string', description: 'The device at the centre of the trace.' },
         },
-        required: ['driverId', 'radiusKm'],
+        required: ['deviceId'],
       },
     },
     execute(input, principal) {
-      const centre = locationOf(principal, String(input.driverId));
-      if (!centre) return 'ERROR: unknown driverId "' + input.driverId + '".';
-
-      const nearby = availableDriversNear(principal, centre, Number(input.radiusKm))
-        .filter((d) => d.driverId !== input.driverId);
-
-      if (nearby.length === 0) {
-        return 'No available drivers within ' + input.radiusKm + 'km. Everyone in ' +
-          'range is either off duty or short on hours, so reassignment is not an option.';
+      const deviceId = String(input.deviceId);
+      const device = deviceState(principal, deviceId);
+      if (!device) {
+        return 'ERROR: unknown deviceId "' + deviceId + '". Valid ids include: ' +
+          sampleDeviceIds(principal) + '.';
       }
 
-      return nearby
-        .map((d) => d.driverId + ' (' + d.name + ') ' + d.distanceKm + 'km, ' +
-          d.status + ', ' + d.hosRemainingMinutes + ' min left')
-        .join('\n');
+      const upstream = uplinkChain(principal, deviceId);
+      const downstream = subtreeOf(principal, deviceId);
+
+      const upLine = upstream.length === 0
+        ? deviceId + ' is a site root - nothing sits above it.'
+        : 'Upstream, nearest first: ' + upstream.join(' -> ');
+
+      const downLine = downstream.length === 0
+        ? 'Nothing depends on ' + deviceId + '; a failure here affects only itself.'
+        : downstream.length + ' devices depend on ' + deviceId + ': ' +
+          downstream.slice(0, 12).join(', ') +
+          (downstream.length > 12 ? ' (and ' + (downstream.length - 12) + ' more)' : '');
+
+      return [
+        device.name + ' is a ' + device.role + ' device at ' + device.siteId + '.',
+        upLine,
+        downLine,
+        // The advice the topology exists to give.
+        upstream.length > 0
+          ? 'If devices upstream are also alarming, investigate those FIRST - ' +
+            'this device is probably a symptom.'
+          : 'A failure here is the root of its subtree.',
+      ].join('\n');
     },
   },
 
@@ -164,7 +194,8 @@ export const TOOLS: Tool[] = [
       if (incidents.length === 0) return 'No open incidents.';
       return incidents
         .map((i) => i.incidentId + ' [' + i.severity + '] ' + i.title +
-          ' drivers=' + i.driverIds.join(','))
+          ' devices=' + i.deviceIds.length +
+          (i.rootCauseDeviceId ? ' rootCause=' + i.rootCauseDeviceId : ''))
         .join('\n');
     },
   },
@@ -181,10 +212,10 @@ export const TOOLS: Tool[] = [
         properties: {
           title: { type: 'string', description: 'Short imperative summary.' },
           severity: { type: 'string', enum: ['info', 'warning', 'critical'] },
-          districtId: { type: 'string', description: 'District the incident is in.' },
-          driverIds: { type: 'array', items: { type: 'string' }, description: 'Affected driver ids.' },
+          siteId: { type: 'string', description: 'Site the incident is at.' },
+          deviceIds: { type: 'array', items: { type: 'string' }, description: 'Affected device ids.' },
         },
-        required: ['title', 'severity', 'districtId', 'driverIds'],
+        required: ['title', 'severity', 'siteId', 'deviceIds'],
       },
     },
     execute(input, principal) {
@@ -199,9 +230,9 @@ export const TOOLS: Tool[] = [
         title: String(input.title),
         severity: input.severity as 'info' | 'warning' | 'critical',
         status: 'open' as const,
-        districtId: String(input.districtId),
-        driverIds: (input.driverIds as string[]) ?? [],
-        exceptionIds: [],
+        siteId: String(input.siteId),
+        deviceIds: (input.deviceIds as string[]) ?? [],
+        alarmIds: [],
         openedAt: nowIso(),
       };
       putIncident(principal, incident);
@@ -211,43 +242,51 @@ export const TOOLS: Tool[] = [
 
   {
     spec: {
-      name: 'reassignDriver',
+      name: 'suppressAlarm',
       description:
-        'Reassign a load from one driver to another. This changes the dispatch ' +
-        'plan and notifies both drivers, so use it only when the user explicitly ' +
-        'asks to reassign, and only after confirming the replacement has enough ' +
-        'legal hours with findNearbyAvailableDrivers.',
+        'Suppress alarms for one device during planned maintenance, so a known ' +
+        'outage does not page anyone. Use only when the user explicitly asks to ' +
+        'suppress, and only after confirming with traceTopology that nothing ' +
+        'important depends on the device.',
       input_schema: {
         type: 'object',
         properties: {
-          fromDriverId: { type: 'string', description: 'Driver giving up the load.' },
-          toDriverId: { type: 'string', description: 'Driver taking it on.' },
+          deviceId: { type: 'string', description: 'Device to suppress.' },
+          minutes: { type: 'number', description: 'How long, 5-480.' },
           reason: { type: 'string', description: 'Why, for the audit record.' },
         },
-        required: ['fromDriverId', 'toDriverId', 'reason'],
+        required: ['deviceId', 'minutes', 'reason'],
       },
     },
     execute(input, principal) {
       // The write tool that proves the rule: the agent acts with the CALLER's
-      // authority, never the platform's. A safety reviewer can read everything
-      // here and still not be able to move a load.
-      const verdict = canUseTool(principal, 'reassignDriver');
+      // authority, never the platform's. An engineer can read everything here
+      // and still not be able to silence a page.
+      const verdict = canUseTool(principal, 'suppressAlarm');
       if (!verdict.allowed) return 'ERROR: ' + verdict.reason;
 
-      const to = getDriver(principal, String(input.toDriverId));
-      if (!to) return 'ERROR: unknown toDriverId "' + input.toDriverId + '".';
-      if (to.hosRemainingMinutes <= HOS_THRESHOLD_MINUTES.warning) {
-        // Refusing here rather than in the prompt matters: dispatching a driver
-        // with no legal hours left is a regulatory violation, and it must be
-        // impossible regardless of how convincingly the model was asked.
-        return 'ERROR: ' + to.driverId + ' has only ' + to.hosRemainingMinutes +
-          ' minutes of drive time left and cannot accept a reassignment.';
+      const deviceId = String(input.deviceId);
+      const device = deviceState(principal, deviceId);
+      if (!device) return 'ERROR: unknown deviceId "' + deviceId + '".';
+
+      const dependents = subtreeOf(principal, deviceId);
+      if (dependents.length > 0) {
+        // Refusing here rather than in the prompt matters. Suppressing a device
+        // that others depend on does not hide one alarm - it hides the ROOT
+        // CAUSE of everything beneath it, so the cascade still pages but now
+        // names a symptom. That must be impossible regardless of how
+        // convincingly the model was asked.
+        return 'ERROR: ' + deviceId + ' is a ' + device.role + ' device with ' +
+          dependents.length + ' devices depending on it. Suppressing it would ' +
+          'hide the root cause of any outage beneath it. Suppress the ' +
+          'dependent devices individually, or take a maintenance window for ' +
+          'the whole subtree.';
       }
 
-      // In production this starts the Step Functions reassignment saga:
-      // validate -> check eligibility -> notify both -> update plan -> emit.
-      return 'Reassignment queued: ' + input.fromDriverId + ' -> ' + input.toDriverId +
-        ' (' + input.reason + ').';
+      // In production this writes a suppression window to DynamoDB with a TTL,
+      // which the publish step consults before putting anything on the bus.
+      return 'Suppressed ' + deviceId + ' for ' + input.minutes + ' minutes (' +
+        input.reason + ').';
     },
   },
 ];
@@ -260,5 +299,5 @@ export function toolByName(name: string): Tool | undefined {
 
 /** Read-only subset, for an "explain but do not act" agent profile. */
 export const READ_ONLY_TOOL_SPECS: ToolSpec[] = TOOLS
-  .filter((t) => t.spec.name !== 'openIncident' && t.spec.name !== 'reassignDriver')
+  .filter((t) => t.spec.name !== 'openIncident' && t.spec.name !== 'suppressAlarm')
   .map((t) => t.spec);

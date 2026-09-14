@@ -67,9 +67,9 @@ export function cognitoConfigured(): boolean {
   return Boolean(e?.VITE_COGNITO_DOMAIN && e?.VITE_COGNITO_CLIENT_ID && e?.VITE_COGNITO_ISSUER);
 }
 
-const VERIFIER_KEY = 'meridian.pkce.verifier';
-const STATE_KEY = 'meridian.pkce.state';
-const TOKEN_KEY = 'meridian.session';
+const VERIFIER_KEY = 'netpulse.pkce.verifier';
+const STATE_KEY = 'netpulse.pkce.state';
+const TOKEN_KEY = 'netpulse.session';
 
 /**
  * The PKCE pair.
@@ -145,9 +145,9 @@ export const cognitoAuth: AuthProvider = {
 
   async signUp(_request: SignUpRequest) {
     // Cognito's own sign-up API is deliberately not wired here. Self-serve
-    // registration into a fleet platform would let anyone create a tenant next
-    // to real carriers; onboarding runs through the operations team.
-    throw new AuthError('Carrier onboarding is handled by the operations team.');
+    // registration into a estate platform would let anyone create a tenant next
+    // to real customers; onboarding runs through the operations team.
+    throw new AuthError('Customer onboarding is handled by the operations team.');
   },
 
   signOut() {
@@ -223,7 +223,7 @@ export async function completeRedirect(searchParams: URLSearchParams): Promise<S
   } catch (err) {
     // A token that verified everything EXCEPT tenancy is the fail-closed path,
     // not a broken sign-in: Cognito authenticated them, the trigger found no
-    // carrier for their domain, and the board must not show a fleet. Say that
+    // customer for their domain, and the board must not show a estate. Say that
     // in words the person can act on - "JWT rejected: no tenant claim" is
     // true and tells them nothing.
     // Not named, deliberately. A Cognito ACCESS token carries no `email`
@@ -234,7 +234,7 @@ export async function completeRedirect(searchParams: URLSearchParams): Promise<S
       && err.message.includes('no tenant claim');
     throw new AuthError(
       noTenant
-        ? 'That account is not registered with a carrier. Sign in with your ' +
+        ? 'That account is not registered with a customer. Sign in with your ' +
           'work email, or ask your operations lead to add you.'
         : 'Sign-in could not be verified. Start again.',
     );

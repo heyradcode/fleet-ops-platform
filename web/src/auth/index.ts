@@ -15,7 +15,7 @@
  *
  * The board's district scope used to be hardcoded. Signing in makes it come
  * from a token that was actually minted and actually verified, so "a Dallas
- * dispatcher cannot see Phoenix" becomes something you do by logging in as one
+ * operator cannot see Phoenix" becomes something you do by logging in as one
  * rather than something the code claims. The seven verification checks, the
  * signed district claim and the fail-closed unknown domain are all real and all
  * exercised.
@@ -45,8 +45,8 @@ export type Realm = {
 
 export type SignUpRequest = {
   email: string;
-  carrierName: string;
-  fleetSize: string;
+  customerName: string;
+  estateSize: string;
 };
 
 export type AuthProvider = {
@@ -75,9 +75,9 @@ export type AuthProvider = {
   signInWith(provider: string, email: string): Promise<Session>;
 
   /**
-   * Register a carrier.
+   * Register a customer.
    *
-   * Not self-serve access: see the note in local.ts on why a fleet platform
+   * Not self-serve access: see the note in local.ts on why a estate platform
    * onboards organisations rather than individuals.
    */
   signUp(request: SignUpRequest): Promise<{ message: string }>;

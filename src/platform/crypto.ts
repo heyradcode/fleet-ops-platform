@@ -5,14 +5,14 @@
  * WHY THIS FILE EXISTS, and it is not "to avoid a dependency":
  *
  * The whole platform runs in two places. On AWS it is a Lambda. In the demo it
- * also runs *inside the browser* - the dispatch board imports the resolvers
+ * also runs *inside the browser* - the operations board imports the resolvers
  * directly, because `src/aws/` is already a set of local stand-ins. There is no
  * server in the middle.
  *
  * `node:crypto` does not exist in a browser, and the browser's replacement
  * (`crypto.subtle.digest`) is ASYNC ONLY. That matters more than it sounds:
  *
- *     telemetryId = sha256(provider | sourceRef | observedAt)
+ *     observationId = sha256(vendor | deviceId | sourceRef | kind | observedAt)
  *
  * is computed on the synchronous normalisation path, inside a `.map()`. Making
  * it async would turn every function between the connector and the repository
@@ -103,7 +103,7 @@ export function sha256Bytes(bytes: Uint8Array): Uint8Array {
  * A random UUID.
  *
  * Deliberately NOT used for anything that must be idempotent - see `ids.ts` for
- * why telemetry ids are content hashes instead.
+ * why observations ids are content hashes instead.
  *
  * Injectable for the same reason as the clock: without it, every demo run
  * produces different incident ids and S3 keys, so two runs cannot be diffed.

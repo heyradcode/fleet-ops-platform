@@ -22,40 +22,51 @@
  * because there is nothing behind it to reach for.
  */
 import type {
-  Driver, Exception, Incident, Principal, Territory,
+  Alarm, DeviceState, DeviceStatus, Incident, Principal, Site,
 } from '../../../src/platform/types.ts';
 import type { AgentResult } from '../../../src/ai/agent-core.ts';
 
 export type BoardSnapshot = {
-  drivers: Driver[];
-  territories: Territory[];
-  exceptions: Exception[];
+  devices: DeviceState[];
+  sites: Site[];
+  alarms: Alarm[];
   incidents: Incident[];
-  /** Exceptions that fired but were not corroborated, so nobody was paged. */
-  heldBack: Exception[];
+  /** Alarms that fired but were not corroborated, so nobody was paged. */
+  heldBack: Alarm[];
 };
 
-/** One tick of position replay: where every in-scope driver is at that instant. */
-export type PositionTick = {
+/**
+ * One frame of the recorded half-hour.
+ *
+ * NOT positions. A fleet board replays movement; nothing in a network moves,
+ * and a replay of switch coordinates would be sixty identical frames. What
+ * changes here is STATE - specifically the shape of a failure spreading down
+ * the topology - which is the thing an operator needs to see to believe that
+ * forty devices going quiet is one event and not forty.
+ */
+export type HealthTick = {
   at: string;
   index: number;
   total: number;
-  positions: Map<string, { lon: number; lat: number; status: Driver['status'] }>;
+  /** Only devices that are not healthy. Absent means healthy. */
+  status: Map<string, DeviceStatus>;
+  /** The device the cascade starts at, for the board to label. */
+  rootCauseDeviceId: string;
 };
 
 export type Transport = {
   /**
-   * Position replay.
+   * Health replay.
    *
    * NOT a subscription in the AppSync sense, and the distinction is the
-   * architecture: positions are never pushed. A real client polls them on a
-   * coarse tick, because 11,000 readings/sec of pin movement is not information
-   * a human can use. This replays the seeded 30-minute trace on that cadence,
-   * which is what makes the board a product rather than a screenshot.
+   * architecture: observations are never pushed. A real client polls state on a
+   * coarse tick, because tens of thousands of records a second is not
+   * information a human can use. This replays the recorded half-hour on that
+   * cadence, which is what makes the board a product rather than a screenshot.
    */
-  subscribePositions(
-    districtId: string | undefined,
-    onTick: (tick: PositionTick) => void,
+  subscribeHealth(
+    siteId: string | undefined,
+    onTick: (tick: HealthTick) => void,
   ): () => void;
 
   /**
@@ -64,38 +75,39 @@ export type Transport = {
    * A real GraphQL client does exactly this once, in an auth link, and every
    * request afterwards carries the token. Here it means the board reasons
    * about the principal the VERIFIER produced rather than one the UI made up -
-   * which is what turns "a Dallas dispatcher cannot see Phoenix" from a claim
+   * which is what turns "a Dallas operator cannot see Phoenix" from a claim
    * into something you demonstrate by signing in as one.
    */
   setSession(principal: Principal | null): void;
 
-  /** The board's first load, scoped to the caller's district. */
-  loadBoard(districtId?: string): Promise<BoardSnapshot>;
+  /** The board's first load, scoped to the caller's site. */
+  loadBoard(siteId?: string): Promise<BoardSnapshot>;
 
   /**
-   * The live feed. Only EXCEPTIONS arrive here - never telemetry.
+   * The live feed. Only ALARMS arrive here - never observations.
    *
-   * At 330k drivers, positions are ~11,000 readings/sec: more than a human can
-   * use and more than anyone would pay to push. Pins refresh on a coarse poll;
-   * this channel carries the handful of things that need a decision.
+   * A syslog-heavy estate produces tens of thousands of records a second: more
+   * than a human can use and more than anyone would pay to push. Device tiles
+   * refresh on a coarse poll; this channel carries the handful of things that
+   * need a decision.
    */
-  subscribeExceptions(
-    districtId: string | undefined,
-    onException: (exception: Exception) => void,
+  subscribeAlarms(
+    siteId: string | undefined,
+    onAlarm: (alarm: Alarm) => void,
   ): () => void;
 
   /**
-   * Ask the assistant about a driver.
+   * Ask the assistant about a device.
    *
-   * No district argument, deliberately. The agent's reach comes from the
-   * caller's TOKEN and the tools enforce it; a view parameter here would look
-   * like it narrowed something when it could not.
+   * No site argument, deliberately. The agent's reach comes from the caller's
+   * TOKEN and the tools enforce it; a view parameter here would look like it
+   * narrowed something when it could not.
    *
-   * Returns the full trace, not just the answer, and that is a product
-   * decision as much as a debugging one: a dispatcher trusts a recommendation
-   * far more when they can see which tools produced it and which runbook it
-   * came from. An answer with no visible provenance is a thing to be sceptical
-   * of, and it should be.
+   * Returns the full trace, not just the answer, and that is a product decision
+   * as much as a debugging one: an operator trusts a recommendation far more
+   * when they can see which tools produced it and which runbook it came from.
+   * An answer with no visible provenance is a thing to be sceptical of, and it
+   * should be.
    */
   askAgent(question: string): Promise<AgentResult>;
 };
@@ -103,4 +115,4 @@ export type Transport = {
 export type { AgentResult };
 export type { AgentTrace } from '../../../src/ai/agent-core.ts';
 
-export type { Driver, Exception, Incident, Principal, Territory };
+export type { Alarm, DeviceState, DeviceStatus, Incident, Principal, Site };

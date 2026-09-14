@@ -2,10 +2,10 @@
  * ---------------------------------------------------------------------------
  * Kinesis Data Streams - the shape of high-volume ingest
  * ---------------------------------------------------------------------------
- * This is the piece that makes the fleet numbers work, so it is worth being
+ * This is the piece that makes the estate numbers work, so it is worth being
  * precise about what it buys.
  *
- *   330,000 drivers / one ping per 30s  ~=  11,000 records/sec sustained
+ *   40,000 devices, syslog + traps + polls  ~=  11,000 records/sec sustained
  *                                            ~950 million/day
  *   peak (shift change, wave dispatch)   ~=  3-5x that
  *
@@ -14,9 +14,9 @@
  *   1. You cannot invoke a Lambda per record. An event-source mapping delivers
  *      BATCHES, and the batch size is the difference between ~11,000
  *      invocations/sec and a few dozen.
- *   2. Ordering only matters *per driver*. Partitioning by driverId gives you
+ *   2. Ordering only matters *per device*. Partitioning by deviceId gives you
  *      ordering where it matters and parallelism everywhere else. Ordering the
- *      whole stream would serialise the entire fleet through one shard.
+ *      whole stream would serialise the entire estate through one shard.
  *   3. One bad record must not stall a shard. This is the classic Kinesis
  *      outage: a single unparseable record fails the batch, the batch retries
  *      forever, the shard stops advancing, and the backlog grows silently until
@@ -29,13 +29,13 @@
  *   await client.send(new PutRecordsCommand({
  *     StreamName, Records: rs.map(r => ({
  *       Data: Buffer.from(JSON.stringify(r)),
- *       PartitionKey: r.driverId,          // ordering per driver
+ *       PartitionKey: r.deviceId,          // ordering per device
  *     })),
  *   }));
  *
  * and, in Terraform, the event-source mapping that actually does the batching:
  *
- *   resource "aws_lambda_event_source_mapping" "telemetry" {
+ *   resource "aws_lambda_event_source_mapping" "observations" {
  *     batch_size                         = 500
  *     maximum_batching_window_in_seconds = 5
  *     parallelization_factor             = 4     # more concurrency per shard
@@ -50,7 +50,7 @@ import { sha256 } from '../platform/crypto.ts';
 import { env } from '../platform/env.ts';
 
 export type StreamRecord<T> = {
-  /** What Kinesis orders and shards on. Here: the driver id. */
+  /** What Kinesis orders and shards on. Here: the device id. */
   partitionKey: string;
   data: T;
 };
@@ -110,7 +110,7 @@ export class KinesisStream<T> {
    * Which shard a partition key lands on.
    *
    * Kinesis hashes the partition key (MD5) onto the shard's hash-key range.
-   * Any stable hash demonstrates the property that matters: the same driver
+   * Any stable hash demonstrates the property that matters: the same device
    * always lands on the same shard, so their records stay ordered.
    */
   shardFor(partitionKey: string): string {
@@ -241,6 +241,6 @@ export class KinesisStream<T> {
   }
 }
 
-export const telemetryStream = new KinesisStream<unknown>(
-  env('KINESIS_STREAM_NAME', 'meridian-dev-telemetry'),
+export const observationStream = new KinesisStream<unknown>(
+  env('KINESIS_STREAM_NAME', 'netpulse-dev-observations'),
 );

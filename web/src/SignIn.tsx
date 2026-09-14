@@ -5,7 +5,7 @@
  * The interesting part of this screen is HOME-REALM DISCOVERY, and it is real.
  *
  * Type a work email and the platform decides which identity provider handles
- * it - SAML for one carrier, OIDC for another, the Cognito-native pool for
+ * it - SAML for one customer, OIDC for another, the Cognito-native pool for
  * everyone else - before any password is asked for. That is what enterprise
  * users expect ("type your work email, land on your own login page"), Cognito
  * has no built-in support for it, and the lookup is the same one the hosted UI
@@ -13,7 +13,7 @@
  *
  * Signing in is also what makes the board's scope real rather than asserted.
  * The district on the token comes from the PreTokenGeneration trigger, and a
- * Dallas dispatcher genuinely cannot reach Phoenix because their token does not
+ * Dallas operator genuinely cannot reach Phoenix because their token does not
  * say they may.
  */
 import { useEffect, useMemo, useState } from 'react';
@@ -68,7 +68,7 @@ export function SignIn({ onSignedIn, initialError = null }: Props) {
         <header className="gate-brand">
           <span className="brand-mark">MERIDIAN</span>
           <span className="brand-rule" />
-          <span className="gate-tag">Fleet dispatch</span>
+          <span className="gate-tag">Estate dispatch</span>
         </header>
 
         {mode === 'in' ? (
@@ -80,7 +80,7 @@ export function SignIn({ onSignedIn, initialError = null }: Props) {
                   className="field-input mono"
                   type="email"
                   autoComplete="username"
-                  placeholder="you@carrier.com"
+                  placeholder="you@customer.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   autoFocus
@@ -115,7 +115,7 @@ export function SignIn({ onSignedIn, initialError = null }: Props) {
             </form>
 
             <p className="gate-switch">
-              New carrier?{' '}
+              New customer?{' '}
               <button className="linkish" onClick={() => { setMode('up'); setError(null); }}>
                 Register
               </button>
@@ -132,18 +132,18 @@ export function SignIn({ onSignedIn, initialError = null }: Props) {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Register a carrier — not "create an account".
+ * Register a customer — not "create an account".
  *
- * A dispatcher does not sign themselves up for a fleet platform. The carrier is
+ * A operator does not sign themselves up for a estate platform. The customer is
  * onboarded, its SSO is configured, and its people arrive through it. Modelling
  * that honestly is more useful than a generic signup form, and it is also the
  * only truthful thing this screen can do: nothing here can grant access to
- * anyone's fleet data.
+ * anyone's estate data.
  */
 function SignUp({ onBack }: { onBack(): void }) {
   const [email, setEmail] = useState('');
-  const [carrierName, setCarrierName] = useState('');
-  const [fleetSize, setFleetSize] = useState('50-500');
+  const [customerName, setCarrierName] = useState('');
+  const [estateSize, setEstateSize] = useState('50-500');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
@@ -153,7 +153,7 @@ function SignUp({ onBack }: { onBack(): void }) {
     setBusy(true);
     setError(null);
     try {
-      const { message } = await auth.signUp({ email: email.trim(), carrierName, fleetSize });
+      const { message } = await auth.signUp({ email: email.trim(), customerName, estateSize });
       setDone(message);
     } catch (err) {
       setError(err instanceof AuthError ? err.message : 'Registration failed. Try again.');
@@ -174,17 +174,17 @@ function SignUp({ onBack }: { onBack(): void }) {
 
   return (
     <form className="gate-form" onSubmit={submit}>
-      <h2 className="panel-h">Register a carrier</h2>
+      <h2 className="panel-h">Register a customer</h2>
       <p className="gate-note">
         Onboarding creates the tenant, seeds its districts, and points your
         domain at your identity provider. An operations lead confirms it.
       </p>
 
       <label className="field">
-        <span className="field-label">Carrier name</span>
+        <span className="field-label">Customer name</span>
         <input
           className="field-input"
-          value={carrierName}
+          value={customerName}
           onChange={(e) => setCarrierName(e.target.value)}
           placeholder="Acme Freight"
           required
@@ -198,17 +198,17 @@ function SignUp({ onBack }: { onBack(): void }) {
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          placeholder="ops@carrier.com"
+          placeholder="ops@customer.com"
           required
         />
       </label>
 
       <label className="field">
-        <span className="field-label">Fleet size</span>
+        <span className="field-label">Estate size</span>
         <select
           className="field-input"
-          value={fleetSize}
-          onChange={(e) => setFleetSize(e.target.value)}
+          value={estateSize}
+          onChange={(e) => setEstateSize(e.target.value)}
         >
           <option>Under 50</option>
           <option>50-500</option>

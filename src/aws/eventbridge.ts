@@ -12,12 +12,12 @@
  *
  * Real call:
  *   await client.send(new PutEventsCommand({ Entries: [{
- *     EventBusName, Source: 'meridian.ingest', DetailType: 'SignalNormalized',
+ *     EventBusName, Source: 'netpulse.ingest', DetailType: 'SignalNormalized',
  *     Detail: JSON.stringify(detail),
  *   }]}));
  *
  * Real rule (see infra/terraform/modules/eventbridge):
- *   { "source": ["meridian.detect"],
+ *   { "source": ["netpulse.detect"],
  *     "detail-type": ["IncidentOpened"],
  *     "detail": { "severity": ["critical"] } }
  */
@@ -26,7 +26,7 @@ import { nowIso } from '../platform/clock.ts';
 import { env } from '../platform/env.ts';
 
 export type EventEnvelope<T = unknown> = {
-  source: string;          // e.g. 'meridian.ingest'
+  source: string;          // e.g. 'netpulse.ingest'
   detailType: string;      // e.g. 'SignalNormalized'
   detail: T;
   time: string;
@@ -55,7 +55,7 @@ export class EventBus {
    * Every envelope that reached the bus.
    *
    * Real EventBridge does not retain events, so this is a demo-only affordance -
-   * but it earns its place: it is what lets a test assert that telemetry NEVER
+   * but it earns its place: it is what lets a test assert that observations NEVER
    * reaches the bus, which is the load-bearing claim of the whole architecture
    * and otherwise unobservable from outside.
    */
@@ -110,4 +110,4 @@ function matchDetail(pattern: Record<string, unknown>, detail: Record<string, un
   });
 }
 
-export const bus = new EventBus(env('EVENT_BUS_NAME', 'meridian-dev-bus'));
+export const bus = new EventBus(env('EVENT_BUS_NAME', 'netpulse-dev-bus'));

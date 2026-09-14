@@ -1,9 +1,9 @@
 {
-  "name": "meridian-fleet",
+  "name": "netpulse",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Meridian - a real-time fleet dispatch platform. MVP-scale reference implementation on AWS serverless, runnable offline.",
+  "description": "NetPulse - a network operations intelligence platform. MVP-scale reference implementation on AWS serverless, runnable offline.",
   "engines": {
     "node": ">=22.6.0"
   },
@@ -22,8 +22,8 @@
     "test": "node --test",
     "test:watch": "node --test --watch",
     "typecheck": "tsc --noEmit",
-    "web": "pnpm --filter @meridian/web dev",
-    "web:build": "pnpm --filter @meridian/web build",
+    "web": "pnpm --filter @netpulse/web dev",
+    "web:build": "pnpm --filter @netpulse/web build",
     "verify": "pnpm typecheck && pnpm test && pnpm start && pnpm web:build",
     "build:lambda": "node scripts/build-lambda.mjs"
   },

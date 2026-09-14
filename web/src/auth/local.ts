@@ -20,7 +20,7 @@ import {
 import { handler as preTokenGeneration } from '../../../src/auth/pre-token-generation.ts';
 import { resolveIdpForEmail, IDENTITY_PROVIDERS } from '../../../src/auth/providers.ts';
 
-const STORAGE_KEY = 'meridian.session';
+const STORAGE_KEY = 'netpulse.session';
 
 
 function labelFor(idp: string): string {
@@ -38,7 +38,7 @@ function kindFor(idp: string): Realm['kind'] {
  * Run the PreTokenGeneration trigger and mint what it decided.
  *
  * This is the whole point of the trigger: a federated user arrives with no
- * tenant - Google knows nothing about your carrier - and this is where the
+ * tenant - Google knows nothing about your customer - and this is where the
  * platform decides who they are. Everything downstream then gets tenancy and
  * scope from a signed token, with no database call on the hot path.
  */
@@ -63,8 +63,8 @@ async function mint(email: string, identityProvider: string): Promise<Session> {
   // so here in terms the person can act on.
   if (!claims['custom:tenantId']) {
     throw new AuthError(
-      `No carrier is registered for ${email.split('@')[1] ?? 'that domain'}. ` +
-      'Ask your operations lead to add you, or register the carrier.',
+      `No customer is registered for ${email.split('@')[1] ?? 'that domain'}. ` +
+      'Ask your operations lead to add you, or register the customer.',
     );
   }
 
@@ -72,7 +72,7 @@ async function mint(email: string, identityProvider: string): Promise<Session> {
     sub: `${identityProvider}_${email}`,
     email,
     'custom:tenantId': claims['custom:tenantId'],
-    ...(claims['custom:district'] ? { 'custom:district': claims['custom:district'] } : {}),
+    ...(claims['custom:site'] ? { 'custom:site': claims['custom:site'] } : {}),
     'cognito:groups': groups,
     identities: identityProvider === 'COGNITO'
       ? undefined
@@ -141,14 +141,14 @@ export const localAuth: AuthProvider = {
   },
 
   async signUp(request: SignUpRequest) {
-    // NOT self-serve access, and the difference is not pedantry. A dispatcher
-    // does not sign themselves up for a carrier's fleet platform - the carrier
+    // NOT self-serve access, and the difference is not pedantry. A operator
+    // does not sign themselves up for a customer's estate platform - the customer
     // is onboarded, its SSO is configured, and its people arrive through it.
     // What this form starts is the PostConfirmation flow: create the tenant
-    // row, seed its districts, and hand the domain to home-realm discovery.
+    // row, seed its sites, and hand the domain to home-realm discovery.
     //
     // Modelling it as "request access" rather than "create account" is also
-    // the honest thing to show: nothing here can grant access to fleet data.
+    // the honest thing to show: nothing here can grant access to estate data.
     const domain = request.email.split('@')[1];
     if (!domain) throw new AuthError('That does not look like an email address.');
 
@@ -161,8 +161,8 @@ export const localAuth: AuthProvider = {
 
     return {
       message:
-        `Request received for ${request.carrierName}. Onboarding creates the ` +
-        `tenant, seeds its districts, and points ${domain} at your identity ` +
+        `Request received for ${request.customerName}. Onboarding creates the ` +
+        `tenant, seeds its sites, and points ${domain} at your identity ` +
         'provider — an operations lead confirms it before anyone can sign in.',
     };
   },

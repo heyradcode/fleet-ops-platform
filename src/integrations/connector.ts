@@ -1,26 +1,46 @@
 /**
  * ---------------------------------------------------------------------------
- * The connector contract
+ * The controller connector contract - and why this file is not wire.ts
  * ---------------------------------------------------------------------------
- * A fleet runs telematics, ELD and dashcam hardware from different vendors,
- * often several of each after an acquisition. Eight vendors, eight auth schemes,
- * payload shapes, eight rate limits. If you write eight bespoke Lambdas you
- * will maintain eight bespoke Lambdas forever.
+ * The estate has two halves that arrive completely differently, and pretending
+ * otherwise is what forces a UDP listener into a Lambda that cannot hold a
+ * socket.
  *
- * Instead: ONE interface, one retry policy, one circuit breaker, one place that
- * knows how to turn vendor JSON into `Telemetry`. Adding Zonar next quarter is
- * then a new file, not a new architecture.
+ *   PUSH   syslog, SNMP traps, gNMI, IPFIX. Devices send at us, over UDP or
+ *          gRPC, into a persistent collector. See wire.ts - decoder per
+ *          encoding, mapper per vendor.
+ *   PULL   Meraki, Mist, Aruba Central. Cloud controllers with REST APIs and
+ *          webhooks, polled on a schedule. THIS file.
  *
- *   fetchRaw()   - talk to the vendor. Returns the payload untouched.
- *   normalise()  - vendor payload -> Telemetry[]. Pure function, trivially unit
- *                  testable, and the ONLY place that understands the vendor.
+ * The pull half keeps the shape a fleet platform would use, because the shape
+ * genuinely fits: `fetchRaw` talks to the vendor, `normalise` turns the reply
+ * into observations, and both live on one object because the same code owns the
+ * whole round trip. Splitting decode from map buys nothing here - the payload
+ * is already JSON, so "decoding" is a no-op, and there is no shared framing
+ * between Meraki and Mist for a shared decoder to own.
+ *
+ * WHY BOTHER WITH THE PULL HALF AT ALL, given the devices already tell us what
+ * happened? Because a controller is an INDEPENDENT OBSERVATION PLANE. A switch
+ * reporting its own link failure by syslog and by trap is one witness talking
+ * twice; the controller noticing the same switch stopped checking in is a
+ * genuinely separate vantage point. Corroboration needs that, and in the worst
+ * case - a device wedged or powered off, reporting nothing at all - the
+ * controller and the external probe are the only things left. See
+ * `ObservationPlane` in platform/types.ts.
  *
  * Keeping normalise() pure is what makes replay work: when you find a mapping
  * bug you re-run it over the raw JSON already archived in S3.
  */
-import type { ProviderDomain, ProviderId, RawRecord, Telemetry, TenantId } from '../platform/types.ts';
+import type {
+  Observation, PlatformId, TenantId, VendorId,
+} from '../platform/types.ts';
+import type { Inventory } from '../platform/inventory.ts';
+import type { RawBatch } from './wire.ts';
 import { log } from '../platform/logger.ts';
 import { random } from '../platform/random.ts';
+
+/** The three cloud-managed estates this platform knows how to poll. */
+export type ControllerId = 'meraki' | 'mist' | 'aruba-central';
 
 export type ConnectorContext = {
   tenantId: TenantId;
@@ -31,14 +51,22 @@ export type ConnectorContext = {
 };
 
 export type Connector = {
-  provider: ProviderId;
-  domain: ProviderDomain;
+  controller: ControllerId;
+  vendor: VendorId;
+  platform: PlatformId;
   /** How the vendor authenticates us. Handy for the docs and for debugging. */
   auth: 'api-key-header' | 'oauth2-client-credentials' | 'basic' | 'bearer-token' | 'aws-sigv4';
   /** Vendor's documented rate limit. Feeds the Step Functions Map concurrency. */
   rateLimitPerMin: number;
-  fetchRaw(ctx: ConnectorContext): Promise<RawRecord>;
-  normalise(raw: RawRecord): Telemetry[];
+  fetchRaw(ctx: ConnectorContext): Promise<RawBatch>;
+  /**
+   * Controller payload -> Observation[]. Pure, and the ONLY place that
+   * understands this controller's JSON.
+   *
+   * Takes the inventory for the same reason the push mappers do: the controller
+   * has its own device ids, and nothing downstream may key on a vendor string.
+   */
+  normalise(raw: RawBatch, inventory: Inventory): Observation[];
 };
 
 // ---------------------------------------------------------------------------
@@ -46,15 +74,15 @@ export type Connector = {
 // ---------------------------------------------------------------------------
 
 export class ProviderError extends Error {
-  readonly provider: ProviderId;
+  readonly controller: ControllerId;
   readonly status: number;
   /** 429 and 5xx are worth retrying; 401 and 400 never are. */
   readonly retryable: boolean;
 
-  constructor(provider: ProviderId, status: number, message: string) {
-    super('[' + provider + '] ' + status + ' ' + message);
+  constructor(controller: ControllerId, status: number, message: string) {
+    super('[' + controller + '] ' + status + ' ' + message);
     this.name = 'ProviderError';
-    this.provider = provider;
+    this.controller = controller;
     this.status = status;
     this.retryable = status === 429 || status >= 500;
   }
@@ -95,7 +123,7 @@ export async function withRetry<T>(
 }
 
 /**
- * Circuit breaker. When a vendor is down, stop calling it: you are burning
+ * Circuit breaker. When a controller is down, stop calling it: you are burning
  * Lambda duration to collect timeouts, and you are adding load to an outage.
  *
  *   closed    -> normal
@@ -122,7 +150,7 @@ export class CircuitBreaker {
 
   async run<T>(fn: () => Promise<T>): Promise<T> {
     if (this.state === 'open') {
-      throw new Error('circuit open for ' + this.name + ' - skipping call, vendor is unhealthy');
+      throw new Error('circuit open for ' + this.name + ' - skipping call, controller is unhealthy');
     }
     try {
       const out = await fn();
@@ -135,55 +163,3 @@ export class CircuitBreaker {
     }
   }
 }
-
-// ---------------------------------------------------------------------------
-// Severity: one rule, applied to every vendor
-// ---------------------------------------------------------------------------
-
-/**
- * Vendors disagree about what "critical" means, and half of them do not send a
- * severity at all. So we derive it ourselves from thresholds we control. This
- * is what makes a single cross-vendor reporting view meaningful rather than a
- * pile of incomparable colours.
- */
-/**
- * The hours-of-service thresholds, in minutes of legal drive time REMAINING.
- *
- * Exported because three other places have to agree with the rule: the
- * reassignment guard in the tools and the resolver (a driver under the warning
- * line is not offered a load) and the board's hours-of-service strip, which
- * turns amber and red at exactly these values. One constant, so they cannot
- * drift - a strip that goes amber at 60 while the rule fires at 45 is a board
- * nobody trusts.
- */
-export const HOS_THRESHOLD_MINUTES = { warning: 60, critical: 40 } as const;
-
-export function severityFor(kind: Telemetry['kind'], value: number): Telemetry['severity'] {
-  // [warning, critical]. Tuned so the demo fixtures land where the narrative
-  // needs them; real thresholds come from the safety team, not from a developer.
-  const thresholds: Record<Telemetry['kind'], [warning: number, critical: number]> = {
-    'position': [200, 300],            // kph - only ever flags a broken sensor
-    'speeding': [10, 25],              // kph over the posted limit
-    'harsh-brake': [0.35, 0.55],       // g
-    'idle': [15, 30],                  // minutes
-    'hos-remaining': [HOS_THRESHOLD_MINUTES.warning, HOS_THRESHOLD_MINUTES.critical], // INVERTED: fewer minutes left is worse
-    'route-adherence': [400, 1_000],   // metres off the corridor
-    'geofence-state': [1, 1],          // boolean; breach handled by the rule
-    'panic': [1, 1],                   // any panic is critical
-  };
-
-  const [warn, crit] = thresholds[kind];
-
-  // Hours-of-service counts DOWN. Getting this backwards would silently stop
-  // the platform ever warning about a driver running out of legal hours.
-  if (kind === 'hos-remaining') {
-    if (value <= crit) return 'critical';
-    if (value <= warn) return 'warning';
-    return 'ok';
-  }
-
-  if (value >= crit) return 'critical';
-  if (value >= warn) return 'warning';
-  return 'ok';
-}
-

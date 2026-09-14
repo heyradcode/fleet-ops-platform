@@ -1,12 +1,12 @@
 # =============================================================================
-# Meridian GraphQL API (AWS AppSync)
+# NetPulse GraphQL API (AWS AppSync)
 # =============================================================================
 # AppSync-specific things to notice, because they are what separates "I have
 # used GraphQL" from "I have built on AppSync":
 #
 #   @aws_cognito_user_pools / @aws_iam / @aws_api_key
 #       Authorisation is declared IN THE SCHEMA, per type and per field. You can
-#       run several auth modes at once - Cognito for dispatchers, IAM for the
+#       run several auth modes at once - Cognito for operators, IAM for the
 #       ingest Lambda - and AppSync enforces it before a resolver runs.
 #
 #   @aws_auth(cognito_groups: [...])
@@ -18,9 +18,15 @@
 #       WebSocket to every client whose filter matches. This is the single
 #       biggest reason to choose AppSync over a hand-rolled GraphQL server.
 #
-# THE SUBSCRIPTION FILTER IS A COST DECISION, NOT A FEATURE. At fleet scale a
-# dispatcher watching Dallas must not be woken by - or billed for - national
-# traffic. See `onDriverException` at the bottom.
+# THE SUBSCRIPTION FILTER IS A COST DECISION, NOT A FEATURE. On a syslog-heavy
+# estate an operator watching Dallas must not be woken by - or billed for -
+# every site's traffic. See `onDeviceAlarm` at the bottom.
+#
+# WHAT IS DELIBERATELY ABSENT: observations are not subscribable. Only alarms
+# and incidents are. Tens of thousands of records a second through a WebSocket
+# fan-out would make the bill scale with estate size rather than with incidents,
+# and no human could read the result. Current state is polled; decisions are
+# pushed.
 # =============================================================================
 
 schema {
@@ -34,152 +40,270 @@ schema {
 # -----------------------------------------------------------------------------
 
 enum Severity { ok info warning critical }
-enum ProviderDomain { telematics eld_hos video_safety }
 enum IncidentStatus { open acknowledged resolved }
-enum DriverStatus { driving stopped on_break off_duty }
+enum DeviceStatus { healthy degraded down unknown }
+enum DeviceRole { core distribution access wan_edge wireless_ap firewall }
+enum Vendor { cisco juniper aruba }
 
-enum TelemetryKind {
-  position
-  speeding
-  harsh_brake
-  idle
-  hos_remaining
-  route_adherence
-  geofence_state
-  panic
-}
+# How the bytes arrived. Selects a decoder; deliberately independent of vendor.
+enum Encoding { syslog snmp_trap gnmi ipfix rest_json probe }
 
-enum ExceptionKind {
-  geofence_breach
-  harsh_braking
-  route_deviation
-  prolonged_idle
-  hos_risk
-  panic
+# WHO OBSERVED IT. The most load-bearing enum in this schema - corroboration is
+# defined over these, not over feeds. See ObservationPlane in types.ts.
+enum ObservationPlane { device controller external }
+
+enum AlarmKind {
+  link_down
+  device_unreachable
+  adjacency_lost
+  interface_errors
+  capacity_saturation
+  optical_degradation
+  power_fault
 }
 
 # -----------------------------------------------------------------------------
-# Types
+# The estate
 # -----------------------------------------------------------------------------
 
-type Location {
-  lon: Float!
-  lat: Float!
-  district: ID!
-}
-
-type Driver {
-  driverId: ID!
-  name: String!
-  districtId: ID!
-  vehicleId: String!
-  status: DriverStatus!
-  lon: Float!
-  lat: Float!
-
-  # Minutes of legal drive time remaining. The board colours on this even when
-  # nothing has gone wrong yet - a driver about to run out of hours is a problem
-  # you want to see coming, not one you want paged about.
-  hosRemainingMinutes: Int!
-  updatedAt: AWSDateTime!
-
-  # A nested resolver. Fetched ONLY if the client asks for it - that is the
-  # whole point of GraphQL over REST for a board with many widgets.
-  # Watch out for N+1: this runs once per Driver in the parent list, so back it
-  # with a batch resolver (AppSync BatchInvoke, max 2000 items) rather than a
-  # per-item Lambda call.
-  telemetry(limit: Int = 20, severity: Severity): [Telemetry!]!
-}
-
-type Territory {
-  districtId: ID!
+type Site @aws_cognito_user_pools {
+  siteId: ID!
   name: String!
   region: String!
   lon: Float!
   lat: Float!
+  headcount: Int!
 }
 
-type Telemetry {
-  telemetryId: ID!
-  provider: String!
-  domain: ProviderDomain!
-  kind: TelemetryKind!
-  driverId: ID!
-  sourceRef: String!
-  value: Float!
-  unit: String!
+"""
+A device's current condition. THE HOT STATE - one item per device, overwritten
+on every observation, never appended to.
+"""
+type Device @aws_cognito_user_pools {
+  deviceId: ID!
+  name: String!
+  siteId: ID!
+  role: DeviceRole!
+  vendor: Vendor!
+  status: DeviceStatus!
+  lon: Float!
+  lat: Float!
+  cpuUtilisation: Float!
+  interfacesDown: Int!
+
+  """
+  Denormalised onto the hot item so the board can draw the uplink chain from
+  the same read that fetched the device. Resolving it separately would be one
+  round trip per row.
+  """
+  uplinkDeviceId: ID
+
+  updatedAt: AWSDateTime!
+
+  """
+  Everything seen about this device, across every feed AND every plane.
+
+  N+1 LIVES HERE: `devices { observations { .. } }` calls this once per device.
+  Fixes, in order of preference: a BatchInvoke resolver (AppSync hands the
+  Lambda an array of up to 2000 events), per-resolver caching keyed on
+  $context.source, or denormalising the top few onto the Device item at write
+  time.
+  """
+  observations(limit: Int = 20, severity: Severity): [Observation!]!
+    @aws_cognito_user_pools
+}
+
+# -----------------------------------------------------------------------------
+# Observations - the three-way fork, as a GraphQL interface
+# -----------------------------------------------------------------------------
+
+"""
+The canonical shape. Cisco, Juniper and Aruba all describe the same network in
+different words; every mapper translates into this.
+
+An INTERFACE rather than one fat type, because network data is genuinely three
+things - a sampled number, a discrete state change, and a traffic aggregate -
+and flattening them means writing `value: 1` for a link going down and then
+inventing a threshold for it.
+"""
+interface Observation @aws_cognito_user_pools {
+  observationId: ID!
+  deviceId: ID!
+  interfaceId: ID
+  siteId: ID
+  vendor: Vendor!
+  encoding: Encoding!
+  plane: ObservationPlane!
   severity: Severity!
   observedAt: AWSDateTime!
-  location: Location
-  # AppSync scalar for arbitrary JSON. Convenient, but it is an escape hatch:
-  # anything in here is invisible to the client's type system.
-  attributes: AWSJSON
+  receivedAt: AWSDateTime!
+  """Non-zero is normal; large means the device's clock is wrong."""
+  clockSkewMs: Int
 }
 
-# What a deterministic rule decided about ONE driver. Not yet a page - see
-# Incident. The board shows these so a dispatcher can see what the platform
-# noticed but chose not to escalate.
-type DriverException {
-  exceptionId: ID!
-  driverId: ID!
-  districtId: ID!
-  kind: ExceptionKind!
+type MetricObservation implements Observation @aws_cognito_user_pools {
+  observationId: ID!
+  deviceId: ID!
+  interfaceId: ID
+  siteId: ID
+  vendor: Vendor!
+  encoding: Encoding!
+  plane: ObservationPlane!
   severity: Severity!
-  # Which vendors witnessed it. Two or more is what makes it corroborated.
-  providers: [String!]!
-  telemetryIds: [ID!]!
-  raisedAt: AWSDateTime!
-  driver: Driver
+  observedAt: AWSDateTime!
+  receivedAt: AWSDateTime!
+  clockSkewMs: Int
+
+  kind: String!
+  value: Float!
+  unit: String!
 }
 
-type Incident {
+type EventObservation implements Observation @aws_cognito_user_pools {
+  observationId: ID!
+  deviceId: ID!
+  interfaceId: ID
+  siteId: ID
+  vendor: Vendor!
+  encoding: Encoding!
+  plane: ObservationPlane!
+  severity: Severity!
+  observedAt: AWSDateTime!
+  receivedAt: AWSDateTime!
+  clockSkewMs: Int
+
+  kind: String!
+  """The transition - 'up'/'down', 'established'/'lost'."""
+  state: String!
+  message: String!
+  """Collapses the same real-world event arriving on more than one feed."""
+  dedupeKey: String!
+}
+
+"""
+Flow records are queryable but never subscribable and never in the hot store.
+A mid-size edge exports well over 100k flows/sec; they land in S3 as columnar
+files and are read analytically.
+"""
+type FlowObservation implements Observation @aws_cognito_user_pools {
+  observationId: ID!
+  deviceId: ID!
+  interfaceId: ID
+  siteId: ID
+  vendor: Vendor!
+  encoding: Encoding!
+  plane: ObservationPlane!
+  severity: Severity!
+  observedAt: AWSDateTime!
+  receivedAt: AWSDateTime!
+  clockSkewMs: Int
+
+  srcAddr: String!
+  dstAddr: String!
+  srcPort: Int!
+  dstPort: Int!
+  protocol: String!
+  octets: Float!
+  packets: Float!
+  flowStart: AWSDateTime!
+  flowEnd: AWSDateTime!
+}
+
+type ObservationPage @aws_cognito_user_pools {
+  items: [Observation!]!
+  """Opaque. Encodes DynamoDB's LastEvaluatedKey - never the raw key."""
+  nextToken: String
+}
+
+# -----------------------------------------------------------------------------
+# Alarms and incidents
+# -----------------------------------------------------------------------------
+
+"""What a deterministic rule decided about ONE entity. Not yet a page."""
+type Alarm @aws_cognito_user_pools {
+  alarmId: ID!
+  deviceId: ID!
+  interfaceId: ID
+  siteId: ID!
+  kind: AlarmKind!
+  severity: Severity!
+  observationIds: [ID!]!
+
+  """
+  The distinct vantage points that saw it. TWO OR MORE is the bar for raising
+  an incident - and it is planes, not feeds, because a syslog line and an SNMP
+  trap from one switch are one witness talking twice.
+  """
+  planes: [ObservationPlane!]!
+
+  uplinkDeviceId: ID
+  raisedAt: AWSDateTime!
+}
+
+"""
+A corroborated cluster of alarms. THIS is what pages a human.
+
+One distribution switch failure produces forty alarms and exactly one incident.
+"""
+type Incident @aws_cognito_user_pools {
   incidentId: ID!
   title: String!
   severity: Severity!
   status: IncidentStatus!
-  districtId: ID!
-  driverIds: [ID!]!
-  exceptionIds: [ID!]!
+  siteId: ID!
+  deviceIds: [ID!]!
+  alarmIds: [ID!]!
+
+  """
+  The device correlation believes is the CAUSE, not merely a symptom. The single
+  most useful thing this API returns at 4am.
+  """
+  rootCauseDeviceId: ID
+
   openedAt: AWSDateTime!
   aiSummary: String
-  aiCitations: [Citation!]!
-  drivers: [Driver!]!
-  telemetry: [Telemetry!]!
+  aiCitations: [Citation!]
+
+  devices: [Device!]! @aws_cognito_user_pools
+  observations: [Observation!]! @aws_cognito_user_pools
 }
 
-type Citation {
+type Citation @aws_cognito_user_pools {
   source: String!
   snippet: String!
 }
 
-# Cursor-based pagination. NEVER offset-based on DynamoDB: the underlying
-# LastEvaluatedKey is a key, not a row number, and offsets cannot express it.
-type TelemetryConnection {
-  items: [Telemetry!]!
-  nextToken: String
+# -----------------------------------------------------------------------------
+# Topology and geo
+# -----------------------------------------------------------------------------
+
+"""
+The network's answer to "what else is affected".
+
+Not a spatial query. Forty devices in one building share a coordinate exactly,
+so proximity says nothing; the device that matters when one fails is the one
+ABOVE it, which may be in another building entirely.
+"""
+type Topology @aws_cognito_user_pools {
+  deviceId: ID!
+  """Toward the site root, nearest first."""
+  upstream: [ID!]!
+  """Everything that depends on this device, at any depth. The blast radius."""
+  downstream: [ID!]!
 }
 
-# GeoJSON crosses the wire as AWSJSON. The alternative - modelling GeoJSON in
-# SDL - produces a deep union type that no client wants to write fragments for.
-type GeoLayer {
+type MapLayer @aws_cognito_user_pools {
+  """A GeoJSON FeatureCollection, serialised. MapLibre styles read it directly."""
   featureCollection: AWSJSON!
-  bbox: [Float!]!
+  bbox: [Float!]
 }
 
-type AgentAnswer {
+type AgentAnswer @aws_cognito_user_pools {
   answer: String!
   citations: [Citation!]!
-  # Exposing the trace is a product decision as much as a debugging one: users
-  # trust an agent far more when they can see which tools it called.
-  trace: [AgentStep!]!
+  """The tool calls, in order. Provenance is a product feature, not debug output."""
+  trace: [AWSJSON!]!
   stoppedBecause: String!
-}
-
-type AgentStep {
-  step: Int!
-  kind: String!
-  detail: String!
-  ms: Int!
 }
 
 # -----------------------------------------------------------------------------
@@ -187,34 +311,31 @@ type AgentStep {
 # -----------------------------------------------------------------------------
 
 type Query @aws_cognito_user_pools {
-  # The board's first load. `districtId` is a filter, but scope is enforced
-  # from the token regardless - passing another district returns nothing.
-  drivers(districtId: ID, status: DriverStatus): [Driver!]!
-  driver(driverId: ID!): Driver
+  """
+  Scope comes from the TOKEN, not from `siteId`. An operator who passes another
+  site gets an empty list rather than someone else's board.
+  """
+  devices(siteId: ID, status: DeviceStatus): [Device!]!
 
-  territories: [Territory!]!
+  device(deviceId: ID!): Device
 
-  # nextToken is opaque - it is the base64 of DynamoDB's LastEvaluatedKey.
-  telemetry(limit: Int = 25, severity: Severity, nextToken: String): TelemetryConnection!
+  sites: [Site!]!
 
-  # Raised but not necessarily escalated. Showing these is what lets a
-  # dispatcher see the noise filter working rather than just trusting it.
-  exceptions(districtId: ID, limit: Int = 50): [DriverException!]!
+  devicesAtSite(siteId: ID!): [Device!]!
 
-  incidents(status: IncidentStatus = open, limit: Int = 25): [Incident!]!
+  """Walk the uplink chain and the subtree. Cause versus symptom."""
+  topology(deviceId: ID!): Topology
+
+  alarms(siteId: ID, limit: Int = 50): [Alarm!]!
+
+  observations(severity: Severity, limit: Int = 25): ObservationPage!
+
+  incidents(limit: Int = 25): [Incident!]!
   incident(incidentId: ID!): Incident
 
-  # Spatial query -> Aurora PostGIS ST_DWithin.
-  driversNear(lon: Float!, lat: Float!, radiusKm: Float!): [Driver!]!
+  mapLayer: MapLayer!
 
-  # "Who could take this load?" - the same query with the hours-of-service
-  # filter applied in SQL, so an ineligible driver can never be offered.
-  availableDriversNear(lon: Float!, lat: Float!, radiusKm: Float!): [Driver!]!
-
-  # The map payload: GeoJSON FeatureCollection + bbox.
-  mapLayer: GeoLayer!
-
-  # Bedrock RAG over the runbook knowledge base. Read-only, so viewers may use it.
+  """Grounded retrieval over the runbook corpus. Cites what it used."""
   askRunbooks(question: String!): AgentAnswer!
 }
 
@@ -222,84 +343,74 @@ type Query @aws_cognito_user_pools {
 # Mutation
 # -----------------------------------------------------------------------------
 
-type Mutation @aws_cognito_user_pools {
-  # Field-level RBAC, enforced by AppSync before any resolver runs.
-  openIncident(input: OpenIncidentInput!): Incident!
-    @aws_auth(cognito_groups: ["admin", "dispatcher"])
-
-  acknowledgeIncident(incidentId: ID!): Incident!
-    @aws_auth(cognito_groups: ["admin", "dispatcher", "safety"])
-
-  # Moving a load is the most consequential thing on this API, so it is the
-  # narrowest. The tool the AI agent calls hits this same path and the same
-  # check - the agent has no privileged route in.
-  reassignDriver(input: ReassignDriverInput!): Incident!
-    @aws_auth(cognito_groups: ["admin", "dispatcher"])
-
-  # Invokes the AgentCore loop. Long-running, so in production this returns
-  # immediately with a jobId and the answer arrives on a subscription.
-  askAgent(question: String!): AgentAnswer!
-
-  # Called by the ingest Lambda, authenticated with IAM rather than a user
-  # pool - there is no human in that flow. Multiple auth modes on one API is
-  # an AppSync strength worth calling out.
-  #
-  # NOTE WHAT IS MISSING: there is no publishTelemetry. Telemetry never reaches
-  # a subscription, because 11,000 readings/sec pushed to every connected board
-  # would be both useless to a human and ruinous to pay for. Positions refresh
-  # on a poll; only exceptions are pushed.
-  publishException(input: PublishExceptionInput!): DriverException! @aws_iam
-}
-
 input OpenIncidentInput {
   title: String!
   severity: Severity!
-  districtId: ID!
-  driverIds: [ID!]!
+  siteId: ID!
+  deviceIds: [ID!]!
 }
 
-input ReassignDriverInput {
-  fromDriverId: ID!
-  toDriverId: ID!
+input SuppressAlarmInput {
+  deviceId: ID!
+  minutes: Int!
   reason: String!
 }
 
-input PublishExceptionInput {
-  exceptionId: ID!
-  driverId: ID!
-  districtId: ID!
-  kind: ExceptionKind!
+input PublishAlarmInput {
+  alarmId: ID!
+  deviceId: ID!
+  siteId: ID!
+  kind: AlarmKind!
   severity: Severity!
-  providers: [String!]!
+  planes: [ObservationPlane!]!
   raisedAt: AWSDateTime!
 }
 
+type Mutation @aws_cognito_user_pools {
+  """Pages a human. Field-level RBAC, enforced by AppSync before the resolver."""
+  openIncident(input: OpenIncidentInput!): Incident!
+    @aws_auth(cognito_groups: ["admin", "operator"])
+
+  acknowledgeIncident(incidentId: ID!): Incident!
+    @aws_auth(cognito_groups: ["admin", "operator"])
+
+  """
+  Silence a device during planned maintenance.
+
+  Refused for a device others depend on - suppressing it would hide the ROOT
+  CAUSE of everything beneath it, so the cascade still pages but names a
+  symptom. That check is in the resolver and in the agent's tool, because both
+  are entry points to the same action.
+  """
+  suppressAlarm(input: SuppressAlarmInput!): Boolean!
+    @aws_auth(cognito_groups: ["admin", "operator"])
+
+  """
+  Called by the ingest pipeline over IAM auth, never by a browser. Its return
+  value IS the subscription payload - see the note on onDeviceAlarm.
+  """
+  publishAlarm(input: PublishAlarmInput!): Alarm! @aws_iam
+
+  askAgent(question: String!): AgentAnswer!
+}
+
 # -----------------------------------------------------------------------------
-# Subscription - real-time, over WebSocket, with server-side filtering
+# Subscription
 # -----------------------------------------------------------------------------
 
 type Subscription @aws_cognito_user_pools {
-  # THE ONE THAT MAKES A 330k-DRIVER BOARD AFFORDABLE.
-  #
-  # The arguments become a server-side FILTER. AppSync evaluates them BEFORE
-  # pushing, so a dispatcher watching Dallas is neither billed for nor woken by
-  # Phoenix traffic - and cannot see it in dev tools either, which is a
-  # confidentiality property as much as a cost one.
-  #
-  # Without this you push every event to every client and filter in the browser:
-  # slow, expensive, and leaking other districts' data to anyone who looks.
-  #
-  # Two AppSync limits to design around: 100 subscriptions per connection and a
-  # 240KB payload cap. A board watching 40 districts needs ONE subscription with
-  # a filter, not 40 subscriptions.
-  onDriverException(districtId: ID, severity: Severity, kind: ExceptionKind): DriverException
-    @aws_subscription(mutations: ["publishException"])
-    @aws_iam
-    @aws_cognito_user_pools
+  """
+  THE DETAIL THAT SURPRISES EVERYONE ONCE: the subscription payload IS the
+  mutation's return value. A client filtering on a field the mutation did not
+  return silently matches nothing - it does not error, it just goes quiet.
+  That is why PublishAlarmInput carries siteId and severity at the top level.
+  """
+  onDeviceAlarm(siteId: ID, severity: Severity): Alarm
+    @aws_subscribe(mutations: ["publishAlarm"])
 
-  onIncidentOpened(districtId: ID, severity: Severity): Incident
-    @aws_subscription(mutations: ["openIncident"])
+  onIncidentOpened(siteId: ID): Incident
+    @aws_subscribe(mutations: ["openIncident"])
 
   onIncidentAcknowledged(incidentId: ID): Incident
-    @aws_subscription(mutations: ["acknowledgeIncident"])
+    @aws_subscribe(mutations: ["acknowledgeIncident"])
 }

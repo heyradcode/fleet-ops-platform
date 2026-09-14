@@ -1,32 +1,36 @@
 /**
- * The dispatch board.
+ * The operations board.
  *
- * One screen, three panes: who is out there (roster), where they are (map),
- * and what needs a decision (feed). A dispatcher watches this for a shift, so
- * the layout does not move and nothing animates that does not carry meaning.
+ * One screen, three panes: what is out there (estate), where it is (map), and
+ * what needs a decision (feed). An operator watches this for a shift, so the
+ * layout does not move and nothing animates that does not carry meaning.
  *
- * The one thing that DOES move is the fleet. Positions replay from the seeded
- * thirty-minute trace on a coarse tick - the same cadence a real client polls
- * at, because pushing 11,000 readings/sec of pin movement would be useless to
- * a human and ruinous to pay for. Exceptions, by contrast, arrive on the push
- * channel the moment the rules raise them. That asymmetry is the architecture,
- * and the board shows it rather than describing it.
+ * The one thing that DOES move is health. State replays from the recorded
+ * half-hour on a coarse tick - the same cadence a real client polls at, because
+ * pushing tens of thousands of records a second would be useless to a human and
+ * ruinous to pay for. Alarms, by contrast, arrive on the push channel the moment
+ * the rules raise them. That asymmetry is the architecture, and the board shows
+ * it rather than describing it.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { DispatchMap, type BasemapMode } from './DispatchMap.tsx';
-import { DriverPanel } from './DriverPanel.tsx';
+import { SiteMap, type BasemapMode } from './SiteMap.tsx';
+import { DevicePanel } from './DevicePanel.tsx';
 import { inProcessTransport } from './transport/in-process.ts';
 import { SignIn } from './SignIn.tsx';
 import { useRestoredSession } from './auth/useSession.ts';
 import { auth } from './auth/provider.ts';
-import { HOS_MAX_MINUTES, formatHours, hosLevel, witness, type HosLevel } from './format.ts';
-import { DISTRICTS } from '../../src/data/districts.ts';
+import {
+  UTILISATION_MAX, formatPercent, loadLevel, roleLabel, statusRank, witness,
+  type LoadLevel,
+} from './format.ts';
 import type { Session } from './auth/index.ts';
-import type { BoardSnapshot, Driver, Exception, PositionTick } from './transport/index.ts';
+import type {
+  Alarm, BoardSnapshot, DeviceState, HealthTick,
+} from './transport/index.ts';
 
 /**
  * The shell. Sign-in gates everything, so there is no render path that reads
- * fleet data without a verified token behind it. The transport learns about
+ * estate data without a verified token behind it. The transport learns about
  * the session inside useRestoredSession, synchronously, BEFORE React does -
  * see that file for why the order matters.
  */
@@ -47,16 +51,16 @@ export function App() {
 function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) {
   const scope = session.principal.scope;
 
-  // A dispatcher opens on their own district and has no other option. An ops
-  // lead opens tenant-wide. The board does not offer what the token forbids -
+  // An operator opens on their own site and has no other option. An ops lead
+  // opens estate-wide. The board does not offer what the token forbids -
   // showing tabs that return nothing would read as a bug rather than a rule.
-  const [districtId, setDistrictId] = useState<string | undefined>(
-    scope.kind === 'district' ? scope.districtId : undefined,
+  const [siteId, setSiteId] = useState<string | undefined>(
+    scope.kind === 'site' ? scope.siteId : undefined,
   );
   const [board, setBoard] = useState<BoardSnapshot | null>(null);
   const [selected, setSelected] = useState<string | undefined>();
-  const [live, setLive] = useState<Exception[]>([]);
-  const [tick, setTick] = useState<PositionTick | null>(null);
+  const [live, setLive] = useState<Alarm[]>([]);
+  const [tick, setTick] = useState<HealthTick | null>(null);
   const [basemap, setBasemap] = useState<BasemapMode | undefined>();
   const [basemapActual, setBasemapActual] = useState<BasemapMode>('canvas');
 
@@ -65,108 +69,134 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
     let stale = false;
     setLive([]);
     setTick(null);
-    inProcessTransport.loadBoard(districtId).then((snapshot) => {
+    inProcessTransport.loadBoard(siteId).then((snapshot) => {
       if (!stale) setBoard(snapshot);
     });
     return () => { stale = true; };
-  }, [districtId]);
+  }, [siteId]);
 
-  // --- Positions: polled cadence, replayed from the trace ------------------
+  // --- Health: polled cadence, replayed from the recording ------------------
   useEffect(
-    () => inProcessTransport.subscribePositions(districtId, setTick),
-    [districtId],
+    () => inProcessTransport.subscribeHealth(siteId, setTick),
+    [siteId],
   );
 
-  // --- Exceptions: the push channel. Only these are pushed, never positions.
+  // --- Alarms: the push channel. Only these are pushed, never observations.
   useEffect(() => {
-    return inProcessTransport.subscribeExceptions(districtId, (exception) => {
-      setLive((prev) => (prev.some((e) => e.exceptionId === exception.exceptionId)
+    return inProcessTransport.subscribeAlarms(siteId, (alarm) => {
+      setLive((prev) => (prev.some((a) => a.alarmId === alarm.alarmId)
         ? prev
-        : [exception, ...prev].slice(0, 40)));
+        : [alarm, ...prev].slice(0, 40)));
     });
-  }, [districtId]);
+  }, [siteId]);
 
-  // The fleet as it is NOW: the snapshot's roster, with each driver moved to
-  // wherever the latest tick put them. The snapshot is the source of truth for
-  // who exists; the tick is only ever a position.
-  const drivers = useMemo<Driver[]>(() => {
-    const base = board?.drivers ?? [];
+  // The estate as it is NOW: the snapshot's inventory, with each device's
+  // status taken from the latest frame. The snapshot is the source of truth for
+  // what exists; the frame is only ever a status.
+  const devices = useMemo<DeviceState[]>(() => {
+    const base = board?.devices ?? [];
     if (!tick) return base;
     return base.map((d) => {
-      const p = tick.positions.get(d.driverId);
-      return p ? { ...d, lon: p.lon, lat: p.lat, status: p.status } : d;
+      const s = tick.status.get(d.deviceId);
+      return s ? { ...d, status: s } : d;
     });
   }, [board, tick]);
 
+  const byId = useMemo(
+    () => new Map(devices.map((d) => [d.deviceId, d])),
+    [devices],
+  );
+
   const flagged = useMemo(() => {
     const ids = new Set<string>();
-    for (const i of board?.incidents ?? []) for (const d of i.driverIds) ids.add(d);
+    for (const i of board?.incidents ?? []) for (const d of i.deviceIds) ids.add(d);
     return ids;
   }, [board]);
 
   const pagedSet = useMemo(
-    () => new Set(board?.incidents.flatMap((i) => i.exceptionIds) ?? []),
+    () => new Set(board?.incidents.flatMap((i) => i.alarmIds) ?? []),
     [board],
   );
 
   // The feed: what the rules raised in the snapshot, plus whatever has arrived
   // live since. Live arrivals are marked, so the push channel is visible as a
   // thing that happens rather than a count in a corner.
-  const liveIds = useMemo(() => new Set(live.map((e) => e.exceptionId)), [live]);
+  const liveIds = useMemo(() => new Set(live.map((a) => a.alarmId)), [live]);
   const feed = useMemo(() => {
-    const byId = new Map<string, Exception>();
-    for (const e of board?.exceptions ?? []) byId.set(e.exceptionId, e);
-    for (const e of live) byId.set(e.exceptionId, e);
-    return [...byId.values()].sort((a, b) => Date.parse(b.raisedAt) - Date.parse(a.raisedAt));
+    const byAlarmId = new Map<string, Alarm>();
+    for (const a of board?.alarms ?? []) byAlarmId.set(a.alarmId, a);
+    for (const a of live) byAlarmId.set(a.alarmId, a);
+    return [...byAlarmId.values()].sort((a, b) => Date.parse(b.raisedAt) - Date.parse(a.raisedAt));
   }, [board, live]);
 
-  // Which tabs this token permits. Tenant scope sees all of them; a district
-  // dispatcher sees exactly one, so the row becomes a label rather than a
-  // control - which is the honest rendering of a permission. Driver scope
-  // sees none: their assignments are not a district, and five tabs that each
-  // return nothing would read as a bug rather than a rule.
-  const visibleDistricts = scope.kind === 'district'
-    ? DISTRICTS.filter((d) => d.districtId === scope.districtId)
-    : scope.kind === 'driver' ? [] : DISTRICTS;
+  // Which tabs this token permits. Tenant scope sees all of them; a site
+  // operator sees exactly one, so the row becomes a label rather than a control
+  // - which is the honest rendering of a permission. Device scope sees none:
+  // one box is not a site, and five tabs that each return nothing would read as
+  // a bug rather than a rule.
+  const allSites = board?.sites ?? [];
+  const visibleSites = scope.kind === 'site'
+    ? allSites.filter((s) => s.siteId === scope.siteId)
+    : scope.kind === 'device' ? [] : allSites;
   const canSeeAll = scope.kind === 'tenant' || scope.kind === 'region';
 
   const criticalCount = board?.incidents.filter((i) => i.severity === 'critical').length ?? 0;
   const heldCount = board?.heldBack.length ?? 0;
 
-  const selectedDriver = drivers.find((d) => d.driverId === selected);
-  const selectedExceptions = feed.filter((e) => e.driverId === selected);
+  const selectedDevice = selected ? byId.get(selected) : undefined;
+  const selectedAlarms = feed.filter((a) => a.deviceId === selected);
 
-  const moving = drivers.filter((d) => d.status === 'driving').length;
+  // The uplink chain and the blast radius, computed from the denormalised
+  // uplink on each hot item. No extra round trip, and no second source of truth
+  // about the topology.
+  const upstream = useMemo(
+    () => (selectedDevice ? chainUp(selectedDevice, byId) : []),
+    [selectedDevice, byId],
+  );
+  const downstream = useMemo(
+    () => (selectedDevice ? subtree(selectedDevice.deviceId, devices) : []),
+    [selectedDevice, devices],
+  );
+
+  const unhealthy = devices.filter((d) => d.status !== 'healthy').length;
+
+  // Worst first. An operator opens this board to find what is broken, and an
+  // alphabetical list of forty healthy access points buries it.
+  const ordered = useMemo(
+    () => [...devices].sort((a, b) =>
+      statusRank(a.status) - statusRank(b.status) || a.name.localeCompare(b.name)),
+    [devices],
+  );
 
   return (
     <div className="shell">
       <header className="statusbar">
         <div className="brand">
-          <span className="brand-mark">MERIDIAN</span>
+          <span className="brand-mark">NETPULSE</span>
           <span className="brand-rule" />
         </div>
 
-        <nav className="districts" aria-label="District">
-          {visibleDistricts.map((d) => (
+        <nav className="districts" aria-label="Site">
+          {visibleSites.map((s) => (
             <button
-              key={d.districtId}
+              key={s.siteId}
               className="district"
-              title={d.name}
-              aria-pressed={districtId === d.districtId}
-              onClick={() => { setDistrictId(d.districtId); setSelected(undefined); }}
+              title={s.name}
+              aria-pressed={siteId === s.siteId}
+              onClick={() => { setSiteId(s.siteId); setSelected(undefined); }}
             >
-              {d.districtId}
-              {districtId === d.districtId && <span className="count">{drivers.length}</span>}
+              {s.siteId}
+              {siteId === s.siteId && <span className="count">{devices.length}</span>}
             </button>
           ))}
-          {/* Not a sixth district - a different ROLE, and only offered to a
-              token that carries it. */}
+          {/* Not a sixth site - a different ROLE, and only offered to a token
+              that carries it. */}
           {canSeeAll && (
             <button
               className="district is-lead"
-              aria-pressed={districtId === undefined}
-              onClick={() => { setDistrictId(undefined); setSelected(undefined); }}
-              title="Tenant-wide scope, granted by the admin role"
+              aria-pressed={siteId === undefined}
+              onClick={() => { setSiteId(undefined); setSelected(undefined); }}
+              title="Estate-wide scope, granted by the admin role"
             >
               all
             </button>
@@ -184,7 +214,7 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
 
         {/* The clock follows the replay, so what the board shows and what time
             it claims to be cannot disagree. */}
-        <div className="clock" title="Replaying the seeded trace">
+        <div className="clock" title="Replaying the recorded half-hour">
           <span className="pulse" aria-hidden="true" />
           <span>{tick ? tick.at.slice(11, 19) + 'Z' : '--:--:--'}</span>
           {tick && (
@@ -201,61 +231,56 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
         <button className="signout" onClick={onSignOut}>Sign out</button>
       </header>
 
-      <div className={`body ${selectedDriver ? 'has-panel' : ''}`}>
+      <div className={`body ${selectedDevice ? 'has-panel' : ''}`}>
         <aside className="roster">
           <div className="pane-head">
-            <span>Roster</span>
+            <span>Estate</span>
             <span className="mono">
-              <span className="roster-moving">{moving}</span> / {drivers.length}
+              <span className="roster-moving">{unhealthy}</span> / {devices.length}
             </span>
           </div>
           <div className="roster-list">
-            {drivers.map((d) => (
-              <DriverRow
-                key={d.driverId}
-                driver={d}
-                flagged={flagged.has(d.driverId)}
-                selected={selected === d.driverId}
-                onSelect={() => setSelected(d.driverId)}
+            {ordered.map((d) => (
+              <DeviceRow
+                key={d.deviceId}
+                device={d}
+                flagged={flagged.has(d.deviceId)}
+                selected={selected === d.deviceId}
+                onSelect={() => setSelected(d.deviceId)}
               />
             ))}
-            {drivers.length === 0 && board && (
-              <p className="empty">No drivers on shift in this district.</p>
+            {devices.length === 0 && board && (
+              <p className="empty">No devices in scope at this site.</p>
             )}
-            {!board && <p className="empty">Loading the roster…</p>}
+            {!board && <p className="empty">Loading the estate…</p>}
           </div>
         </aside>
 
         <main className="stage">
           <div className="map-wrap">
-            <DispatchMap
-              drivers={drivers}
-              flagged={flagged}
-              selectedId={selected}
-              onSelect={setSelected}
+            <SiteMap
+              sites={allSites}
+              devices={devices}
+              selectedSiteId={selectedDevice?.siteId ?? siteId}
+              onSelectSite={(id) => { if (!siteId) setSiteId(id); }}
               basemap={basemap}
               onBasemap={setBasemapActual}
             />
 
             <div className="legend">
               <div className="legend-row">
-                <span className="legend-dot" style={{ background: 'var(--driving)' }} /> driving
+                <span className="legend-dot" style={{ background: 'var(--healthy)' }} /> healthy
               </div>
               <div className="legend-row">
-                <span className="legend-dot" style={{ background: 'var(--stopped)' }} /> stopped
+                <span className="legend-dot" style={{ background: 'var(--degraded)' }} /> degraded
               </div>
               <div className="legend-row">
-                <span className="legend-dot" style={{ background: 'var(--on-break)' }} /> on break
+                <span className="legend-dot" style={{ background: 'var(--down)' }} /> down
               </div>
               <div className="legend-row">
-                <span className="legend-dot" style={{ background: 'var(--off-duty)' }} /> off duty
+                <span className="legend-halo" /> incident
               </div>
-              <div className="legend-row">
-                <span className="legend-line" /> route corridor
-              </div>
-              <div className="legend-row">
-                <span className="legend-halo" /> exception
-              </div>
+              <div className="legend-note">circle size = devices at site</div>
 
               {/* The basemap is a network resource and this board runs offline,
                   so the fallback is a first-class mode rather than a failure. */}
@@ -272,46 +297,50 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
             </div>
 
             <p className="scale-note">
-              <b>{drivers.length}</b> drivers, <b>{moving}</b> moving.{' '}
+              <b>{devices.length}</b> devices, <b>{unhealthy}</b> not healthy.{' '}
               {live.length > 0
-                ? <><b>{live.length}</b> live {live.length === 1 ? 'exception' : 'exceptions'} pushed.</>
+                ? <><b>{live.length}</b> live {live.length === 1 ? 'alarm' : 'alarms'} pushed.</>
                 : 'Nothing pushed yet.'}
               <br />
-              <span className="scale-sub">Positions poll every tick. Only exceptions are pushed.</span>
+              <span className="scale-sub">Health polls every tick. Only alarms are pushed.</span>
             </p>
           </div>
 
           <section className="feed">
             <div className="pane-head">
-              <span>Exceptions</span>
+              <span>Alarms</span>
               <span className="mono">
                 {live.length > 0 && <span className="feed-live">{live.length} live</span>}
                 {feed.length}
               </span>
             </div>
             <div className="feed-list">
-              {feed.map((e) => (
-                <ExceptionRow
-                  key={e.exceptionId}
-                  exception={e}
-                  paged={pagedSet.has(e.exceptionId)}
-                  live={liveIds.has(e.exceptionId)}
-                  onSelect={() => setSelected(e.driverId)}
+              {feed.map((a) => (
+                <AlarmRow
+                  key={a.alarmId}
+                  alarm={a}
+                  name={byId.get(a.deviceId)?.name ?? a.deviceId}
+                  paged={pagedSet.has(a.alarmId)}
+                  live={liveIds.has(a.alarmId)}
+                  onSelect={() => setSelected(a.deviceId)}
                 />
               ))}
               {feed.length === 0 && board && (
-                <p className="empty">Nothing raised in this district. Quiet is the goal.</p>
+                <p className="empty">Nothing raised at this site. Quiet is the goal.</p>
               )}
             </div>
           </section>
         </main>
 
-        {selectedDriver && (
-          <DriverPanel
-            key={selectedDriver.driverId}
-            driver={selectedDriver}
-            exceptions={selectedExceptions}
+        {selectedDevice && (
+          <DevicePanel
+            key={selectedDevice.deviceId}
+            device={selectedDevice}
+            alarms={selectedAlarms}
             paged={pagedSet}
+            upstream={upstream}
+            downstream={downstream}
+            onSelect={setSelected}
             onClose={() => setSelected(undefined)}
           />
         )}
@@ -322,36 +351,41 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
 
 /* -------------------------------------------------------------------------- */
 
-function DriverRow({ driver, flagged, selected, onSelect }: {
-  driver: Driver;
+function DeviceRow({ device, flagged, selected, onSelect }: {
+  device: DeviceState;
   flagged: boolean;
   selected: boolean;
   onSelect(): void;
 }) {
-  const level = hosLevel(driver.hosRemainingMinutes);
+  const level = loadLevel(device.cpuUtilisation);
   const row = useRef<HTMLButtonElement>(null);
 
-  // The other direction: a pin clicked on the map selects a row that may be
-  // sixty entries down. Bring it into view, without yanking the list if it is
-  // already visible.
+  // The other direction: a device selected from the panel's topology chain may
+  // be forty entries down. Bring it into view, without yanking the list if it
+  // is already visible.
   useEffect(() => {
     if (selected) row.current?.scrollIntoView({ block: 'nearest' });
   }, [selected]);
 
   return (
     <button ref={row} className="driver" aria-selected={selected} onClick={onSelect}>
-      <span className={`status-bar status-${driver.status}`} aria-hidden="true" />
+      <span className={`status-bar status-${device.status}`} aria-hidden="true" />
 
       <span className="driver-who">
-        <span className="driver-id">{driver.driverId.replace('drv-', '')}</span>
-        <span className="driver-name">{driver.name}</span>
+        <span className="driver-id">{roleLabel(device.role)}</span>
+        <span className="driver-name">{device.name}</span>
       </span>
 
       <span className="hos">
-        {flagged && <span className="driver-flag is-critical">EXC</span>}
-        <HoursOfServiceStrip minutes={driver.hosRemainingMinutes} level={level} />
+        {flagged && <span className="driver-flag is-critical">ALM</span>}
+        {device.interfacesDown > 0 && (
+          <span className="ports-down" title={device.interfacesDown + ' interfaces down'}>
+            {device.interfacesDown}↓
+          </span>
+        )}
+        <UtilisationStrip percent={device.cpuUtilisation} level={level} />
         <span className={`hos-clock ${level ? `is-${level}` : ''}`}>
-          {formatHours(driver.hosRemainingMinutes)}
+          {formatPercent(device.cpuUtilisation)}
         </span>
       </span>
     </button>
@@ -359,31 +393,32 @@ function DriverRow({ driver, flagged, selected, onSelect }: {
 }
 
 /**
- * The hours-of-service strip.
+ * The utilisation strip.
  *
- * A miniature of the ELD duty-status log every driver and dispatcher reads
- * daily: an eleven-hour ruled grid, filled to the drive time remaining. The
- * fill turns amber then red at exactly the thresholds the detection rules use,
- * so the strip and the alert are reading the same number and cannot disagree.
+ * A miniature of the load graph every network engineer reads daily: a ruled
+ * bar filled to current utilisation. The fill turns amber then red at exactly
+ * the thresholds the capacity rule uses, so the strip and the alarm are reading
+ * the same number and cannot disagree.
  */
-function HoursOfServiceStrip({ minutes, level }: { minutes: number; level: HosLevel }) {
-  const pct = Math.max(0, Math.min(100, (minutes / HOS_MAX_MINUTES) * 100));
+function UtilisationStrip({ percent, level }: { percent: number; level: LoadLevel }) {
+  const pct = Math.max(0, Math.min(100, (percent / UTILISATION_MAX) * 100));
   return (
     <span
       className="hos-strip"
       role="meter"
-      aria-valuenow={minutes}
+      aria-valuenow={Math.round(percent)}
       aria-valuemin={0}
-      aria-valuemax={HOS_MAX_MINUTES}
-      aria-label={`${formatHours(minutes)} of drive time remaining`}
+      aria-valuemax={UTILISATION_MAX}
+      aria-label={`${formatPercent(percent)} utilisation`}
     >
       <span className={`hos-fill ${level ? `is-${level}` : ''}`} style={{ width: `${pct}%` }} />
     </span>
   );
 }
 
-function ExceptionRow({ exception, paged, live, onSelect }: {
-  exception: Exception;
+function AlarmRow({ alarm, name, paged, live, onSelect }: {
+  alarm: Alarm;
+  name: string;
   paged: boolean;
   live: boolean;
   onSelect(): void;
@@ -393,12 +428,12 @@ function ExceptionRow({ exception, paged, live, onSelect }: {
       className={`exception ${paged ? '' : 'is-noise'} ${live ? 'is-live' : ''}`}
       onClick={onSelect}
     >
-      <span className="exception-time">{exception.raisedAt.slice(11, 19)}</span>
-      <span className="exception-kind">{exception.kind.replace(/-/g, ' ')}</span>
+      <span className="exception-time">{alarm.raisedAt.slice(11, 19)}</span>
+      <span className="exception-kind">{alarm.kind.replace(/-/g, ' ')}</span>
       <span className="exception-detail">
-        <b>{exception.driverId.replace('drv-', '')}</b>
+        <b>{name}</b>
         {' · '}
-        {witness(exception, paged)}
+        {witness(alarm, paged)}
       </span>
       <span className={`verdict ${paged ? 'is-paged' : 'is-held'}`}>
         {paged ? 'PAGED' : 'HELD'}
@@ -409,12 +444,53 @@ function ExceptionRow({ exception, paged, live, onSelect }: {
 
 /* -------------------------------------------------------------------------- */
 
-/** The caller's reach, in the words a dispatcher would use. */
+/**
+ * Walk up the uplink chain, nearest first.
+ *
+ * Bounded rather than recursive without a limit: a mis-discovered LLDP loop is
+ * a real thing, and without the visited set this would hang the tab.
+ */
+function chainUp(device: DeviceState, byId: Map<string, DeviceState>): DeviceState[] {
+  const out: DeviceState[] = [];
+  const seen = new Set<string>([device.deviceId]);
+  let current = device.uplinkDeviceId;
+
+  while (current && out.length < 8 && !seen.has(current)) {
+    const next = byId.get(current);
+    if (!next) break;
+    out.push(next);
+    seen.add(current);
+    current = next.uplinkDeviceId;
+  }
+  return out;
+}
+
+/** Everything that depends on this device, at any depth. */
+function subtree(deviceId: string, devices: DeviceState[]): DeviceState[] {
+  const out: DeviceState[] = [];
+  let frontier = new Set<string>([deviceId]);
+  const seen = new Set<string>([deviceId]);
+
+  while (frontier.size > 0) {
+    const next = new Set<string>();
+    for (const d of devices) {
+      if (!d.uplinkDeviceId || seen.has(d.deviceId)) continue;
+      if (!frontier.has(d.uplinkDeviceId)) continue;
+      seen.add(d.deviceId);
+      out.push(d);
+      next.add(d.deviceId);
+    }
+    frontier = next;
+  }
+  return out;
+}
+
+/** The caller's reach, in the words an operator would use. */
 function describeScope(scope: Session['principal']['scope']): string {
   switch (scope.kind) {
-    case 'tenant': return 'whole carrier';
+    case 'tenant': return 'whole estate';
     case 'region': return scope.region;
-    case 'district': return scope.districtId.toUpperCase() + ' only';
-    case 'driver': return 'own assignments';
+    case 'site': return scope.siteId.toUpperCase() + ' only';
+    case 'device': return 'one device';
   }
 }

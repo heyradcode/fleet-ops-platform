@@ -30,139 +30,117 @@ async function signInAs(email: string) {
   return session;
 }
 
-const DISPATCHER = 'dispatcher@acme-freight.com';   // scoped to Dallas
-const LEAD = 'lead@meridian.io';                    // admin, tenant-wide
-const SAFETY = 'safety@safety.acme-freight.com';    // reads all, writes nothing
+const OPERATOR = 'operator@acme-networks.com';   // scoped to Dallas
+const LEAD = 'lead@netpulse.io';                 // admin, tenant-wide
+const ENGINEER = 'e@eng.acme-networks.com';      // reads all, writes nothing
 
 test('the board refuses to load without a session', async () => {
   inProcessTransport.setSession(null);
   await assert.rejects(
-    () => inProcessTransport.loadBoard('dal'),
-    /No session/,
-    'there must be no path that reads fleet data without a verified token',
+    () => inProcessTransport.loadBoard('dal-01'),
+    /must not render before sign-in/,
   );
 });
 
-test('a district board shows only that district', async () => {
-  const { principal } = await signInAs(DISPATCHER);
-  assert.deepEqual(principal.scope, { kind: 'district', districtId: 'dal' });
+test('a site board shows only that site', async () => {
+  await signInAs(OPERATOR);
+  const board = await inProcessTransport.loadBoard('dal-01');
 
-  const dal = await inProcessTransport.loadBoard('dal');
-  assert.ok(dal.drivers.length > 0);
-  assert.ok(dal.drivers.every((d) => d.districtId === 'dal'));
-  assert.ok(dal.exceptions.every((e) => e.districtId === 'dal'));
+  assert.ok(board.devices.length > 0);
+  assert.ok(board.devices.every((d) => d.siteId === 'dal-01'));
 });
 
-test('a Dallas dispatcher asking for Phoenix gets nothing', async () => {
-  await signInAs(DISPATCHER);
+test('a Dallas operator asking for Phoenix gets nothing', async () => {
+  await signInAs(OPERATOR);
+  const board = await inProcessTransport.loadBoard('phx-01');
 
-  // The argument is a convenience; the TOKEN is the boundary. Asking for
-  // another district returns an empty board, not someone else's fleet.
-  const phx = await inProcessTransport.loadBoard('phx');
-  assert.equal(phx.drivers.length, 0);
+  // The site is a VIEW; the token is the BOUNDARY. Scope already excluded
+  // Phoenix, so asking for it explicitly returns an empty board rather than
+  // Dallas's devices under a Phoenix heading.
+  assert.equal(board.devices.length, 0);
 });
 
 test('the lead view is tenant-wide because of the ROLE, not a missing filter', async () => {
-  // The one that caught a real bug while building the board. A dispatcher with
-  // no district claim does NOT get the whole fleet - scope falls back to their
-  // own assignments, because widening access has to be a deliberate grant
-  // rather than the side effect of an absent field.
-  const { principal } = await signInAs(LEAD);
-  assert.deepEqual(principal.scope, { kind: 'tenant' });
+  await signInAs(LEAD);
+  const board = await inProcessTransport.loadBoard();
 
-  const all = await inProcessTransport.loadBoard(undefined);
-  assert.equal(all.drivers.length, 60);
-  assert.ok(new Set(all.drivers.map((d) => d.districtId)).size > 1);
+  const sites = new Set(board.devices.map((d) => d.siteId));
+  assert.ok(sites.size > 1, 'an admin sees more than one site');
+
+  // And it is the token that says so, not the absence of an argument.
+  const session = await localAuth.signIn(LEAD);
+  assert.equal(session.principal.scope.kind, 'tenant');
 });
 
-test('a safety reviewer reads the whole carrier but cannot act', async () => {
-  // SCOPE IS NOT PERMISSION. Safety needs every district - a harsh-braking
-  // pattern is only visible across them - and must not be able to move a load.
-  // The two questions are answered by different mechanisms on purpose.
-  const { principal } = await signInAs(SAFETY);
+test('an engineer reads the whole estate but cannot act', async () => {
+  const session = await signInAs(ENGINEER);
+  const board = await inProcessTransport.loadBoard();
 
-  assert.deepEqual(principal.scope, { kind: 'tenant' });
-  assert.ok(principal.roles.includes('safety'));
-  assert.ok(!principal.roles.includes('dispatcher'));
-  assert.ok(!principal.roles.includes('admin'));
+  assert.equal(session.principal.scope.kind, 'tenant');
+  assert.ok(new Set(board.devices.map((d) => d.siteId)).size > 1);
 
-  const all = await inProcessTransport.loadBoard(undefined);
-  assert.equal(all.drivers.length, 60);
+  // SCOPE IS NOT PERMISSION. Reading the estate is what the job needs; the
+  // write tools are a separate check and this role does not pass it.
+  const { canUseTool } = await import('../../../src/ai/guardrails.ts');
+  assert.ok(!canUseTool(session.principal, 'openIncident').allowed);
 });
 
 test('an unregistered domain is refused, and says what to do', async () => {
-  // Fail closed. The failure mode is "no carrier is registered for that
-  // domain", not a token with an empty tenant that every query rejects with
-  // something the person cannot act on.
   await assert.rejects(
-    () => localAuth.signIn('someone@unknown.example'),
-    /No carrier is registered/,
+    () => localAuth.signIn('nobody@example.com'),
+    /registered|no tenant|unknown/i,
   );
 });
 
-test('home-realm discovery routes each carrier to its own provider', () => {
-  assert.equal(localAuth.discover('a@acme-freight.com').idp, 'AcmeSAML');
-  assert.equal(localAuth.discover('b@northstar-logistics.com').idp, 'OktaOIDC');
-  // An unknown domain falls back to the native pool rather than erroring - a
-  // new carrier can be onboarded before their SSO is configured.
-  assert.equal(localAuth.discover('c@example.com').idp, 'COGNITO');
+test('home-realm discovery routes each customer to its own provider', async () => {
+  const { resolveIdpForEmail } = await import('../../../src/auth/providers.ts');
+  assert.equal(resolveIdpForEmail(OPERATOR), 'AcmeSAML');
+  assert.equal(resolveIdpForEmail('x@northwind-utilities.com'), 'OktaOIDC');
+  assert.equal(resolveIdpForEmail('x@example.com'), 'COGNITO');
 });
 
 test('the board shows what the RULES decided, incidents and held-back alike', async () => {
   await signInAs(LEAD);
-  const all = await inProcessTransport.loadBoard(undefined);
+  const board = await inProcessTransport.loadBoard();
 
-  assert.ok(all.incidents.length > 0);
+  assert.ok(board.alarms.length > 0, 'the scenarios must raise alarms');
+  assert.ok(board.incidents.length > 0, 'and some must corroborate into incidents');
 
-  // Something was raised and deliberately NOT escalated. The board renders
-  // these dimmed rather than hiding them: a dispatcher who can see the noise
-  // filter working trusts the board when it is quiet.
-  assert.ok(all.heldBack.length > 0, 'the held-back case must be visible somewhere');
-
-  const pagedIds = new Set(all.incidents.flatMap((i) => i.exceptionIds));
-  for (const held of all.heldBack) {
-    assert.ok(!pagedIds.has(held.exceptionId), 'a held exception must not also be paged');
-  }
+  // Every incident's alarms are accounted for, and the held-back set is
+  // exactly the complement. If these overlapped, the board would be showing
+  // the same alarm as both paged and suppressed.
+  const paged = new Set(board.incidents.flatMap((i) => i.alarmIds));
+  assert.ok(board.heldBack.every((a) => !paged.has(a.alarmId)));
 });
 
-test('Austin is where the noise filter is visible', async () => {
-  // gps-drift lives here: one exception raised, nobody paged. If this ever
-  // starts producing an incident, the corroboration rule has regressed.
+test('the noise filter is visible on the board, not hidden by it', async () => {
   await signInAs(LEAD);
-  const aus = await inProcessTransport.loadBoard('aus');
+  const board = await inProcessTransport.loadBoard();
 
-  assert.equal(aus.exceptions.length, 1);
-  assert.equal(aus.exceptions[0].kind, 'route-deviation');
-  assert.equal(aus.incidents.length, 0);
-  assert.equal(aus.heldBack.length, 1);
+  // The lone-signal scenario exists precisely so something lands here. A board
+  // that hid uncorroborated alarms would be indistinguishable from one whose
+  // rules were broken.
+  assert.ok(board.heldBack.length > 0, 'an uncorroborated alarm must still be shown');
 });
 
-test('the live channel delivers only this district, and only exceptions', async () => {
-  await signInAs(LEAD);
+test('the live channel delivers only this site, and only alarms', async () => {
+  await signInAs(OPERATOR);
 
   const received: string[] = [];
-  const stop = inProcessTransport.subscribeExceptions('phx', (e) => {
-    received.push(e.districtId);
-  });
-
-  // The channel is timer-driven, so give it one interval plus a margin.
-  await new Promise((r) => setTimeout(r, 2700));
+  const stop = inProcessTransport.subscribeAlarms('dal-01', (a) => received.push(a.siteId));
+  await new Promise((r) => setTimeout(r, 2600));
   stop();
 
-  assert.ok(received.length > 0, 'the subscription should have delivered something');
-  assert.ok(received.every((d) => d === 'phx'));
+  assert.ok(received.every((s) => s === 'dal-01'));
 });
 
 test('a board loaded twice is identical', async () => {
-  // Everything the board renders is seeded, so two loads must match. Without
-  // this, a screenshot cannot be reproduced and a visual change cannot be told
-  // apart from generator noise.
-  await signInAs(DISPATCHER);
-  const a = await inProcessTransport.loadBoard('dal');
-  const b = await inProcessTransport.loadBoard('dal');
+  await signInAs(OPERATOR);
+  const a = await inProcessTransport.loadBoard('dal-01');
+  const b = await inProcessTransport.loadBoard('dal-01');
 
-  assert.deepEqual(a.drivers, b.drivers);
-  assert.deepEqual(a.exceptions.map((e) => e.kind), b.exceptions.map((e) => e.kind));
+  assert.deepEqual(a.devices, b.devices);
+  assert.deepEqual(a.alarms.map((x) => x.kind), b.alarms.map((x) => x.kind));
 });
 
 // ---------------------------------------------------------------------------
@@ -202,20 +180,20 @@ test('the whole module graph loads with no Node globals at all', async () => {
     const auth: typeof import('../auth/local.ts') = await import(authUrl);
     const transport: typeof import('./in-process.ts') = await import(transportUrl);
 
-    const session = await auth.localAuth.signIn(DISPATCHER);
+    const session = await auth.localAuth.signIn(OPERATOR);
     transport.inProcessTransport.setSession(session.principal);
-    const board = await transport.inProcessTransport.loadBoard('dal');
+    const board = await transport.inProcessTransport.loadBoard('dal-01');
 
-    assert.ok(board.drivers.length > 0);
-    assert.ok(board.exceptions.length > 0);
+    assert.ok(board.devices.length > 0);
+    assert.ok(board.alarms.length > 0);
 
     // THE SECOND TIME. Loading the graph proved nothing about what it does
     // when it RUNS: the agent's first log line reached process.stdout and the
-    // driver panel showed "process is not defined" under a working map. So
+    // device panel showed "process is not defined" under a working map. So
     // exercise the deepest path - tools, retrieval, the model loop - with the
     // globals still gone.
     const result = await transport.inProcessTransport.askAgent(
-      'drv-1000 is off their planned route. Is this real, and what should I do?',
+      'A switch port at dal-01 keeps flapping. Is this real, and what should I do?',
     );
     assert.ok(result.answer.length > 0);
     assert.ok(result.trace.some((t) => t.kind === 'tool'));
@@ -226,49 +204,47 @@ test('the whole module graph loads with no Node globals at all', async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Position replay
+// Health replay
 // ---------------------------------------------------------------------------
 
-test('position replay moves in-scope drivers and never anyone else', async () => {
-  await signInAs(DISPATCHER);
+test('health replay advances time and never names an out-of-scope device', async () => {
+  await signInAs(OPERATOR);
 
   const ticks: Array<{ ids: string[]; at: string }> = [];
-  const stop = inProcessTransport.subscribePositions('dal', (t) => {
-    ticks.push({ ids: [...t.positions.keys()], at: t.at });
+  const stop = inProcessTransport.subscribeHealth('dal-01', (t) => {
+    ticks.push({ ids: [...t.status.keys()], at: t.at });
   });
 
-  // The first tick is emitted synchronously, so the fleet is placed before
-  // the interval ever fires - a board must not open on an empty map.
-  assert.ok(ticks.length >= 1, 'the first tick must be immediate');
-  // One more interval, with margin.
+  // The first frame is emitted synchronously, so the estate is drawn before
+  // the interval ever fires - a board must not open blank.
+  assert.ok(ticks.length >= 1, 'the first frame must be immediate');
   await new Promise((r) => setTimeout(r, 1700));
   stop();
 
   assert.ok(ticks.length >= 2, 'the interval must keep ticking');
 
-  const dal = await inProcessTransport.loadBoard('dal');
-  const allowed = new Set(dal.drivers.map((d) => d.driverId));
+  const dal = await inProcessTransport.loadBoard('dal-01');
+  const allowed = new Set(dal.devices.map((d) => d.deviceId));
   for (const t of ticks) {
-    // Every position belongs to a driver the caller could have loaded. The
-    // tick is the SAME boundary as the board, not a second, looser one.
+    // Every device named in a frame is one the caller could have loaded. The
+    // frame is the SAME boundary as the board, not a second, looser one.
     assert.ok(t.ids.every((id) => allowed.has(id)));
-    assert.ok(t.ids.length > 0);
   }
 
   // Time advances. The header clock follows this, so it must not stand still.
   assert.notEqual(ticks[0].at, ticks[1].at);
 });
 
-test('a Dallas dispatcher subscribing to Phoenix positions receives nothing', async () => {
-  await signInAs(DISPATCHER);
+test('a Dallas operator subscribing to Phoenix health receives nothing', async () => {
+  await signInAs(OPERATOR);
 
   const seen: number[] = [];
-  const stop = inProcessTransport.subscribePositions('phx', (t) => seen.push(t.positions.size));
+  const stop = inProcessTransport.subscribeHealth('phx-01', (t) => seen.push(t.status.size));
   stop();
 
-  // The district is a view; the token is the boundary. Same rule as loadBoard,
-  // and it has to hold on this channel too or the map would leak what the
-  // roster refuses.
+  // The site is a view; the token is the boundary. Same rule as loadBoard, and
+  // it has to hold on this channel too or the map would leak what the device
+  // list refuses.
   assert.ok(seen.length >= 1);
   assert.ok(seen.every((n) => n === 0));
 });

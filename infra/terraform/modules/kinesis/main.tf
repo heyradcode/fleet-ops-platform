@@ -1,11 +1,11 @@
 # =============================================================================
-# Kinesis Data Streams - telemetry ingest
+# Kinesis Data Streams - observations ingest
 # =============================================================================
-# The stream that makes the fleet numbers work:
+# The stream that makes the estate numbers work:
 #
-#   330,000 drivers / one ping per 30s  ~=  11,000 records/sec sustained
+#   330,000 devices / one ping per 30s  ~=  11,000 records/sec sustained
 #                                            ~950 million/day
-#   peak (shift change, wave dispatch)   ~=  3-5x that
+#   peak (shift change, wave operations)   ~=  3-5x that
 #
 # Everything below follows from that arithmetic. See src/aws/kinesis.ts for the
 # runnable model of the same behaviour.
@@ -34,11 +34,11 @@ variable "on_failure_arn" {
 #                at steady high volume and instantly predictable, but you own
 #                the resharding.
 #
-# Fleet telemetry is steady and predictable by nature - drivers work shifts, not
+# Estate observations is steady and predictable by nature - devices work shifts, not
 # flash sales - so provisioned wins on cost above a few thousand records/sec.
 # Dev stays on-demand because dev traffic is neither steady nor high.
-resource "aws_kinesis_stream" "telemetry" {
-  name = "${var.name}-telemetry"
+resource "aws_kinesis_stream" "observations" {
+  name = "${var.name}-observations"
 
   stream_mode_details {
     stream_mode = var.env == "prod" ? "PROVISIONED" : "ON_DEMAND"
@@ -70,8 +70,8 @@ resource "aws_kinesis_stream" "telemetry" {
 # ---------------------------------------------------------------------------
 # The event-source mapping - where the batching actually happens
 # ---------------------------------------------------------------------------
-resource "aws_lambda_event_source_mapping" "telemetry" {
-  event_source_arn  = aws_kinesis_stream.telemetry.arn
+resource "aws_lambda_event_source_mapping" "observations" {
+  event_source_arn  = aws_kinesis_stream.observations.arn
   function_name     = var.consumer_function_arn
   starting_position = "TRIM_HORIZON"
 
@@ -85,7 +85,7 @@ resource "aws_lambda_event_source_mapping" "telemetry" {
   maximum_batching_window_in_seconds = 5
 
   # More concurrent invocations per shard without adding shards. Safe here
-  # because ordering only matters per driver, and a driver's records share a
+  # because ordering only matters per device, and a device's records share a
   # partition key - they stay in order within their own sequence.
   parallelization_factor = 4
 
@@ -114,9 +114,9 @@ resource "aws_lambda_event_source_mapping" "telemetry" {
 # ---------------------------------------------------------------------------
 # Iterator age is how far behind the consumer is. It is the ONLY metric that
 # catches a stalled shard, and it is the difference between noticing in five
-# minutes and noticing when a dispatcher asks why the board is frozen.
+# minutes and noticing when a operator asks why the board is frozen.
 resource "aws_cloudwatch_metric_alarm" "iterator_age" {
-  alarm_name          = "${var.name}-telemetry-iterator-age"
+  alarm_name          = "${var.name}-observations-iterator-age"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 2
   metric_name         = "GetRecords.IteratorAgeMilliseconds"
@@ -127,11 +127,11 @@ resource "aws_cloudwatch_metric_alarm" "iterator_age" {
   treat_missing_data  = "breaching"
 
   dimensions = {
-    StreamName = aws_kinesis_stream.telemetry.name
+    StreamName = aws_kinesis_stream.observations.name
   }
 
   tags = var.tags
 }
 
-output "stream_arn" { value = aws_kinesis_stream.telemetry.arn }
-output "stream_name" { value = aws_kinesis_stream.telemetry.name }
+output "stream_arn" { value = aws_kinesis_stream.observations.arn }
+output "stream_name" { value = aws_kinesis_stream.observations.name }

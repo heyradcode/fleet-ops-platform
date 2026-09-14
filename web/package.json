@@ -1,9 +1,9 @@
 {
-  "name": "@meridian/web",
+  "name": "@netpulse/web",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Meridian dispatch board",
+  "description": "NetPulse operations board",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

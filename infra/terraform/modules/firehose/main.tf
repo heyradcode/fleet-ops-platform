@@ -3,7 +3,7 @@
 # =============================================================================
 # The other half of the hot/cold split:
 #
-#   hot   DynamoDB   one item per driver, OVERWRITTEN    330k items, always
+#   hot   DynamoDB   one item per device, OVERWRITTEN    330k items, always
 #   cold  S3         append-only, Parquet                ~950M rows/day
 #
 # Firehose exists here to do three things that a naive "write each record to
@@ -26,7 +26,7 @@ variable "glue_table_arn" { type = string }
 variable "role_arn" { type = string }
 
 resource "aws_kinesis_firehose_delivery_stream" "history" {
-  name        = "${var.name}-telemetry-history"
+  name        = "${var.name}-observations-history"
   destination = "extended_s3"
 
   kinesis_source_configuration {
@@ -42,7 +42,7 @@ resource "aws_kinesis_firehose_delivery_stream" "history" {
     # query with `WHERE dt = '2026-09-08'` reads one prefix rather than the
     # whole bucket. Getting this wrong is the difference between a 2-second
     # query and a 200-second one on identical data.
-    prefix              = "telemetry/dt=!{timestamp:yyyy-MM-dd}/hh=!{timestamp:HH}/"
+    prefix              = "observations/dt=!{timestamp:yyyy-MM-dd}/hh=!{timestamp:HH}/"
     error_output_prefix = "errors/!{firehose:error-output-type}/dt=!{timestamp:yyyy-MM-dd}/"
 
     # Buffer until 128MB or 300s, whichever comes first. Bigger buffers make
@@ -79,14 +79,14 @@ resource "aws_kinesis_firehose_delivery_stream" "history" {
       # Firehose cannot disagree about the shape of the data.
       schema_configuration {
         role_arn      = var.role_arn
-        database_name = "meridian"
+        database_name = "netpulse"
         table_name    = "telemetry_history"
       }
     }
 
     cloudwatch_logging_options {
       enabled         = true
-      log_group_name  = "/aws/kinesisfirehose/${var.name}-telemetry-history"
+      log_group_name  = "/aws/kinesisfirehose/${var.name}-observations-history"
       log_stream_name = "S3Delivery"
     }
   }
