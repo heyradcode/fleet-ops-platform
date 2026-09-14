@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  detectIncidents, evaluate, collapseDuplicates, normalisePushed, publish,
+  detectIncidents, evaluate, collapseDuplicates, runScenarioFeeds, publish,
   processBatch, streamAndCollect,
 } from './steps.ts';
 import { KinesisStream } from '../aws/kinesis.ts';
@@ -75,7 +75,7 @@ function event(over: Partial<Observation> = {}): Observation {
     observationId: 'o-1',
     vendor: 'cisco',
     platform: 'ios-xe',
-    encoding: 'syslog',
+    encoding: 'rest-json',
     plane: 'device',
     deviceId: CORE.deviceId,
     interfaceId: 'if-' + CORE.name + '-1',
@@ -98,7 +98,7 @@ function event(over: Partial<Observation> = {}): Observation {
 // ---------------------------------------------------------------------------
 
 test('one box reporting twice does NOT open an incident', () => {
-  // A syslog line and an SNMP trap from the same agent. Two records, two feeds,
+  // A webhook and the poll that re-reports it. Two records, two transports,
   // ONE witness - and the naive "two sources agreed" rule would page on it.
   const incidents = detectIncidents(operator, [
     alarm({ id: 'a1', deviceId: CORE.deviceId, planes: ['device'] }),
@@ -221,8 +221,8 @@ test('alarms about the box itself never merge into a topology cascade', () => {
 
 test('the same event on two feeds collapses to one record with two witnesses', () => {
   const collapsed = collapseDuplicates([
-    event({ observationId: 'o-syslog', encoding: 'syslog' }),
-    event({ observationId: 'o-trap', encoding: 'snmp-trap' }),
+    event({ observationId: 'o-poll', encoding: 'rest-json' }),
+    event({ observationId: 'o-trap', encoding: 'webhook' }),
   ]);
 
   assert.equal(collapsed.length, 1);
@@ -257,7 +257,7 @@ test('metrics are never deduplicated - two samples are two samples', () => {
 test('evaluate records the DISTINCT planes that witnessed an alarm', () => {
   const alarms = evaluate(operator, [
     event({ observationId: 'o1', plane: 'device' }),
-    event({ observationId: 'o2', plane: 'device', encoding: 'snmp-trap' }),
+    event({ observationId: 'o2', plane: 'device', encoding: 'webhook' }),
     event({ observationId: 'o3', plane: 'controller', encoding: 'rest-json' }),
   ]);
 
@@ -276,27 +276,68 @@ test('an OK observation raises nothing', () => {
   assert.equal(alarms.length, 0);
 });
 
-test('a mapper failure in one vendor does not lose the others in the batch', () => {
+test('an unresolvable row does not lose the others in the same page', () => {
   const inventory = getInventory(operator);
+  const serial = estate.devices.find((d) => d.deviceId === CORE.deviceId)!
+    .aliases.find((a) => a.kind === 'controller-id')?.value;
 
-  const { observations } = normalisePushed(inventory, [{
-    tenantId: 'acme-networks',
-    encoding: 'syslog',
-    receivedAt: T,
-    source: { collector: 'vector-test' },
+  const { observations, unresolved } = runScenarioFeeds(operator, inventory, [{
+    controller: 'meraki',
+    resource: 'device-statuses',
     records: [
-      // Truncated mid-datagram - decodes to nothing.
-      '<187>1 2026-09-08T14:30',
-      // A host nobody registered - resolves to nothing.
-      '<187>1 ' + T + ' who-is-this - - - - %LINK-3-UPDOWN: Interface Gi1/0/1, changed state to down',
+      // A serial nobody registered. Dropped, and REPORTED - the whole point.
+      {
+        name: 'who-is-this', serial: 'SNUNKNOWN9999', mac: '00:00:00:00:00:00',
+        status: 'offline', lastReportedAt: T, networkId: 'N_x',
+        productType: 'switch', model: 'MS225-48',
+      },
       // ...and this one still comes through.
-      '<187>1 ' + T + ' ' + CORE.name + ' - - - - %LINK-3-UPDOWN: Interface ' +
-        'GigabitEthernet1/0/1, changed state to down',
+      {
+        name: CORE.name, serial: serial ?? CORE.name, mac: '00:18:0a:00:00:01',
+        status: 'offline', lastReportedAt: T, networkId: 'N_dal_01',
+        productType: 'switch', model: 'MS225-48',
+      },
     ],
-  }]);
+  }], T);
 
   assert.equal(observations.length, 1);
   assert.equal(observations[0].deviceId, CORE.deviceId);
+
+  // An estate whose cloud feed half fails to resolve looks exactly like a quiet
+  // estate. The count is what tells the two apart.
+  assert.deepEqual(unresolved, ['SNUNKNOWN9999']);
+});
+
+test('the plane is NOT inherited from the transport', () => {
+  const inventory = getInventory(operator);
+  const serial = estate.devices.find((d) => d.deviceId === CORE.deviceId)!
+    .aliases.find((a) => a.kind === 'controller-id')?.value ?? CORE.name;
+
+  // ONE cloud, ONE API key, TWO endpoints - and two genuinely different
+  // vantage points. If plane were derived from `encoding` both of these would
+  // be `controller`, corroboration would be unsatisfiable from vendor data,
+  // and every alarm in the estate would be held back.
+  const { observations } = runScenarioFeeds(operator, inventory, [
+    {
+      controller: 'meraki', resource: 'device-events',
+      records: [{
+        occurredAt: T, deviceSerial: serial, deviceName: CORE.name,
+        type: 'port_down', description: 'Port 1 down', eventData: { port: '1' },
+      }],
+    },
+    {
+      controller: 'meraki', resource: 'device-statuses',
+      records: [{
+        name: CORE.name, serial, mac: '00:18:0a:00:00:01', status: 'offline',
+        lastReportedAt: T, networkId: 'N_dal_01', productType: 'switch', model: 'MS225-48',
+      }],
+    },
+  ], T);
+
+  const planes = new Set(observations.map((o) => o.plane));
+  assert.deepEqual([...planes].sort(), ['controller', 'device']);
+  // Same transport for both, which is exactly why it cannot be the source.
+  assert.deepEqual([...new Set(observations.map((o) => o.encoding))], ['rest-json']);
 });
 
 // ---------------------------------------------------------------------------
@@ -318,9 +359,9 @@ test('observations are persisted but NEVER published; only alarms are', async ()
 
   const emitted = bus.log.slice(before);
 
-  // This is the decision the whole architecture rests on: a syslog-heavy estate
-  // would push tens of thousands of events a second onto the bus, and the bill
-  // would scale with ESTATE SIZE instead of with incidents.
+  // This is the decision the whole architecture rests on: an estate produces far
+  // more observations than decisions, and publishing them would make the bill
+  // scale with ESTATE SIZE instead of with incidents.
   assert.equal(emitted.length, 1);
   assert.equal(emitted[0].detailType, 'AlarmRaised');
   assert.ok(!emitted.some((e) => e.detailType.includes('Observation')));

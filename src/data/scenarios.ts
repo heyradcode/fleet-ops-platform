@@ -1,24 +1,46 @@
 /**
  * Six situations, each proving exactly one claim the architecture rests on.
  *
- * They emit VENDOR-SHAPED PAYLOADS - real syslog lines, real trap varbinds -
- * rather than pre-built Observations, so every scenario travels the same
- * decode -> map -> resolve -> evaluate -> correlate path that production
+ * They emit VENDOR-SHAPED CLOUD PAYLOADS - the JSON Meraki, Mist and Central
+ * actually return, and the JSON Meraki actually POSTs - rather than pre-built
+ * Observations, so every scenario travels the same
+ * fetch -> normalise -> collapse -> evaluate -> correlate path production
  * traffic does. A scenario that hand-built its own observations would prove
  * that the rules work on data the rules already agree with, which is worth
  * nothing.
  *
- * Devices are selected BY ROLE from the generated estate rather than named
- * literally, so a change to the generator cannot silently leave a scenario
- * pointing at a device that no longer exists - it fails loudly instead.
+ * Devices are selected BY ROLE AND VENDOR from the generated estate rather than
+ * named literally, so a change to the generator cannot silently leave a
+ * scenario pointing at a device that no longer exists - it fails loudly instead.
+ *
+ * THE FIRST SCENARIO CHANGED MEANING when the feeds became cloud-only, and it
+ * is worth knowing why. It used to show a syslog line and an SNMP trap from one
+ * switch - two records, one agent. There is no SNMP any more, but the identical
+ * trap is still available: one Meraki alert arrives by webhook the instant it
+ * fires AND again in the polled event log a few minutes later. Two records, two
+ * transports, one witness. The rule that catches it is the same rule.
  *
  * Fixtures are modelled from published references, not captured from live
  * accounts. Real device inventories are a map of an identifiable
  * organisation's internal network; nothing real belongs in this repo.
  */
-import type { Device, DeviceRole, SiteId, TenantId } from '../platform/types.ts';
-import type { RawBatch } from '../integrations/wire.ts';
+import type { Device, DeviceRole, SiteId } from '../platform/types.ts';
+import type { ControllerId } from '../integrations/connector.ts';
 import type { Estate } from './estate.ts';
+
+/**
+ * One page of one endpoint, or one webhook delivery.
+ *
+ * `resource` names the endpoint the rows came from, because that is what
+ * carries the PLANE - and the plane is what corroboration reads. `'webhook'`
+ * means an inbound delivery, which goes through signature verification before
+ * anything looks at it.
+ */
+export type ScenarioFeed = {
+  controller: ControllerId;
+  resource: string;
+  records: unknown[];
+};
 
 export type Scenario = {
   id: string;
@@ -27,7 +49,7 @@ export type Scenario = {
   proves: string;
   /** What the operator should see afterwards, in one line. */
   expect: string;
-  batches: RawBatch[];
+  feeds: ScenarioFeed[];
   /** Devices the synthetic prober should report as unreachable. */
   unreachable?: string[];
 };
@@ -52,9 +74,9 @@ function pick(estate: Estate, siteId: SiteId, role: DeviceRole, nth = 0): Device
   return device;
 }
 
-function pickVendor(estate: Estate, vendor: Device['vendor']): Device {
+function pickVendor(estate: Estate, vendor: Device['vendor'], role?: DeviceRole): Device {
   const device = estate.devices
-    .filter((d) => d.vendor === vendor && d.role !== 'wireless-ap')
+    .filter((d) => d.vendor === vendor && (role ? d.role === role : d.role !== 'wireless-ap'))
     .sort((a, b) => a.deviceId.localeCompare(b.deviceId))[0];
   if (!device) {
     throw new Error(
@@ -65,73 +87,61 @@ function pickVendor(estate: Estate, vendor: Device['vendor']): Device {
   return device;
 }
 
-function syslog(tenantId: TenantId, receivedAt: string, lines: string[]): RawBatch {
+/** The handle a cloud knows this device by. Not its hostname - that is the point. */
+function controllerId(device: Device): string {
+  return device.aliases.find((a) => a.kind === 'controller-id')?.value ?? device.name;
+}
+
+/** A row from Meraki's device event log. DEVICE plane: the switch saw this. */
+function merakiEvent(device: Device, type: string, when: string, port = '1') {
   return {
-    tenantId,
-    encoding: 'syslog',
-    receivedAt,
-    source: { collector: 'vector-use1-1' },
-    records: lines,
+    occurredAt: when,
+    deviceSerial: controllerId(device),
+    deviceName: device.name,
+    type,
+    description: type.replace(/_/g, ' ') + ' on port ' + port,
+    eventData: { port },
   };
 }
 
-function traps(tenantId: TenantId, receivedAt: string, records: unknown[]): RawBatch {
+/** A row from Meraki's device status endpoint. CONTROLLER plane: Meraki's opinion. */
+function merakiStatus(device: Device, status: 'online' | 'offline' | 'alerting', when: string) {
   return {
-    tenantId,
-    encoding: 'snmp-trap',
-    receivedAt,
-    source: { collector: 'vector-use1-1' },
-    records,
+    name: device.name,
+    serial: controllerId(device),
+    mac: '00:18:0a:00:00:01',
+    status,
+    lastReportedAt: when,
+    networkId: 'N_' + device.siteId,
+    productType: device.role === 'wireless-ap' ? 'wireless' : 'switch',
+    model: 'MS225-48',
   };
 }
 
-/** A Cisco IOS-XE link transition, RFC 5424. */
-function ciscoLink(host: string, iface: string, state: 'up' | 'down', when: string): string {
-  return '<187>1 ' + when + ' ' + host + ' - - - - %LINK-3-UPDOWN: Interface ' +
-    iface + ', changed state to ' + state;
-}
-
-/** The matching SNMP linkDown/linkUp trap for the same port on the same box. */
-function ciscoLinkTrap(sysName: string, iface: string, ifIndex: number, down: boolean) {
+/** A Meraki webhook delivery. Same event, faster, and possibly twice. */
+function merakiAlert(device: Device, alertType: string, when: string, port = '1') {
   return {
-    source: '10.10.0.1',
-    trapOid: down ? '1.3.6.1.6.3.1.1.5.3' : '1.3.6.1.6.3.1.1.5.4',
-    varbinds: [
-      { oid: '1.3.6.1.2.1.1.5.0', value: sysName },
-      { oid: '1.3.6.1.2.1.2.2.1.1.' + String(ifIndex), value: ifIndex },
-      { oid: '1.3.6.1.2.1.2.2.1.7.' + String(ifIndex), value: 1 },
-      { oid: '1.3.6.1.2.1.2.2.1.8.' + String(ifIndex), value: down ? 2 : 1 },
-      { oid: '1.3.6.1.2.1.31.1.1.1.1.' + String(ifIndex), value: iface },
-    ],
+    alertType,
+    deviceSerial: controllerId(device),
+    deviceName: device.name,
+    occurredAt: when,
+    alertData: { port },
   };
-}
-
-function snmpName(device: Device): string {
-  return device.aliases.find((a) => a.kind === 'snmp-sysname')?.value ?? device.name;
-}
-
-function firstInterface(estate: Estate, device: Device): string {
-  const iface = estate.interfaces.find((i) => i.deviceId === device.deviceId);
-  if (!iface) throw new Error('no interfaces generated for ' + device.deviceId);
-  return iface.name;
 }
 
 export function buildScenarios(estate: Estate): Scenario[] {
-  const tenantId = estate.sites[0].tenantId;
   const dallas = 'dal-01';
 
   const core = pick(estate, dallas, 'core');
   const dist = pick(estate, dallas, 'distribution');
   const access = pick(estate, dallas, 'access');
   const access2 = pick(estate, dallas, 'access', 1);
-  const corePort = firstInterface(estate, core);
-  const accessPort = firstInterface(estate, access);
 
   // One device from each of the other two vendors, for the mixed-estate
   // scenario. Selected by VENDOR rather than by name, so the scenario keeps
   // proving what it claims even if the generator renames or re-sites things.
-  const junos = pickVendor(estate, 'juniper');
-  const aruba = pickVendor(estate, 'aruba');
+  const junos = pickVendor(estate, 'juniper', 'wireless-ap');
+  const aruba = pickVendor(estate, 'aruba', 'access');
 
   // Everything downstream of the distribution switch, which is what the cascade
   // scenario expects to collapse into one incident.
@@ -140,15 +150,18 @@ export function buildScenarios(estate: Estate): Scenario[] {
   return [
     {
       id: 'double-report',
-      title: 'One link failure, reported twice by the same box',
+      title: 'One port failure, delivered twice by one cloud',
       proves:
-        'A syslog line and an SNMP trap from one agent are ONE event with two ' +
-        'records, not two witnesses. They share a dedupe key and collapse before ' +
-        'the rules ever see them.',
+        'A webhook and the polled event log that later re-reports the same alert ' +
+        'are ONE event with two records, not two witnesses. They share a dedupe ' +
+        'key and collapse before the rules ever see them.',
       expect: 'two raw records, one event, and NOT enough on its own to page anyone',
-      batches: [
-        syslog(tenantId, at(1), [ciscoLink(core.name, corePort, 'down', at(0))]),
-        traps(tenantId, at(1), [ciscoLinkTrap(snmpName(core), corePort, 10_001, true)]),
+      feeds: [
+        // The webhook, the instant it fired.
+        { controller: 'meraki', resource: 'webhook', records: [merakiAlert(core, 'port_down', at(0))] },
+        // The poll, a few minutes later, carrying the same event again. This is
+        // the normal consequence of an overlapping watermark, not a bug.
+        { controller: 'meraki', resource: 'device-events', records: [merakiEvent(core, 'port_down', at(0))] },
       ],
     },
 
@@ -156,15 +169,18 @@ export function buildScenarios(estate: Estate): Scenario[] {
       id: 'cross-plane',
       title: 'The same failure, seen from three different vantage points',
       proves:
-        'Corroboration means independent PLANES. The switch says the port is ' +
-        'down, its controller reports the device offline, and our own probe ' +
-        'cannot reach it. Three vantage points, so this one is real.',
+        'Corroboration means independent PLANES, not independent transports. The ' +
+        'switch reported the port down, the cloud separately noticed the device ' +
+        'stopped checking in, and our own probe cannot reach it. Three vantage ' +
+        'points - two of them from ONE vendor over ONE API key.',
       expect: 'an incident opens, because the evidence is genuinely independent',
-      batches: [
-        syslog(tenantId, at(1), [ciscoLink(access.name, accessPort, 'down', at(0))]),
+      feeds: [
+        { controller: 'meraki', resource: 'device-events', records: [merakiEvent(access, 'port_down', at(0))] },
+        { controller: 'meraki', resource: 'device-statuses', records: [merakiStatus(access, 'offline', at(1))] },
       ],
       // The probe is the third plane, and the only one that works when a device
-      // has stopped talking altogether.
+      // has stopped talking altogether - or when the vendor's API is the thing
+      // having a bad morning.
       unreachable: [access.deviceId],
     },
 
@@ -178,11 +194,15 @@ export function buildScenarios(estate: Estate): Scenario[] {
       expect:
         'one incident naming ' + dist.name + ' as root cause, not ' +
         String(downstream.length + 1) + ' separate pages',
-      batches: [
-        syslog(tenantId, at(2), [
-          ciscoLink(dist.name, firstInterface(estate, dist), 'down', at(0)),
-          ...downstream.map((d) => ciscoLink(d.name, firstInterface(estate, d), 'down', at(1))),
-        ]),
+      feeds: [
+        {
+          controller: 'meraki',
+          resource: 'device-statuses',
+          records: [
+            merakiStatus(dist, 'offline', at(0)),
+            ...downstream.map((d) => merakiStatus(d, 'offline', at(1))),
+          ],
+        },
       ],
       unreachable: [dist.deviceId, ...downstream.map((d) => d.deviceId)],
     },
@@ -195,52 +215,78 @@ export function buildScenarios(estate: Estate): Scenario[] {
         'but does not page. This is the case that makes the other five ' +
         'trustworthy - a board that alerts on everything gets ignored.',
       expect: 'an alarm on the board, no incident, nobody woken',
-      batches: [
-        syslog(tenantId, at(1), [
-          ciscoLink(access2.name, firstInterface(estate, access2), 'down', at(0)),
-        ]),
+      feeds: [
+        { controller: 'meraki', resource: 'device-events', records: [merakiEvent(access2, 'port_down', at(0))] },
       ],
     },
 
     {
       id: 'mixed-estate',
-      title: 'Three vendors describing the same kind of event',
+      title: 'Three clouds describing the same kind of event',
       proves:
-        'One canonical model. Cisco, Junos and AOS-CX say the same thing in ' +
-        'three dialects - a mnemonic, a structured-data element and an English ' +
-        'sentence - and land as identical Observations.',
-      expect: 'three vendors, one shape, one severity rule applied to all of them',
-      batches: [
-        syslog(tenantId, at(1), [
-          // Cisco: the fact is inside the prose.
-          ciscoLink(core.name, corePort, 'down', at(0)),
-          // Junos: the fact is in structured data. The hostname and port come
-          // from the estate rather than being written out here - a literal
-          // would silently stop resolving the moment the generator's naming
-          // changed, and the scenario would quietly prove nothing.
-          '<28>1 ' + at(0) + ' ' + junos.name + ' mib2d 2104 SNMP_TRAP_LINK_DOWN ' +
-          '[junos@2636.1.1.1.2.29 ifIndex="528" ifAdminStatus="up(1)" ' +
-          'ifOperStatus="down(2)" ifName="' + firstInterface(estate, junos) + '"] ifName ' +
-          firstInterface(estate, junos),
-          // AOS-CX: the fact is in an English sentence, and the daemon is the handle.
-          '<147>1 ' + at(0) + ' ' + aruba.name + ' ops-switchd 1832 - - Interface ' +
-          firstInterface(estate, aruba) + ' is now down',
-        ]),
+        'One canonical model. Meraki says "offline", Mist says "disconnected" ' +
+        'and Central says "Down" - three vocabularies for one idea, arriving ' +
+        'over three different pagination dialects, landing as identical ' +
+        'Observations under one severity rule.',
+      expect: 'three clouds, one shape, one severity rule applied to all of them',
+      feeds: [
+        { controller: 'meraki', resource: 'device-statuses', records: [merakiStatus(core, 'offline', at(0))] },
+        {
+          controller: 'mist',
+          resource: 'device-stats',
+          records: [{
+            name: junos.name,
+            mac: controllerId(junos),
+            type: 'ap',
+            status: 'disconnected',
+            num_clients: 0,
+            cpu_util: 0,
+            uptime: 0,
+            // UNIX SECONDS. Getting this wrong files the AP's status in 1970.
+            last_seen: Math.floor(Date.parse(at(0)) / 1000),
+          }],
+        },
+        {
+          controller: 'aruba-central',
+          resource: 'switches',
+          records: [{
+            name: aruba.name,
+            serial: controllerId(aruba),
+            macaddr: '00:0b:86:aa:bb:cc',
+            status: 'Down',
+            site: aruba.siteId,
+            cpu_utilization: 0,
+            uptime: 0,
+            model: 'CX 6300M',
+          }],
+        },
       ],
     },
 
     {
       id: 'stale-inventory',
-      title: 'A device sends syslog under a name nobody registered',
+      title: 'A cloud returns a device nobody registered',
       proves:
-        'Unresolved hosts are COUNTED and named, never dropped in silence. An ' +
-        'estate whose syslog half fails to resolve looks exactly like a quiet ' +
-        'estate, and that is the most dangerous failure mode this pipeline has.',
-      expect: 'the record is dropped, the hostname is reported, and the number is visible',
-      batches: [
-        syslog(tenantId, at(1), [
-          ciscoLink('sw-nobody-registered-01', 'GigabitEthernet1/0/9', 'down', at(0)),
-        ]),
+        'Unresolved devices are COUNTED and named, never dropped in silence. An ' +
+        'estate whose cloud feed half fails to resolve looks exactly like a ' +
+        'quiet estate, and that is the most dangerous failure mode this ' +
+        'pipeline has.',
+      expect: 'the record is dropped, the serial is reported, and the number is visible',
+      feeds: [
+        {
+          controller: 'meraki',
+          resource: 'device-statuses',
+          records: [{
+            name: 'sw-nobody-registered-01',
+            serial: 'SNUNKNOWN0001',
+            mac: '00:18:0a:ff:ff:ff',
+            status: 'offline',
+            lastReportedAt: at(0),
+            networkId: 'N_dal_01',
+            productType: 'switch',
+            model: 'MS225-48',
+          }],
+        },
       ],
     },
   ];

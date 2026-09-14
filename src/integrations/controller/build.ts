@@ -1,22 +1,28 @@
 /**
- * Assembly for the pull half.
+ * Assembly, so that a connector's normalise() is only ever a translation table.
  *
- * The push mappers have their own builder (map/build.ts) because they start
- * from a DecodedRecord and have three timestamps to reconcile. A controller
- * reply has neither problem: it is already JSON, and the controller's clock is
- * a cloud service's clock rather than a switch with broken NTP, so the reported
- * time can simply be believed.
+ * Every mapping has to hash an id, derive a severity and - for events - compute
+ * a dedupe key. None of that is vendor knowledge, and having it inline in each
+ * connector is how the files drift: one of them hashes a different tuple, and
+ * the resulting bug shows up months later as records that mysteriously fail to
+ * deduplicate.
  *
- * What both builders share is the part that must not drift - the id hash, the
- * severity rule, and the plane. Those come from platform/types.ts and
- * classify.ts either way.
+ * `plane` IS A REQUIRED ARGUMENT, and that is the point of this file as much as
+ * the hashing is. It used to be derived from the encoding, which was correct
+ * while syslog meant "the box said so" and REST meant "its cloud said so".
+ * Now every feed is cloud HTTP, so deriving it would mark the entire platform
+ * `controller`, corroboration would never be satisfiable from vendor data, and
+ * every alarm would be held back. Making it a parameter with no default means
+ * a new connector cannot compile until its author has decided, per endpoint,
+ * where the knowledge actually came from.
  */
 import type {
   DeviceId, EventKind, EventObservation, MetricKind, MetricObservation,
   ObservationPlane, PlatformId, SiteId, TenantId, Unit, VendorId,
 } from '../../platform/types.ts';
-import { dedupeKeyFor, observationId, planeFor } from '../../platform/types.ts';
+import { dedupeKeyFor, observationId } from '../../platform/types.ts';
 import { severityForEvent, severityForMetric } from '../classify.ts';
+import type { Encoding } from '../../platform/types.ts';
 
 export type ControllerIdentity = {
   vendor: VendorId;
@@ -26,6 +32,10 @@ export type ControllerIdentity = {
 
 type CommonArgs = {
   identity: ControllerIdentity;
+  /** Where this knowledge came from. No default, deliberately. */
+  plane: ObservationPlane;
+  /** How it reached us. Never used to infer the plane. */
+  encoding: Encoding;
   deviceId: DeviceId;
   siteId?: SiteId;
   sourceRef: string;
@@ -33,8 +43,6 @@ type CommonArgs = {
   receivedAt: string;
   attributes?: Record<string, string | number | boolean>;
 };
-
-const PLANE: ObservationPlane = planeFor('rest-json');
 
 function base(args: CommonArgs, kind: string) {
   return {
@@ -44,14 +52,14 @@ function base(args: CommonArgs, kind: string) {
     ),
     vendor: args.identity.vendor,
     platform: args.identity.platform,
-    encoding: 'rest-json' as const,
-    plane: PLANE,
+    encoding: args.encoding,
+    plane: args.plane,
     deviceId: args.deviceId,
     siteId: args.siteId,
     sourceRef: args.sourceRef,
     observedAt: args.observedAt,
     receivedAt: args.receivedAt,
-    attributes: args.attributes ?? {},
+    attributes: { ...args.attributes, plane: args.plane },
   };
 }
 
@@ -79,6 +87,10 @@ export function controllerEvent(args: CommonArgs & {
     state: args.state,
     message: args.message,
     severity: severityForEvent(args.kind, args.state),
+    // NOTE the dedupe key does not include the plane or the encoding. That is
+    // what lets a webhook delivery and the poll that later re-reports the same
+    // event collapse into one record - which is the whole reason the poll can
+    // safely overlap its watermark.
     dedupeKey: dedupeKeyFor({
       deviceId: common.deviceId,
       kind: args.kind,

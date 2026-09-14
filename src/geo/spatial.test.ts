@@ -133,7 +133,7 @@ test('FeatureCollection properties carry what MapLibre styles read', () => {
     observationId: 'o1',
     vendor: 'cisco',
     platform: 'ios-xe',
-    encoding: 'syslog',
+    encoding: 'rest-json',
     plane: 'device',
     deviceId: 'dev-cor-dal01-01',
     sourceRef: 'GigabitEthernet1/0/1',

@@ -18,9 +18,9 @@
 #       WebSocket to every client whose filter matches. This is the single
 #       biggest reason to choose AppSync over a hand-rolled GraphQL server.
 #
-# THE SUBSCRIPTION FILTER IS A COST DECISION, NOT A FEATURE. On a syslog-heavy
-# estate an operator watching Dallas must not be woken by - or billed for -
-# every site's traffic. See `onDeviceAlarm` at the bottom.
+# THE SUBSCRIPTION FILTER IS A COST DECISION, NOT A FEATURE. An operator
+# watching Dallas must not be woken by - or billed for - every site's traffic.
+# See `onDeviceAlarm` at the bottom.
 #
 # WHAT IS DELIBERATELY ABSENT: observations are not subscribable. Only alarms
 # and incidents are. Tens of thousands of records a second through a WebSocket
@@ -45,8 +45,9 @@ enum DeviceStatus { healthy degraded down unknown }
 enum DeviceRole { core distribution access wan_edge wireless_ap firewall }
 enum Vendor { cisco juniper aruba }
 
-# How the bytes arrived. Selects a decoder; deliberately independent of vendor.
-enum Encoding { syslog snmp_trap gnmi ipfix rest_json probe }
+# How an observation reached us. Every path is HTTP - a polled cloud API, that
+# same cloud calling us back, or our own probe. NEVER used to infer the plane.
+enum Encoding { rest_json webhook probe }
 
 # WHO OBSERVED IT. The most load-bearing enum in this schema - corroboration is
 # defined over these, not over feeds. See ObservationPlane in types.ts.
@@ -231,8 +232,8 @@ type Alarm @aws_cognito_user_pools {
 
   """
   The distinct vantage points that saw it. TWO OR MORE is the bar for raising
-  an incident - and it is planes, not feeds, because a syslog line and an SNMP
-  trap from one switch are one witness talking twice.
+  an incident - and it is planes, not endpoints, because one cloud's event log
+  and its status feed can both be relaying the same single witness.
   """
   planes: [ObservationPlane!]!
 

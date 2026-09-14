@@ -19,7 +19,7 @@
  * coordinates worth indexing, because every device at a site shares one point.
  *
  * NOTE WHAT IS *NOT* HERE: a per-record lookup on the ingest path. At tens of
- * thousands of records a second, a round trip per syslog line costs more than
+ * thousands of records a second, a round trip per row costs more than
  * the pipeline it feeds. The hot path resolves against an inventory snapshot
  * held in memory (platform/inventory.ts), and Aurora stays the source of truth
  * that snapshot is built from. Knowing which work belongs where is most of the

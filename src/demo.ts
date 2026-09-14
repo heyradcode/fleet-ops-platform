@@ -21,13 +21,15 @@ import { assertSameTenant, tenantScopedSessionPolicy, CrossTenantAccessError } f
 
 import { buildIngestWorkflow } from './pipeline/ingest-workflow.ts';
 import {
-  normalisePushed, collapseDuplicates, resolveLocations,
+  runScenarioFeeds, collapseDuplicates, resolveLocations,
   evaluate, detectIncidents, incidentDepth,
 } from './pipeline/steps.ts';
 import { connectors, connectorsFor, breakers } from './integrations/controller/registry.ts';
 import { failNext, clearFailures } from './integrations/controller/fixtures.ts';
-import { setProber, resetProber } from './integrations/probe.ts';
-import { decoders, mappers } from './integrations/wire-registry.ts';
+import { setProber, resetProber, probeEstate } from './integrations/probe.ts';
+import { drainPages, resetWatermarks } from './integrations/http.ts';
+import { verifyWebhook, signWebhook } from './integrations/webhook.ts';
+import { webhookSecretFor } from './integrations/controller/registry.ts';
 import { rawBucket, historyBucket, flowBucket } from './aws/s3.ts';
 import { observationStream } from './aws/kinesis.ts';
 import { buildScenarios } from './data/scenarios.ts';
@@ -59,7 +61,7 @@ import { TOOL_SPECS, READ_ONLY_TOOL_SPECS } from './ai/tools.ts';
 import { usage as bedrockUsage } from './aws/bedrock.ts';
 import { checkInput, canUseTool } from './ai/guardrails.ts';
 import { b64urlEncode, b64urlDecodeText, setUuid, seededUuid } from './platform/crypto.ts';
-import { setClock, fixedClock, now } from './platform/clock.ts';
+import { setClock, fixedClock, now, nowIso } from './platform/clock.ts';
 import { setRandom, seededRandom } from './platform/random.ts';
 import { loadRunbooksFromDisk } from './platform/runbook-loader.node.ts';
 
@@ -69,6 +71,9 @@ const only = process.argv.find((a) => a.startsWith('--only='))?.split('=')[1];
 const wants = (name: string) => !only || only === name;
 
 const write = (s: string) => process.stdout.write(s);
+
+/** The instant every scenario is replayed at. Fixed, like everything else. */
+const SCENARIO_AT = '2026-09-08T14:30:05.000Z';
 const dim = (s: string) => '\x1b[90m' + s + '\x1b[0m';
 
 /** Operator in tenant `acme-networks` - used by most sections. */
@@ -109,8 +114,8 @@ async function main() {
 function banner() {
   write(
     '\n\x1b[1m\x1b[36mNetPulse\x1b[0m ' + dim('- network operations intelligence on AWS serverless') + '\n' +
-    dim('Cisco/Juniper/Aruba syslog + SNMP + controller APIs + synthetic probes\n' +
-      '-> S3 landing zone -> decode/map -> DynamoDB hot state + PostGIS -> AppSync -> agent') + '\n',
+    dim('Meraki / Mist / Aruba Central cloud APIs, their webhooks, and our own probes\n' +
+      '-> S3 landing zone -> DynamoDB hot state + PostGIS -> AppSync -> agent') + '\n',
   );
 }
 
@@ -211,21 +216,32 @@ async function sectionIngest() {
   ensurePrincipals();
   section('2', 'Ingest: two arrival shapes, one canonical model');
 
-  note('The split that decides the architecture:');
-  write('   ' + dim('PUSH  syslog / SNMP / IPFIX / gNMI  -> persistent collector -> S3 -> Lambda') + '\n');
-  write('   ' + dim('PULL  Meraki / Mist / Aruba Central -> polled on a schedule') + '\n');
-  write('   ' + dim('Lambda cannot hold a UDP socket, which is why the first row is not a Lambda.') + '\n');
+  note('Every feed is the vendor\'s cloud HTTP API. Two directions:');
+  write('   ' + dim('POLL     we call them on a schedule. Complete, ordered, late.') + '\n');
+  write('   ' + dim('WEBHOOK  they call us the instant it happens. Timely, partial, twice.') + '\n');
+  write('   ' + dim('The poll is the reconciling sweep - a webhook that is never delivered') + '\n');
+  write('   ' + dim('is invisible, so something has to eventually notice what the push lost.') + '\n');
 
   note('');
-  note('Decoders are keyed by ENCODING, mappers by (vendor, platform, encoding):');
-  write('   decoders  ' + decoders.map((d) => d.encoding).join(', ') + '\n');
-  for (const m of mappers) {
-    write('   mapper    ' + (m.vendor + '/' + m.platform).padEnd(20) + m.encoding + '\n');
+  note('Endpoints, and the PLANE each one observes from:');
+  for (const c of connectors) {
+    for (const r of c.resources) {
+      write('   ' + (c.controller + '/' + r.name).padEnd(30) +
+        r.plane.padEnd(12) + dim(planeGloss(r.plane)) + '\n');
+    }
   }
-  write('   ' + dim(decoders.length + ' decoders + ' + mappers.length + ' mappers covers ' +
-    new Set(mappers.map((m) => m.vendor)).size + ' vendors x ' +
-    new Set(mappers.map((m) => m.encoding)).size + ' encodings. One file per vendor would ' +
-    'have written the RFC 5424 parser three times.') + '\n');
+  write('   ' + dim('Meraki appears twice with two DIFFERENT planes, over one API key. That') + '\n');
+  write('   ' + dim('is why `plane` cannot be derived from the transport: do that and every') + '\n');
+  write('   ' + dim('observation becomes `controller`, and no alarm can ever corroborate.') + '\n');
+
+  note('');
+  note('Three clouds, three pagination dialects - and stopping one page early');
+  note('does not error, it silently returns a SHORTER ESTATE:');
+  for (const c of connectors) {
+    const kinds = [...new Set(c.resources.map((r) =>
+      r.firstPage({ tenantId: operator.tenantId, secrets: {}, since: new Date(0) }).kind))];
+    write('   ' + c.controller.padEnd(16) + kinds.join(', ') + '\n');
+  }
 
   note('');
   note('Controllers this customer actually runs:');
@@ -253,6 +269,37 @@ async function sectionIngest() {
   note('Raw payloads land in S3 BEFORE anything normalises them:');
   for (const key of rawBucket.listKeys().slice(0, 3)) write('   ' + dim(key) + '\n');
   write('   ' + dim('archive first, normalise second - a mapping bug is then replayable') + '\n');
+
+  note('');
+  // --- The inbound half ----------------------------------------------------
+  note('');
+  note('Webhooks: the same cloud API, inbound. Verified BEFORE it is parsed:');
+  const secret = webhookSecretFor(operator.tenantId, 'meraki') ?? '';
+  const body = JSON.stringify({
+    alertType: 'port_down', deviceSerial: 'SNDAL010005',
+    deviceName: 'acc-dal01-05', occurredAt: nowIso(), alertData: { port: '8' },
+  });
+
+  const genuine = verifyWebhook('meraki', { body, headers: signWebhook('meraki', body, secret, now()) },
+    secret, operator.tenantId);
+  write('   genuine delivery          -> ' +
+    (genuine.ok ? '\x1b[32maccepted\x1b[0m, ' + genuine.batch.records.length + ' record(s)' : 'rejected') + '\n');
+
+  // Anyone who learns the URL can POST to it - the URL is not a secret.
+  const forged = verifyWebhook('meraki',
+    { body, headers: { 'x-cisco-meraki-signature': 'deadbeef', 'x-cisco-meraki-timestamp': String(now()) } },
+    secret, operator.tenantId);
+  write('   forged signature          -> ' +
+    (forged.ok ? 'accepted' : '\x1b[31m' + forged.status + '\x1b[0m ' + dim(forged.reason)) + '\n');
+
+  // A valid signature stays valid forever unless the timestamp is signed too.
+  const old = now() - 20 * 60 * 1000;
+  const replayed = verifyWebhook('meraki',
+    { body, headers: signWebhook('meraki', body, secret, old) }, secret, operator.tenantId);
+  write('   captured and replayed     -> ' +
+    (replayed.ok ? 'accepted' : '\x1b[31m' + replayed.status + '\x1b[0m ' + dim(replayed.reason)) + '\n');
+  write('   ' + dim('signature first, then timestamp, then JSON.parse - checking the clock') + '\n');
+  write('   ' + dim('first tells an unauthenticated caller whether their guess was in range.') + '\n');
 
   note('');
   note('The hot/cold split:');
@@ -288,27 +335,31 @@ async function sectionScenarios() {
       resetProber();
     }
 
-    // The real path: decode -> map -> collapse -> resolve -> evaluate -> detect.
-    // Nothing here builds an Observation by hand.
-    const { observations: pushed, unresolvedHosts } = normalisePushed(inventory, scenario.batches);
+    // The real path: fetch -> normalise -> collapse -> resolve -> evaluate ->
+    // correlate. Nothing here builds an Observation by hand.
+    const { observations: fromClouds, unresolved } =
+      runScenarioFeeds(operator, inventory, scenario.feeds, SCENARIO_AT);
     const probed = scenario.unreachable
-      ? (await import('./integrations/probe.ts')).probeEstate(operator, inventory)
+      ? probeEstate(operator, inventory)
         .filter((o) => scenario.unreachable!.includes(o.deviceId))
       : [];
 
-    const raw = [...pushed, ...probed];
+    const raw = [...fromClouds, ...probed];
     const collapsed = collapseDuplicates(raw);
     const enriched = resolveLocations(operator, collapsed);
     const alarms = evaluate(operator, enriched);
     const incidents = detectIncidents(operator, alarms);
 
-    const rawCount = scenario.batches.reduce((n, b) => n + b.records.length, 0);
+    const rawCount = scenario.feeds.reduce((n, f) => n + f.records.length, 0);
+    const via = [...new Set(scenario.feeds.map((f) =>
+      f.controller + '/' + f.resource))].join(', ');
+    write('   ' + dim(via) + '\n');
     write('   ' + rawCount + ' raw records -> ' + raw.length + ' observations -> ' +
       collapsed.length + ' after dedupe -> ' + alarms.length + ' alarms -> ' +
       incidents.length + ' incident' + (incidents.length === 1 ? '' : 's') + '\n');
 
-    if (unresolvedHosts.length > 0) {
-      write('   \x1b[33munresolved hosts: ' + unresolvedHosts.join(', ') + '\x1b[0m ' +
+    if (unresolved.length > 0) {
+      write('   \x1b[33munresolved devices: ' + unresolved.join(', ') + '\x1b[0m ' +
         dim('(counted, not silently dropped)') + '\n');
     }
 
@@ -724,3 +775,13 @@ main().catch((err) => {
   process.exitCode = 1;
   write('\n\x1b[31mdemo failed:\x1b[0m ' + (err instanceof Error ? err.stack : String(err)) + '\n');
 });
+
+/** One line on what each plane actually knows. Used by the ingest section. */
+function planeGloss(plane: string): string {
+  switch (plane) {
+    case 'device': return 'the box detected it; the cloud only relayed it';
+    case 'controller': return 'the cloud formed the opinion, not the device';
+    case 'external': return 'we looked from outside; no vendor involved';
+    default: return '';
+  }
+}

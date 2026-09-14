@@ -122,6 +122,8 @@ export class Inventory {
   #byName = new Map<string, InterfaceId>();
   /** deviceId + '|' + ifIndex -> interfaceId. Only for devices we trust. */
   #byIfIndex = new Map<string, InterfaceId>();
+  /** Aliases that failed to resolve. Drained by takeUnresolved(). */
+  #unresolved = new Set<string>();
   /** Aliases claimed by more than one device. Never resolved; always reported. */
   readonly ambiguousAliases: string[] = [];
 
@@ -178,7 +180,52 @@ export class Inventory {
     if (!claimed) return undefined;
     const key = claimed.trim().toLowerCase();
     if (this.ambiguousAliases.includes(key)) return undefined;
-    return this.#byAlias.get(key);
+
+    const hit = this.#byAlias.get(key);
+    // A MISS IS RECORDED, not merely returned.
+    //
+    // Every connector drops a row it cannot resolve, which is correct - a
+    // metric bound to the wrong device is worse than a missing one. But a
+    // connector that drops silently turns "your inventory has drifted" into
+    // "the estate is quiet", and those look identical from outside. Counting
+    // here means one place owns the number and no connector has to remember to
+    // report it.
+    if (!hit) this.#unresolved.add(claimed.trim());
+    return hit;
+  }
+
+  /**
+   * Try several aliases for ONE device, and record at most one miss.
+   *
+   * Connectors legitimately have a fallback chain - Meraki gives a serial and a
+   * name, and either might be the one the estate registered. Calling
+   * `resolveDevice` twice records TWO misses for one unknown device, which
+   * makes the "your inventory has drifted" number meaningless: it counts
+   * attempts rather than devices. The first alias is the one reported, because
+   * it is the vendor's own primary key and therefore the one to go and add.
+   */
+  resolveDeviceAny(...aliases: Array<string | undefined>): DeviceId | undefined {
+    const tried = aliases.filter((a): a is string => Boolean(a));
+    for (const alias of tried) {
+      const key = alias.trim().toLowerCase();
+      if (this.ambiguousAliases.includes(key)) continue;
+      const hit = this.#byAlias.get(key);
+      if (hit) return hit;
+    }
+    if (tried.length > 0) this.#unresolved.add(tried[0].trim());
+    return undefined;
+  }
+
+  /**
+   * Drain the aliases that failed to resolve since the last call.
+   *
+   * Draining rather than reading, so a long-running Lambda reports each miss
+   * once instead of re-reporting the whole history on every poll.
+   */
+  takeUnresolved(): string[] {
+    const out = [...this.#unresolved];
+    this.#unresolved.clear();
+    return out;
   }
 
   /**

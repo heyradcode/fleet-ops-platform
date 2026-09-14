@@ -25,7 +25,7 @@ const globex = verifyToken(signDemoToken({
 function reading(tenantId: string, id: string): Observation {
   return {
     tenantId, observationId: id,
-    vendor: 'cisco', platform: 'ios-xe', encoding: 'syslog', plane: 'device',
+    vendor: 'cisco', platform: 'ios-xe', encoding: 'rest-json', plane: 'device',
     deviceId: 'dev-cor-dal01-01', sourceRef: 'GigabitEthernet1/0/1',
     observedAt: '2026-09-08T14:30:00.000Z', receivedAt: '2026-09-08T14:30:00.000Z',
     severity: 'critical', attributes: {},

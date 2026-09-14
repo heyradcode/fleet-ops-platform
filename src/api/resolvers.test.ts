@@ -95,7 +95,7 @@ test('publishAlarm pushes only to boards whose filter matches', async () => {
     },
   }, 'dal-01'));
 
-  // AppSync evaluates the filter BEFORE pushing. On a syslog-heavy estate this
+  // AppSync evaluates the filter BEFORE pushing. Across a large estate this
   // is the difference between a bill proportional to incidents and one
   // proportional to estate size - and it keeps Dallas traffic out of Phoenix's
   // dev tools, which is a confidentiality property as much as a cost one.

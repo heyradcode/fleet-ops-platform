@@ -5,20 +5,24 @@
  * as runnable code and once as the Amazon States Language JSON that Terraform
  * actually deploys.
  *
- * NOTE WHAT IS AND IS NOT IN HERE. This workflow owns the PULL half and the
- * rules: poll the controllers, run the probe, fold in whatever the push
- * collectors already landed, then evaluate and correlate. The push half's
- * arrival is not a step at all - syslog and traps reach S3 through a collector
- * that runs continuously and answers to nobody in this file. Modelling them as
- * a Map state would imply a schedule they do not have.
+ * NOTE WHAT IS AND IS NOT IN HERE. This workflow owns the POLL half and the
+ * rules: call each cloud on a schedule, run the probe, fold in whatever
+ * webhooks have arrived since, then evaluate and correlate.
+ *
+ * Webhook ARRIVAL is not a step at all. Deliveries hit API Gateway whenever a
+ * vendor's cloud decides to send one, are signature-verified at the edge, and
+ * are handed in here already unwrapped. Modelling them as a Map state would
+ * imply a cadence they do not have - and would put a public HTTPS endpoint's
+ * latency inside a scheduled execution, which is exactly the coupling the two
+ * paths exist to avoid.
  */
 import { StateMachine, type State } from '../aws/stepfunctions.ts';
 import { connectorsFor } from '../integrations/controller/registry.ts';
-import type { RawBatch } from '../integrations/wire.ts';
+import type { RawBatch } from '../integrations/http.ts';
 import type { Alarm, DeviceState, Observation, Principal } from '../platform/types.ts';
 import { getInventory } from '../geo/device-repository.ts';
 import {
-  collectOne, collectProbes, normaliseControllers, normalisePushed,
+  collectOne, collectProbes, normaliseControllers, normaliseWebhooks,
   streamAndCollect, collapseDuplicates, resolveLocations, foldDeviceState,
   evaluate, detectIncidents, publish,
   type PipelineInput,
@@ -59,10 +63,15 @@ export function buildIngestWorkflow(
         // the only place in the platform where they meet, and everything after
         // it is plane-agnostic except the corroboration rule - which is the
         // one place that must not be.
+        //
+        // Note that the webhook half is NOT a step here. Deliveries arrive at
+        // API Gateway whenever the cloud feels like sending them, and modelling
+        // them as a state in a scheduled workflow would imply a cadence they do
+        // not have. They are passed in already verified; see webhook.ts.
         const fromControllers = normaliseControllers(principal, inventory, collected);
-        const fromDevices = normalisePushed(inventory, pushed).observations;
+        const fromWebhooks = normaliseWebhooks(principal, inventory, pushed).observations;
         const fromProbe = collectProbes(principal, inventory);
-        return [...fromDevices, ...fromControllers, ...fromProbe];
+        return [...fromWebhooks, ...fromControllers, ...fromProbe];
       },
       // Retry a transient failure twice, then give up. A normalise() bug will
       // not fix itself on retry, so the backoff is short by design.

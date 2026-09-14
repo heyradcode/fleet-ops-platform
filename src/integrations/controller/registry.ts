@@ -40,10 +40,13 @@ export const connectors: Connector[] = [meraki, mist, arubaCentral];
  * the shape of the real thing.
  */
 const TENANT_CONTROLLERS: Record<TenantId, ControllerId[]> = {
-  // The demo customer. A mixed estate - Cisco switching with Meraki at the
-  // edge, Aruba on the access layer - which is the configuration that makes
-  // cross-plane corroboration demonstrable, and why the demo uses it.
-  'acme-networks': ['meraki', 'aruba-central'],
+  // The demo customer, and the reason it runs all three is not laziness: this
+  // is what an estate looks like after two acquisitions. Meraki at the edge,
+  // Mist on the Austin wireless, Aruba on the Denver access layer, and nobody
+  // has had the budget to unify them. It is also the configuration that makes
+  // cross-plane corroboration demonstrable, because Meraki alone supplies two
+  // planes and the probe supplies the third.
+  'acme-networks': ['meraki', 'mist', 'aruba-central'],
 
   // A different stack entirely - same platform, no code changes.
   'northwind-utilities': ['mist'],
@@ -78,3 +81,42 @@ export function connectorsFor(principal: Principal): Connector[] {
 export const breakers = new Map<ControllerId, CircuitBreaker>(
   connectors.map((c) => [c.controller, new CircuitBreaker(c.controller)]),
 );
+
+/**
+ * The shared secret each cloud signs its webhooks with.
+ *
+ * PER TENANT AND PER CONTROLLER, never one global secret. A single shared
+ * secret would mean any customer who could read it - or any vendor support
+ * engineer who saw it in a Central console - could forge alerts into every
+ * other customer's estate. In production these live in Secrets Manager under
+ * `netpulse/{tenantId}/{controller}/webhook`, rotated on the vendor's schedule,
+ * and the receiver looks one up per delivery rather than holding them in
+ * memory.
+ *
+ * Hard-coded here for the offline demo only, and deliberately obvious about it:
+ * a plausible-looking secret in a repository is worse than one that announces
+ * itself as fake.
+ */
+const DEMO_WEBHOOK_SECRETS: Record<string, string> = {
+  'acme-networks|meraki': 'demo-only-not-a-real-webhook-secret',
+  'acme-networks|aruba-central': 'demo-only-not-a-real-webhook-secret',
+  'northwind-utilities|mist': 'demo-only-not-a-real-webhook-secret',
+};
+
+export function webhookSecretFor(tenantId: TenantId, controller: ControllerId): string | undefined {
+  return DEMO_WEBHOOK_SECRETS[tenantId + '|' + controller];
+}
+
+/**
+ * Which connector handles a delivery on this controller's endpoint.
+ *
+ * Takes the tenant as well, so an inbound webhook cannot reach a connector the
+ * customer does not run. Without that check the endpoint is an open door into
+ * any tenant whose id an attacker can guess.
+ */
+export function connectorForWebhook(
+  tenantId: TenantId, controller: ControllerId,
+): Connector | undefined {
+  if (!controllersFor(tenantId).includes(controller)) return undefined;
+  return connectors.find((c) => c.controller === controller);
+}

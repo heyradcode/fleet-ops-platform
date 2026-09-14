@@ -15,7 +15,7 @@
 import { uuid } from '../platform/crypto.ts';
 import { log } from '../platform/logger.ts';
 import type { FlowObservation, Observation } from '../platform/types.ts';
-import type { RawBatch } from '../integrations/wire.ts';
+import type { RawBatch } from '../integrations/http.ts';
 import { env } from '../platform/env.ts';
 
 export class S3Bucket {

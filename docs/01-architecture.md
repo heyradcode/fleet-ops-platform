@@ -15,7 +15,7 @@
                     ┌─────────▼──────────┐        ┌────────────▼─────────┐
                     │  AppSync (GraphQL) │        │  API Gateway (REST)  │
                     │  • direct DynamoDB │        │  • Lambda authorizer │
-                    │  • Lambda resolvers│        │  • webhooks          │
+                    │  • Lambda resolvers│        │  • vendor webhooks   │
                     │  • subscriptions   │        └────────────┬─────────┘
                     └─────────┬──────────┘                     │
                               └───────────┬────────────────────┘
@@ -34,28 +34,49 @@
 
    ═══════════════════════════ ingest side ═══════════════════════════
 
-   THREE PLANES. The third is the one that survives a dead device.
+   EVERY FEED IS A VENDOR CLOUD HTTP API. Two directions, three planes.
 
-   DEVICE plane — push, UDP ───┐      IOS-XE, Junos and AOS-CX all speak
-     syslog 514                │      the same wire formats, so decoders
-     SNMP trap 162             │      are shared and only mappers differ.
-     IPFIX · gNMI              │
-                               │  ┌──────────────────────────────────┐
-   CONTROLLER plane — pull ────┼─▶│  collector ──▶ S3 landing zone   │
-     Meraki · Mist · Central   │  │  raw/tenant=…/vendor=…/          │
-     REST, on a schedule       │  │      encoding=…/dt=…/hh=…        │
-                               │  └────────────────┬─────────────────┘
-   EXTERNAL plane — ours ──────┘                   │ S3 event notification.
-     ICMP / TCP probe                              │ The ENCODING is read
-     the only thing that sees silence              │ from the KEY, so a
-                                                   │ 128MB object is never
-                                                   ▼ opened to choose a parser.
+   ┌──────────────────────────────────────────────────────────────────┐
+   │  POLL - EventBridge Scheduler, every 5 min, jittered             │
+   │                                                                  │
+   │    Meraki  /devices/statuses   Link-header cursor   CONTROLLER   │
+   │    Meraki  /networks/…/events  Link-header cursor   DEVICE       │
+   │    Mist    /stats/devices      page (1-indexed)     CONTROLLER   │
+   │    Central /monitoring/…       offset + OAuth       CONTROLLER   │
+   │                                                                  │
+   │  Complete, ordered, LATE. The reconciling sweep - and the only   │
+   │  thing that eventually notices what a dropped webhook lost.      │
+   └────────────────────────────────┬─────────────────────────────────┘
+                                    │
+   ┌──────────────────────────────┐ │   ┌────────────────────────────┐
+   │  WEBHOOK - the same API,     │ │   │  PROBE - ours, not a       │
+   │  inbound, via API Gateway    │ │   │  vendor's. ICMP / TCP.     │
+   │                              │ │   │                            │
+   │  HMAC, THEN timestamp, THEN  │ │   │  EXTERNAL plane. The only  │
+   │  JSON.parse - in that order  │ │   │  thing that can tell "the  │
+   │  Timely, partial, sometimes  │ │   │  estate is down" from "our │
+   │  delivered twice             │ │   │  view of it is down".      │
+   └───────────────┬──────────────┘ │   └──────────────┬─────────────┘
+                   │                │                  │
+                   └────────────────┼──────────────────┘
+                                    ▼
+                    ┌──────────────────────────────────┐
+                    │  S3 landing zone                 │
+                    │  raw/tenant=…/vendor=…/          │
+                    │      encoding=…/dt=…/hh=…        │
+                    │                                  │
+                    │  Archived BEFORE normalising.    │
+                    │  Cloud APIs keep a rolling       │
+                    │  window, so a re-fetch to undo   │
+                    │  a mapping bug is often simply   │
+                    │  not available.                  │
+                    └────────────────┬─────────────────┘
+                                     ▼
               ┌──────────────────────────────────────────────────────┐
-              │  decoder per ENCODING      shared across all vendors │
+              │  connector.normalise(raw, inventory, resource)       │
               │        │                                             │
-              │        ▼                                             │
-              │  mapper per (vendor, platform, encoding)             │
-              │        │                                             │
+              │        │  the RESOURCE carries the plane - one cloud │
+              │        │  observes from two, over one API key        │
               │        ▼                                             │
               │  Observation      metric  ·  event  ·  flow          │
               └───────────────────────────┬──────────────────────────┘
@@ -73,13 +94,15 @@
    │  foldDeviceState ─────▶ DynamoDB  1 item/device, OVERWRITTEN  │
    │  appendHistory ───────▶ Firehose ──▶ S3 Parquet, append-only  │
    │  appendFlows ─────────▶ S3 by exporter. Athena only, never    │
-   │                         the hot store — 100k+/sec would make  │
-   │                         storage scale with traffic            │
+   │                         the hot store                         │
    │  collapseDuplicates ──▶ one event per dedupeKey, BEFORE the   │
-   │                         rules ever count it as evidence       │
+   │                         rules count it as evidence. A webhook │
+   │                         and the poll that re-reports it are   │
+   │                         ONE witness, not two                  │
    │  evaluate ────────────▶ Alarm[]     per-device rules          │
-   │  detectIncidents ─────▶ Incident[]  corroborated, then merged │
-   │                         by topology and anchored at the cause │
+   │  detectIncidents ─────▶ Incident[]  corroborated by PLANE,    │
+   │                         merged by topology, anchored at cause │
+   │  advanceWatermarks ───▶ only now, and only for polled records │
    └───────────────────────────────┬───────────────────────────────┘
                                    │
                     ONLY ALARMS. Never observations.
@@ -154,16 +177,23 @@ Device item at write time.
 ## Request flow 2: a vendor's observations becomes a page
 
 ```
-1. EventBridge Scheduler fires every 5 minutes — the PULL half only. The push
-   feeds never wait for a schedule; their collector is already running and has
-   already landed their traffic in S3.
+1. EventBridge Scheduler fires every 5 minutes — the POLL half only. Webhooks
+   never wait for a schedule; they arrive at API Gateway whenever a cloud
+   decides to send one.
    FLEXIBLE time window jitters the start, so a thousand tenants do not all
-   hammer the controller API at :00.
+   hammer the controller API at :00. The rate limits are per ORGANISATION and
+   shared with every other integration the customer runs, so the poll interval
+   is a product decision rather than a tuning knob.
+
+   `since` comes from the persisted WATERMARK, not from "now minus five
+   minutes". A run that is late, retried, or recovering from an outage would
+   otherwise skip exactly the window it was late for — silently, because a
+   polled feed has no gap to notice.
 
 2. Step Functions Map state, MaxConcurrency 4, one branch per controller.
    ToleratedFailurePercentage 40 — a dead controller must not fail the run.
-   Partial data beats no data on an operations board, and the device plane is
-   still flowing regardless.
+   Partial data beats no data on an operations board, and the probe is still
+   running regardless: it is the one plane no vendor outage can remove.
 
 3. collect: fetch, then archive the untouched payload to
    s3://…/raw/tenant=acme-networks/vendor=meraki/encoding=rest-json/dt=…/hh=…/….json
@@ -171,26 +201,27 @@ Device item at write time.
    you fix the bug you want to replay rather than beg the vendor for history.
    `vendor=` in that key is a HINT for replay, never how a mapper is chosen.
 
-4. normalise: raw payload -> Observation[]. Two paths that converge:
-     push   decoder per encoding, then mapper per (vendor, platform, encoding)
-     pull   one connector's normalise(), because a REST reply has no shared
-            framing for a decoder to own
-   Both pure, so both are trivially testable and safely replayable.
-   observationId is a CONTENT HASH, which makes the at-least-once pipeline
-   idempotent at rest — and it deliberately excludes receivedAt, or two
-   collectors behind one load balancer would write the same datagram twice.
+4. normalise: raw payload -> Observation[]. One connector per cloud, and the
+   RESOURCE it came from decides the plane — `/devices/statuses` is the cloud's
+   own opinion, `/networks/…/events` is the device's, and both arrive over the
+   same API key. Pure, so trivially testable and safely replayable.
 
-5. enrich: resolve the claimed hostname against the INVENTORY, collapse
-   duplicates on dedupeKey, and attach the site. Unresolved hosts are counted
-   and named rather than dropped in silence — an estate whose syslog half fails
-   to resolve looks exactly like a quiet estate.
+   observationId is a CONTENT HASH, which makes the at-least-once pipeline
+   idempotent at rest — and it deliberately excludes receivedAt, or the poll's
+   overlapping window would write every re-fetched row a second time.
+
+5. enrich: resolve the vendor's handle against the INVENTORY, collapse
+   duplicates on dedupeKey, and attach the site. Unresolved devices are counted
+   and named rather than dropped in silence — an estate whose cloud feed half
+   fails to resolve looks exactly like a quiet estate.
 
 6. detect: deterministic correlation.
      a) group non-OK observations by device
      b) require 2+ INDEPENDENT PLANES before opening an incident — the device,
         its controller, our probe, or the chassis at the far end of the link.
-        Not two feeds: a syslog line and an SNMP trap from one agent are one
-        witness talking twice, and counting feeds would page on every flap.
+        Not two endpoints and not two transports: a webhook and the poll that
+        later re-reports it are one witness twice over, and counting deliveries
+        would page on every port flap in the estate.
      c) anchor each alarm at the highest ALARMING device in its uplink chain,
         and merge everything sharing an anchor into ONE incident naming that
         device. Forty pages for one dead distribution switch is how on-call

@@ -25,7 +25,7 @@ import { buildScenarios } from '../../../src/data/scenarios.ts';
 import { generateHealthTrace } from '../../../src/data/trace.ts';
 import { setProber, resetProber, probeEstate } from '../../../src/integrations/probe.ts';
 import {
-  normalisePushed, collapseDuplicates, resolveLocations, evaluate, detectIncidents,
+  runScenarioFeeds, collapseDuplicates, resolveLocations, evaluate, detectIncidents,
 } from '../../../src/pipeline/steps.ts';
 import { runAgent } from '../../../src/ai/agent-core.ts';
 import { TOOL_SPECS } from '../../../src/ai/tools.ts';
@@ -47,6 +47,9 @@ function seed(): void {
   setUuid(seededUuid(rng));
   loadEstate();
 }
+
+/** The instant every scenario is replayed at. Fixed, like everything else. */
+const SCENARIO_AT = '2026-09-08T14:30:05.000Z';
 
 let seeded = false;
 
@@ -112,7 +115,7 @@ function runScenarios(principal: Principal) {
       resetProber();
     }
 
-    const pushed = normalisePushed(inventory, scenario.batches).observations;
+    const pushed = runScenarioFeeds(principal, inventory, scenario.feeds, SCENARIO_AT).observations;
     const probed = scenario.unreachable
       ? probeEstate(principal, inventory)
         .filter((o) => scenario.unreachable!.includes(o.deviceId))
@@ -163,7 +166,7 @@ function prepareAgent(): Promise<void> {
     putDeviceStates(principal, allDeviceStates(principal));
 
     for (const scenario of buildScenarios(estate)) {
-      const pushed = normalisePushed(inventory, scenario.batches).observations;
+      const pushed = runScenarioFeeds(principal, inventory, scenario.feeds, SCENARIO_AT).observations;
       putObservations(principal, resolveLocations(principal, collapseDuplicates(pushed)));
     }
 

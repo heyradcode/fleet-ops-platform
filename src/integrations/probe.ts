@@ -2,10 +2,10 @@
  * The external plane: observing a device from outside it.
  *
  * The other two planes both depend on something choosing to speak. A switch
- * emits syslog; a controller reports what it last heard. Neither survives the
- * failure mode that matters most - a device that is wedged, powered off, or
- * cut off behind a failed uplink says nothing at all, and its controller
- * eventually says nothing new. Silence is not an observation, and a platform
+ * reports its own events upward; a cloud reports what it last heard. Neither
+ * survives the failure mode that matters most - a device that is wedged,
+ * powered off, or cut off behind a failed uplink says nothing at all, and its
+ * cloud eventually says nothing new. Silence is not an observation, and a platform
  * that only listens cannot tell "healthy and quiet" from "gone".
  *
  * So we go and look. In production this is a prober in the VPC doing ICMP or a
@@ -16,13 +16,19 @@
  * WHY THIS IS A SEPARATE PLANE AND NOT JUST ANOTHER FEED. A probe result is the
  * only evidence in the system that does not originate with the thing being
  * described. That independence is the whole basis of the corroboration rule: a
- * link-down syslog corroborated by a failed probe is two genuinely different
- * vantage points agreeing, whereas the same syslog corroborated by the matching
- * SNMP trap is one box saying it twice.
+ * cloud reporting a device offline, corroborated by a failed probe, is two
+ * genuinely different vantage points agreeing - whereas that same cloud's status
+ * endpoint agreeing with its own event log is one vendor saying it twice.
+ *
+ * IT MATTERS MORE NOW THAN IT DID. When devices spoke to us directly there were
+ * two vendor-side planes to play off each other. Every feed is now the vendor's
+ * cloud, so when that cloud is having a bad morning - stale data, a degraded
+ * region, an expired token - the probe alone can tell "the estate is down" from
+ * "our view of the estate is down".
  */
 import type { DeviceId, Observation, Principal } from '../platform/types.ts';
 import type { Inventory } from '../platform/inventory.ts';
-import { observationId, planeFor } from '../platform/types.ts';
+import { observationId } from '../platform/types.ts';
 import { severityForMetric } from './classify.ts';
 import { nowIso } from '../platform/clock.ts';
 
@@ -65,7 +71,10 @@ export function probeEstate(principal: Principal, inventory: Inventory): Observa
       vendor: device.vendor,
       platform: device.platform,
       encoding: 'probe' as const,
-      plane: planeFor('probe'),
+      // The external plane, stated rather than derived. Nothing in the vendor's
+      // world was involved in this observation, which is exactly what makes it
+      // a second witness to anything their cloud reports.
+      plane: 'external' as const,
       deviceId: device.deviceId,
       siteId: device.siteId,
       sourceRef: 'probe',

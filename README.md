@@ -28,12 +28,12 @@ with its own dependencies.</sub>
 
 ## What it is
 
-NetPulse watches a mixed Cisco / Juniper / Aruba estate. It takes in what the
-network already emits — syslog, SNMP traps, the vendors' controller APIs — adds
-one thing the network cannot emit about itself, normalises three vendor dialects
-into one shape, decides deterministically what deserves a human, and lets an
-engineer ask *"forty devices are alarming — which one do I actually go and
-look at?"*
+NetPulse watches a mixed Cisco / Juniper / Aruba estate through the vendors'
+own cloud APIs — Meraki, Mist and Aruba Central — polled on a schedule and
+pushing webhooks back. It adds one thing no vendor can tell you, normalises
+three cloud dialects into one shape, decides deterministically what deserves a
+human, and lets an engineer ask *"forty devices are alarming — which one do I
+actually go and look at?"*
 
 The architecture is sized for **40,000 devices**. This repository runs a
 60-device synthetic estate offline, so the whole thing fits in a terminal and in
@@ -41,19 +41,22 @@ your head.
 
 ### The constraint everything follows from
 
-A network tells you about itself constantly and unreliably, and the two hard
-problems are both consequences of that.
+You are not watching the network. You are watching three vendors' opinions of
+it, and the two hard problems are both consequences of that.
 
-**Everything reports twice.** One Cisco link failure produces a `%LINK` syslog
-line, a `%LINEPROTO` syslog line, and an SNMP `linkDown` trap — three records,
-one event, one witness. A platform that counts records as evidence pages
+**Everything reports twice.** A webhook fires the instant a port drops, and the
+poll re-reports the same event minutes later because its watermark deliberately
+overlaps. One Meraki call returns both the switch's own event log *and* the
+cloud's view of that switch. A platform that counts deliveries as evidence pages
 somebody for every port flap in the building.
 
-**A dead device reports nothing at all.** Silence is not an observation, and the
-failure that matters most is the one the failing thing cannot describe. So the
-platform maintains three independent vantage points — the device, its
-controller, and its own probe — and corroboration is defined over *those*, never
-over feeds.
+**A dead device reports nothing, and neither does a degraded API.** Silence is
+not an observation, and the failure that matters most is the one the failing
+thing cannot describe. Worse, when every feed is one vendor's cloud, "the estate
+is down" and "our view of the estate is down" look identical. So the platform
+keeps three independent vantage points — what the device reported, what its
+cloud concluded, and what our own probe found — and corroboration is defined
+over *those*, never over endpoints or transports.
 
 ---
 
@@ -64,15 +67,16 @@ pnpm start --only=scenarios
 ```
 
 Six situations, each proving one claim, all travelling the real
-decode → map → collapse → evaluate → correlate path from real vendor payloads:
+fetch → normalise → collapse → evaluate → correlate path from the JSON these
+clouds actually return and POST:
 
 | | Proves |
 |---|---|
-| One failure reported twice by one box | 2 records → 1 event → **held back**, not paged |
+| One failure, webhook + poll | 2 records → 1 event → **held back**, not paged |
 | The same failure from three vantage points | device + controller + probe → **1 incident** |
 | A distribution switch dies | 8 alarms across 4 devices → **1 incident, root cause named** |
 | One access port flaps alone | recorded, shown, **nobody woken** |
-| Three vendors, one event kind | a mnemonic, a structured-data element, an English sentence → one shape |
+| Three clouds, one event kind | `offline` · `disconnected` · `Down` → one shape, one rule |
 | A device nobody registered | dropped, **counted and named** — never silently |
 
 The fourth one is the point of the other five. A board that alerts on everything
@@ -83,13 +87,15 @@ is a board people learn to ignore.
 ## How it fits together
 
 ```
-  PUSH  syslog · SNMP traps · IPFIX · gNMI          PULL  Meraki · Mist · Central
-        │  UDP, into a persistent collector               │  polled on a schedule
-        ▼                                                 ▼
-  S3 landing zone ──▶ decoder per ENCODING ──▶ mapper per (vendor, platform)
-        │                                                 │
-        │             + our own probe: the external plane │
-        ▼                                                 ▼
+  POLL  Meraki · Mist · Central     WEBHOOK  the same clouds, inbound
+        │  every 5 min, watermarked        │  HMAC + replay window at the edge
+        │  three pagination dialects       │  timely, partial, sometimes twice
+        ▼                                  ▼
+  S3 landing zone ──▶ connector.normalise(raw, inventory, RESOURCE)
+        │                                  │
+        │      the resource carries the PLANE — one cloud observes from two
+        │             + our own probe: the external plane
+        ▼                                  ▼
   Kinesis ──▶ batched consumer ──┬──▶ DynamoDB   current status, overwritten
   (by deviceId)                  ├──▶ S3         observation history, Parquet
                                  ├──▶ S3         flows, by exporter, Athena only
@@ -116,16 +122,17 @@ You have limited time, so:
 | Read | For |
 |---|---|
 | `src/platform/types.ts` | The domain model. `ObservationPlane` is the load-bearing one |
-| `src/integrations/wire.ts` | Why decoders key on encoding and mappers on vendor |
+| `src/integrations/http.ts` | Pagination and watermarks — what cloud APIs share |
+| `src/integrations/webhook.ts` | Verifying a delivery on a public endpoint |
 | `src/platform/inventory.ts` | The alias→device join — the genuinely hard part |
 | `src/pipeline/steps.ts` | Where observations become alarms become incidents |
 | `src/data/scenarios.ts` | Six scenarios, each proving one claim about the rules |
 | `web/src/transport/` | Why the whole backend runs inside the browser tab |
 
 One vertical slice, end to end:
-`integrations/decode/syslog.ts` → `integrations/map/cisco-ios-xe.syslog.ts` →
-`pipeline/steps.ts` → `platform/repository.ts` → `api/appsync-resolvers.ts`.
-That path touches most of the stack.
+`integrations/controller/meraki.ts` → `pipeline/steps.ts` →
+`platform/repository.ts` → `api/appsync-resolvers.ts`. That path touches most
+of the stack.
 
 The comments are the documentation. They explain *why*, name the trade-offs,
 and flag the mistakes that are easy to make.
@@ -134,19 +141,25 @@ and flag the mistakes that are easy to make.
 
 ## Design decisions
 
-- **Decoders key on ENCODING, mappers on (vendor, platform, encoding).** "Cisco"
-  is not a format — it is syslog *and* SNMP *and* gNMI *and* two REST APIs, and
-  Juniper and Aruba send most of the same ones. Three vendors and two encodings
-  is 2 decoders + 4 mappers, not 6 files each re-implementing RFC 5424.
+- **`plane` describes ORIGIN, never transport.** Every feed is now cloud HTTP,
+  so deriving the plane from the encoding would mark the whole platform
+  `controller` — corroboration would be unsatisfiable from vendor data and
+  nearly every alarm would be silently held back. The builders require it as an
+  argument with no default. One Meraki poll legitimately produces two planes.
+- **What cloud APIs share is MECHANICS, not shape.** Meraki, Mist and Central
+  JSON have nothing in common but the letters, so there is no shared decoder to
+  write. What they do share — three pagination dialects, watermarks, OAuth
+  refresh, per-organisation rate limits — is all of it on the critical path,
+  and all of it fails silently.
 - **Observations never reach the event bus.** They are persisted and folded into
   hot state; only alarms are published. A test asserts it, because it is the
   claim most easily broken by a well-meaning edit.
-- **Flows never reach the operational store at all.** IPFIX goes to its own
-  bucket, partitioned by exporter, and is read with Athena. It is the one class
-  whose volume would make DynamoDB scale with traffic rather than with
-  incidents.
-- **Corroboration means two independent planes, not two feeds.** A syslog line
-  and an SNMP trap from one agent are one witness talking twice. What counts is
+- **Flows never reach the operational store at all.** Aggregated traffic goes
+  to its own bucket, partitioned by exporter, and is read with Athena. It is
+  the one class whose volume would make DynamoDB scale with traffic rather than
+  with incidents.
+- **Corroboration means two independent planes, not two deliveries.** A webhook
+  and the poll that re-reports it are one witness talking twice. What counts is
   a different vantage point — the controller, the probe — or the chassis at the
   *other* end of the link. A failed power supply is exempt: nothing else is
   positioned to see it.
@@ -182,9 +195,10 @@ Being clear about this matters.
 
 **Real:** every design decision, the AWS resource definitions, the IAM
 policies, the GraphQL schema and resolvers, the SQL and its row-level security,
-the syslog and SNMP decoding, the vendor mapping, the retry and circuit-breaker
-behaviour, the corroboration and merge rules, the RAG chunking and hybrid-search
-maths, the agent loop, and all the Terraform and GitHub Actions.
+the pagination and watermark logic, the webhook signature verification, the
+retry and circuit-breaker behaviour, the corroboration and merge rules, the RAG
+chunking and hybrid-search maths, the agent loop, and all the Terraform and
+GitHub Actions.
 
 **Simulated, so it runs offline:** `src/aws/` stands in for DynamoDB, S3,
 EventBridge, Step Functions, Kinesis and Bedrock. Each fake mirrors the real
@@ -196,8 +210,8 @@ from a seed. A real device inventory is a map of an identifiable organisation's
 internal network and has no business in a public repository. Vendor payload
 shapes are **modelled from published API references, not captured from live
 accounts** — Meraki, Mist and Aruba Central all gate API access behind a
-customer contract. The AOS-CX message wording is the least well covered
-publicly; verify it against a real switch before relying on it.
+customer contract. Each cloud's alert-type vocabulary is the least well covered
+publicly; verify the mappings against a live tenant before relying on them.
 
 **Deployable, but only one part:** `infra/terraform/auth/` creates a real
 Cognito user pool and the token trigger, and costs pennies — see its README.
@@ -268,7 +282,7 @@ and not free to deploy.
 ```
 src/          the platform. Zero runtime dependencies.
   platform/     domain model, the inventory join, and the injected primitives
-  integrations/ decoders by encoding, mappers by vendor, controllers, the probe
+  integrations/ cloud connectors, HTTP mechanics, webhook verification, the probe
   pipeline/     collect → normalise → stream → enrich → evaluate → correlate
   geo/          spatial maths, PostGIS queries, GeoJSON/TopoJSON, topology walks
   ai/           RAG, the agent loop, guardrails

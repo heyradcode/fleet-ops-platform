@@ -65,31 +65,55 @@ export type PlatformId =
  * it. Decoders are keyed by encoding, mappers by (vendor, platform, encoding),
  * which turns an N x M problem into N + M.
  */
+/**
+ * How an observation reached us. Every path is HTTP.
+ *
+ * DO NOT DERIVE `plane` FROM THIS. The two were coupled once, when the feeds
+ * were syslog straight off a switch and REST from its controller - transport
+ * and origin happened to coincide, so one function mapped between them. They no
+ * longer coincide at all: a Meraki poll returns both the switch's own reported
+ * events AND the cloud's opinion of that switch, over one HTTP call. See
+ * `ObservationPlane`.
+ */
 export type Encoding =
-  | 'syslog'        // UDP 514, push. RFC 5424 where we are lucky, 3164 where we are not.
-  | 'snmp-trap'     // UDP 162, push. Varbinds, already decoded by the collector.
-  | 'gnmi'          // gRPC over TCP, dial-out streaming telemetry.
-  | 'ipfix'         // UDP, push. NetFlow v9 / IPFIX flow records.
-  | 'rest-json'     // Pull or webhook, from the cloud controllers.
+  | 'rest-json'     // We called the vendor's cloud on a schedule.
+  | 'webhook'       // The vendor's cloud called us. Same API, inbound.
   | 'probe';        // Our own synthetic reachability test.
 
 /**
  * WHO OBSERVED IT - and the single most load-bearing field in this file.
  *
  * Corroboration is the rule that decides whether an alarm is worth waking
- * someone for, and the naive version of it - "two feeds agreed" - is worthless
- * here. A link failure on a Cisco switch emits a syslog line AND an SNMP trap,
- * from the same agent, on the same box, milliseconds apart. That is one witness
- * reporting twice, not two witnesses.
+ * someone for, and the naive version of it - "two sources agreed" - is
+ * worthless. One cloud API call can return a device's own reported link
+ * failure, that device's uplink neighbour reporting the same failure, and the
+ * cloud's own note that the device stopped checking in. Counting those as three
+ * agreeing sources would page on every port flap in the estate.
  *
- * Independence means a different VANTAGE POINT:
+ * Independence means a different VANTAGE POINT - where the knowledge came from,
+ * NOT how it reached us:
  *
- *   device      the box told us about itself      syslog, traps, gNMI
- *   controller  its manager told us               Meraki, Mist, Aruba Central
- *   external    we observed it from outside       synthetic probe, flow absence
+ *   device      the box itself detected and reported it, and the cloud is
+ *               merely relaying   (a switch's own link-state change)
+ *   controller  the cloud formed the opinion, not the device
+ *               (Meraki: "this device stopped checking in with me")
+ *   external    we observed it from outside, and nothing in the vendor's
+ *               world was involved   (our synthetic probe)
+ *
+ * THIS USED TO BE DERIVED FROM THE TRANSPORT and must never be again. When the
+ * feeds were syslog-from-the-box and REST-from-the-cloud, transport and origin
+ * happened to coincide and a `planeFor(encoding)` function was correct by
+ * accident. Moving to cloud-HTTP-only collapsed every observation onto one
+ * encoding - so that function would have quietly marked EVERYTHING
+ * `controller`, corroboration would have become unsatisfiable from vendor data
+ * alone, and nearly every alarm would have been held back. The builders
+ * therefore take `plane` as a required argument: only the mapper knows which
+ * field of which endpoint it is reading, and only it can say.
  *
  * The external plane matters most in the worst case: a device that is wedged or
- * powered off reports nothing at all, and only something outside it can notice.
+ * powered off reports nothing at all, its cloud only knows it went quiet, and
+ * only something outside both can tell you the difference between "down" and
+ * "the vendor's API is having a bad morning".
  */
 export type ObservationPlane = 'device' | 'controller' | 'external';
 
@@ -253,25 +277,14 @@ export function isEvent(o: Observation): o is EventObservation { return o.class 
 export function isFlow(o: Observation): o is FlowObservation { return o.class === 'flow'; }
 
 /**
- * The plane a feed observes from, when nothing overrides it.
+ * There is deliberately NO `planeFor(encoding)` function here.
  *
- * A table rather than a field each mapper sets, because getting this wrong is
- * silent: mark a controller feed as 'device' and corroboration starts accepting
- * one witness as two.
+ * It existed, it was correct while transport and origin coincided, and it
+ * became silently wrong the moment every feed became cloud HTTP. See the note
+ * on `ObservationPlane`. The builders under `integrations` require the plane as
+ * an argument with no default, so that a mapper cannot inherit it from the
+ * transport by accident - which is the only way this mistake comes back.
  */
-export function planeFor(encoding: Encoding): ObservationPlane {
-  switch (encoding) {
-    case 'syslog':
-    case 'snmp-trap':
-    case 'gnmi':
-    case 'ipfix':
-      return 'device';
-    case 'rest-json':
-      return 'controller';
-    case 'probe':
-      return 'external';
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Identity of a record

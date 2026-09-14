@@ -5,7 +5,7 @@
  * This is the piece that makes the estate numbers work, so it is worth being
  * precise about what it buys.
  *
- *   40,000 devices, syslog + traps + polls  ~=  11,000 records/sec sustained
+ *   40,000 devices x several cloud endpoints, polled + pushed
  *                                            ~950 million/day
  *   peak (shift change, wave dispatch)   ~=  3-5x that
  *

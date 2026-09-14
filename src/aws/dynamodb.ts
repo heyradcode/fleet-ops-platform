@@ -18,8 +18,8 @@
  *
  * THE DEVICE ITEM IS OVERWRITTEN, NEVER APPENDED. One item per device holds
  * current status and load; at 40k devices that is 40k items no matter how often
- * they report. Observation *history* is appended to S3 instead - a syslog-heavy
- * estate produces hundreds of millions of records a day, and holding them in
+ * they report. Observation *history* is appended to S3 instead - a large estate
+ * produces hundreds of millions of records a day, and holding them in
  * the operational store would be both slow and ruinous. That split is the
  * single most consequential storage decision in the platform.
  *
@@ -31,9 +31,9 @@
  * every feed and both planes":
  *   GSI1PK = TENANT#acme#DEVICE#dev-core-dal01 , GSI1SK = observedAt
  *
- * FLOWS ARE NOT HERE AT ALL. IPFIX records go straight to S3 as columnar files
- * and are queried with Athena. They are the one observation class whose volume
- * would make this table's cost scale with traffic rather than with incidents.
+ * FLOWS ARE NOT HERE AT ALL. Aggregated traffic records go to S3 as columnar
+ * files and are queried with Athena. They are the one observation class whose
+ * volume would make this table scale with traffic rather than with incidents.
  *
  * The rule worth internalising: *model your access patterns first, then
  * derive the keys*. Never the other way round.

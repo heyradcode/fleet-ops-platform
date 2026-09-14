@@ -1,52 +1,77 @@
 /**
  * ---------------------------------------------------------------------------
- * The controller connector contract - and why this file is not wire.ts
+ * The connector contract
  * ---------------------------------------------------------------------------
- * The estate has two halves that arrive completely differently, and pretending
- * otherwise is what forces a UDP listener into a Lambda that cannot hold a
- * socket.
+ * Every vendor integration is one of these. Three clouds today - Meraki, Mist,
+ * Aruba Central - and adding a fourth is a new file plus a line in the
+ * registry, not a new architecture.
  *
- *   PUSH   syslog, SNMP traps, gNMI, IPFIX. Devices send at us, over UDP or
- *          gRPC, into a persistent collector. See wire.ts - decoder per
- *          encoding, mapper per vendor.
- *   PULL   Meraki, Mist, Aruba Central. Cloud controllers with REST APIs and
- *          webhooks, polled on a schedule. THIS file.
+ * TWO DIRECTIONS, ONE CONNECTOR. Both are the vendor's cloud HTTP API; they
+ * differ only in who initiates:
  *
- * The pull half keeps the shape a fleet platform would use, because the shape
- * genuinely fits: `fetchRaw` talks to the vendor, `normalise` turns the reply
- * into observations, and both live on one object because the same code owns the
- * whole round trip. Splitting decode from map buys nothing here - the payload
- * is already JSON, so "decoding" is a no-op, and there is no shared framing
- * between Meraki and Mist for a shared decoder to own.
+ *   poll()      we call them on a schedule. Complete, ordered, late.
+ *   onWebhook() they call us the moment something happens. Timely, partial,
+ *               unordered, and occasionally delivered twice.
  *
- * WHY BOTHER WITH THE PULL HALF AT ALL, given the devices already tell us what
- * happened? Because a controller is an INDEPENDENT OBSERVATION PLANE. A switch
- * reporting its own link failure by syslog and by trap is one witness talking
- * twice; the controller noticing the same switch stopped checking in is a
- * genuinely separate vantage point. Corroboration needs that, and in the worst
- * case - a device wedged or powered off, reporting nothing at all - the
- * controller and the external probe are the only things left. See
- * `ObservationPlane` in platform/types.ts.
+ * Keeping both on one object is deliberate. They return the SAME observations
+ * from the SAME vendor's vocabulary, and splitting them into two files means
+ * two places that decode a Meraki alert type - which drift, and then the board
+ * shows a different severity depending on whether the news arrived by poll or
+ * by push.
  *
- * Keeping normalise() pure is what makes replay work: when you find a mapping
- * bug you re-run it over the raw JSON already archived in S3.
+ * WHY BOTH RATHER THAN JUST WEBHOOKS: a webhook that is never delivered is
+ * invisible. There is no gap to notice, no error, no retry you can see - the
+ * event simply never existed as far as this platform is concerned. The poll is
+ * the reconciling sweep that eventually catches what the push dropped, which is
+ * why its watermark overlaps rather than abuts. See `sinceFor` in http.ts.
+ *
+ * `normalise` is PURE in both directions. That is what makes replay work: when
+ * you find a mapping bug you re-run it over the JSON already archived in S3,
+ * and cloud APIs make that matter more than it used to - most of them retain a
+ * rolling window, so a re-fetch to recover from a bug is often impossible.
  */
 import type {
-  Observation, PlatformId, TenantId, VendorId,
+  Observation, ObservationPlane, PlatformId, TenantId, VendorId,
 } from '../platform/types.ts';
 import type { Inventory } from '../platform/inventory.ts';
-import type { RawBatch } from './wire.ts';
+import type { HttpPage, PageCursor, RawBatch } from './http.ts';
 import { log } from '../platform/logger.ts';
 import { random } from '../platform/random.ts';
 
-/** The three cloud-managed estates this platform knows how to poll. */
+/** The three cloud-managed estates this platform knows how to talk to. */
 export type ControllerId = 'meraki' | 'mist' | 'aruba-central';
+
+/**
+ * One endpoint on one cloud.
+ *
+ * The axis that replaced `encoding` when the UDP feeds went away. A cloud is
+ * not one shape - Meraki's device-statuses endpoint and its alerts endpoint
+ * return different JSON, move at different rates, and (the part that matters)
+ * observe from different PLANES. So the unit of mapping is the resource, not
+ * the vendor.
+ */
+export type Resource = {
+  /** Stable name. Appears in the S3 key and in the watermark, so do not rename. */
+  name: string;
+  /** Where this endpoint's knowledge comes from. See ObservationPlane. */
+  plane: ObservationPlane;
+  /** Cursor to start a cold fetch from. */
+  firstPage(ctx: ConnectorContext): PageCursor;
+  /** One page. The connector owns the vendor's pagination dialect. */
+  fetchPage(ctx: ConnectorContext, cursor: PageCursor): Promise<HttpPage>;
+};
 
 export type ConnectorContext = {
   tenantId: TenantId;
   /** In production these come from Secrets Manager, cached across warm starts. */
   secrets: Record<string, string>;
-  /** Only fetch data newer than this - incremental sync, not a full re-pull. */
+  /**
+   * Only fetch what changed since this.
+   *
+   * Derived from the persisted watermark with a deliberate overlap, NOT from
+   * "now minus the poll interval" - a run that is late, retried, or recovering
+   * from an outage would otherwise skip precisely the window it was late for.
+   */
   since: Date;
 };
 
@@ -55,18 +80,35 @@ export type Connector = {
   vendor: VendorId;
   platform: PlatformId;
   /** How the vendor authenticates us. Handy for the docs and for debugging. */
-  auth: 'api-key-header' | 'oauth2-client-credentials' | 'basic' | 'bearer-token' | 'aws-sigv4';
-  /** Vendor's documented rate limit. Feeds the Step Functions Map concurrency. */
-  rateLimitPerMin: number;
-  fetchRaw(ctx: ConnectorContext): Promise<RawBatch>;
+  auth: 'api-key-header' | 'oauth2-client-credentials' | 'basic' | 'bearer-token';
   /**
-   * Controller payload -> Observation[]. Pure, and the ONLY place that
-   * understands this controller's JSON.
+   * Vendor's documented rate limit, in requests per minute.
    *
-   * Takes the inventory for the same reason the push mappers do: the controller
-   * has its own device ids, and nothing downstream may key on a vendor string.
+   * Feeds the Step Functions Map concurrency. It is per ORGANISATION, not per
+   * caller, so every tenant on the same customer's account shares it - which is
+   * why the poll interval is a product decision and not a tuning knob.
    */
-  normalise(raw: RawBatch, inventory: Inventory): Observation[];
+  rateLimitPerMin: number;
+  /** The endpoints this connector polls. */
+  resources: Resource[];
+  /**
+   * Vendor payload -> Observation[]. Pure, and the ONLY place that understands
+   * this cloud's JSON.
+   *
+   * Takes the inventory because the cloud has its own device ids and nothing
+   * downstream may key on a vendor string; takes the resource because the plane
+   * and the shape both depend on which endpoint the rows came from.
+   */
+  normalise(raw: RawBatch, inventory: Inventory, resource: Resource): Observation[];
+  /**
+   * An inbound alert from this vendor's webhook, already signature-verified.
+   *
+   * Optional: a cloud that does not push is still a perfectly good connector,
+   * it is just a slower one. Returning [] for an alert type you do not handle
+   * is the normal case - these feeds carry a great deal that is not
+   * operationally interesting.
+   */
+  onWebhook?(raw: RawBatch, inventory: Inventory): Observation[];
 };
 
 // ---------------------------------------------------------------------------
@@ -76,7 +118,13 @@ export type Connector = {
 export class ProviderError extends Error {
   readonly controller: ControllerId;
   readonly status: number;
-  /** 429 and 5xx are worth retrying; 401 and 400 never are. */
+  /**
+   * 429 and 5xx are worth retrying; 401 and 400 never are.
+   *
+   * 403 is the interesting one and it is NOT retryable: on these APIs it
+   * usually means the token is valid but the scope is wrong, which no amount
+   * of waiting fixes and which a retry loop turns into a lockout.
+   */
   readonly retryable: boolean;
 
   constructor(controller: ControllerId, status: number, message: string) {
@@ -123,7 +171,7 @@ export async function withRetry<T>(
 }
 
 /**
- * Circuit breaker. When a controller is down, stop calling it: you are burning
+ * Circuit breaker. When a cloud is down, stop calling it: you are burning
  * Lambda duration to collect timeouts, and you are adding load to an outage.
  *
  *   closed    -> normal
@@ -150,7 +198,7 @@ export class CircuitBreaker {
 
   async run<T>(fn: () => Promise<T>): Promise<T> {
     if (this.state === 'open') {
-      throw new Error('circuit open for ' + this.name + ' - skipping call, controller is unhealthy');
+      throw new Error('circuit open for ' + this.name + ' - skipping call, cloud is unhealthy');
     }
     try {
       const out = await fn();

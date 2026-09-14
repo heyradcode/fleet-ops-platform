@@ -5,7 +5,7 @@
  * for devices, reconciled from the controllers and from LLDP by a discovery
  * job. This module is the cache in front of both, and the pipeline reads it
  * rather than issuing a query per record - at push-feed rates that would be one
- * GetItem per syslog line, which costs more than the pipeline it feeds.
+ * GetItem per row a cloud returns, which costs more than the pipeline it feeds.
  *
  * Every function takes a `Principal` and derives its answer from that
  * principal's tenant and scope. Same discipline as platform/repository.ts: a

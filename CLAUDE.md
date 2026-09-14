@@ -4,9 +4,14 @@ A network operations intelligence platform on AWS serverless, runnable entirely
 offline. Two workspaces: the backend in `src/` (zero runtime dependencies) and
 the operations board in `web/` (React + MapLibre, its own dependencies).
 
-Cisco, Juniper and Aruba feeds — syslog, SNMP traps, controller REST APIs and
-our own probes — land in S3, are decoded and mapped into one canonical
-`Observation`, and become alarms and then incidents.
+Every feed is a vendor's cloud HTTP API — Meraki, Mist and Aruba Central, polled
+on a schedule and pushing webhooks at us — plus our own probes. They land in S3,
+are normalised into one canonical `Observation`, and become alarms and then
+incidents.
+
+There is no syslog, SNMP, IPFIX or gNMI. There was, and the decoder-per-encoding
+split that served it is gone with it; see the note on `plane` below for the one
+piece of that design that had to survive in a different form.
 
 ## Commands
 
@@ -43,8 +48,17 @@ Anything platform-specific goes behind `src/platform/` — that is what
 `clock.ts`, `crypto.ts`, `random.ts` and `runbook-loader.ts` are for.
 
 **No `Buffer`.** Same reason. `platform/crypto.ts` has `b64urlEncode` /
-`b64urlDecode`. This is also why the decoders never touch binary: SNMP and
-IPFIX arrive as JSON from the collector, which is the right architecture anyway.
+`b64urlDecode`. The webhook HMAC verification in `integrations/webhook.ts` is
+built on those, and must stay that way — it runs in the browser graph too.
+
+**`plane` is NEVER derived from `encoding`.** It was, correctly, while syslog
+meant "the box said so" and REST meant "its cloud said so". Every feed is now
+cloud HTTP, so deriving it would mark the whole platform `controller`,
+`planes.length >= 2` would be unsatisfiable from vendor data, and nearly every
+alarm would be silently held back. The builders take `plane` as a required
+argument with no default; a new connector cannot compile until its author has
+decided, per endpoint, where the knowledge actually came from. One Meraki poll
+legitimately produces both planes.
 
 **Everything is deterministic.** Never `new Date()`, `Date.now()` or
 `Math.random()` — use `platform/clock.ts` and `platform/random.ts`. Two
@@ -78,17 +92,19 @@ These are the claims the architecture rests on. Each has a test; if you change
 one, change the test deliberately rather than making it pass.
 
 - **Observations never reach the event bus.** Only alarms and incidents are
-  published. A syslog-heavy estate pushes tens of thousands of records/sec;
+  published. An estate produces far more observations than decisions, and
   publishing them would make cost scale with estate size instead of incidents.
-- **Flows never reach the operational store at all.** IPFIX goes to its own S3
-  bucket, partitioned by exporter, and is queried with Athena. It is the one
-  observation class whose volume would make DynamoDB scale with traffic.
-- **Corroboration means two independent PLANES, not two feeds.** A Cisco link
-  failure emits a syslog line *and* an SNMP trap from the same agent — one
-  witness talking twice. Independence means a different vantage point: the
-  device, its controller, or our own probe. The far end of a link counts too:
-  same plane, different chassis. `power-fault` is exempt — a chassis reporting
-  its own dead PSU has no second opinion available.
+- **Flows never reach the operational store at all.** Aggregated traffic
+  records go to their own S3 bucket, partitioned by exporter, and are queried
+  with Athena. They are the one observation class whose volume would make
+  DynamoDB scale with traffic rather than with incidents.
+- **Corroboration means two independent PLANES, not two endpoints.** One Meraki
+  poll returns the switch's own reported events *and* the cloud's opinion of
+  that switch; a webhook and the poll that later re-reports it are one witness
+  twice over. Independence means a different vantage point: the device, its
+  controller, or our own probe. The far end of a link counts too — same plane,
+  different chassis. `power-fault` is exempt: a chassis reporting its own dead
+  PSU has no second opinion available.
 - **Duplicates collapse BEFORE the rules run.** `collapseDuplicates` folds
   records sharing a `dedupeKey`. Skip it and `evaluate` counts one port flap as
   four pieces of evidence and pages somebody.
@@ -120,10 +136,10 @@ uneven sites (Dallas 16, others 11) in a two-tier topology — core → distribu
 that is what estates look like after an acquisition.
 
 `scenarios.ts` holds six situations that each prove one claim and emit
-**vendor-shaped payloads** — real syslog lines, real trap varbinds — so they
-travel the real decode → map → collapse → evaluate → correlate path. Devices are
-selected by role and vendor, never by literal name, so a generator change fails
-loudly instead of silently proving nothing.
+**vendor-shaped payloads** — the JSON these clouds actually return and POST — so
+they travel the real fetch → normalise → collapse → evaluate → correlate path.
+Devices are selected by role and vendor, never by literal name, so a generator
+change fails loudly instead of silently proving nothing.
 
 `trace.ts` records a half-hour of a cascade for the board's replay scrubber.
 Nothing on a network map moves, so what replays is STATE, not position.
@@ -131,8 +147,8 @@ Nothing on a network map moves, so what replays is STATE, not position.
 Vendor fixtures are **modelled from published API references, not captured
 from live accounts** — Meraki, Mist and Aruba Central all gate API access
 behind a customer contract. Say so if you add one; do not imply captured data.
-The AOS-CX message wording is the least well covered publicly and should be
-verified against a real switch.
+Each cloud's alert-type vocabulary is the least well covered publicly; verify
+the mappings against a live tenant before relying on them.
 
 Real device inventories are a map of an identifiable organisation's internal
 network. Nothing real belongs in this repo.
@@ -148,21 +164,37 @@ network. Nothing real belongs in this repo.
   the assistant failed on its first log line. Output goes through `out()` in
   `platform/logger.ts`; the contract test now asks the agent a question, and
   CI greps for any `process.` member, not just `.env`.
-- **RFC 5424's NILVALUE `-` is not cosmetic.** Cisco sends a bare `-` where
-  structured data would go. Leave it attached and the message begins
-  `- %LINK-3-UPDOWN`, the anchored mnemonic pattern never matches, and every
-  Cisco record decodes with an empty tag and is silently unclaimed by its own
-  mapper.
-- **Cisco abbreviates in syslog and not in SNMP.** The same port is `Gi1/0/1`
-  in a log line and `GigabitEthernet1/0/1` in an ifName varbind. An exact-match
-  lookup resolves them to two different interfaces, and the trap and the log
-  line silently stop corroborating each other. `canonicalInterfaceName` exists
-  solely to stop that, and its abbreviation table is longest-prefix-first for
-  the same reason.
-- **`ifIndex` is not an identity.** It is only stable across a reboot if
-  ifIndex persistence is configured. Resolve by NAME first; the index is a hint.
-  Preferring it because it arrives as an integer is what puts a fortnight of
-  counters on the wrong port.
+- **A webhook endpoint on the public internet is not protected by its URL.**
+  Verify the HMAC BEFORE the timestamp and both before `JSON.parse`: checking
+  the clock first tells an unauthenticated caller whether their guess was in
+  range, and parsing first runs a parser on unauthenticated input. The
+  timestamp must be INSIDE the signed payload, or an attacker edits it and
+  replays yesterday. The nastiest forgery is not a false alarm - it is a
+  `port_up` that CLEARS a real incident.
+- **The raw webhook body must reach the verifier byte-for-byte.** Re-serialising
+  parsed JSON changes key order and whitespace, the HMAC stops matching, and
+  the symptom is "every delivery is rejected as forged" pointing at a signature
+  check that is completely correct.
+- **One device, several vendor handles.** A cloud knows a box by a serial or a
+  MAC, never by the hostname on it, and connectors legitimately try more than
+  one. Use `resolveDeviceAny`, not two `resolveDevice` calls: the latter records
+  TWO unresolved misses for one unknown device, and the inventory-drift number
+  then counts attempts rather than devices.
+- **Pagination failures are silent.** Three clouds, three dialects — a `Link`
+  header, one-indexed pages, and offsets. Stop a page early and nothing errors;
+  you simply get a SHORTER ESTATE, and the board looks calm. `drainPages` owns
+  the loop, the ceiling and the `truncated` flag for exactly that reason.
+- **Watermarks advance AFTER the write, never at fetch time.** They record what
+  was persisted. Advance one at collect time and a crash between fetch and write
+  loses that window permanently — the next poll asks for everything after it,
+  the gap is never re-requested, and nothing reports a problem. They also
+  overlap by two minutes, because cloud APIs are eventually consistent and an
+  exactly-abutting `since` drops events that became visible late.
+- **Aruba Central OAuth refreshes EARLY, not on expiry.** A token that dies
+  mid-poll gives a 401 on page four of seven; 401 is correctly non-retryable, so
+  the run ends with a partial estate and no obvious cause. Sixty seconds of
+  headroom removes the whole class. The cache is per tenant - a shared one would
+  hand tenant A's token to tenant B's poll.
 - **A Cognito PreTokenGeneration trigger must be V2_0.** V1 writes claims to
   the ID token only, and this platform authorises on the ACCESS token
   (`token_use: 'access'` is check 4). A V1-wired pool signs people in and
@@ -193,7 +225,7 @@ network. Nothing real belongs in this repo.
   `tsc` and the tests both pass can still leave Terraform pointing at a file
   that no longer exists. Grep them explicitly.
 - **String literals are invisible too.** EventBridge sources, DynamoDB key
-  prefixes, GraphQL field names, Terraform tags, syslog mnemonics, trap OIDs.
+  prefixes, GraphQL field names, Terraform tags, vendor alert-type strings.
 - **Running the demo catches what nothing else does.** Typecheck, tests and the
   build were all green while the ingest section reported zero alarms, because
   the controller fixtures named devices the generator does not produce and
@@ -217,10 +249,10 @@ utility framework, because its defaults pull the design toward a template.
 ```
 src/platform/    domain model + injected primitives (clock, crypto, random)
 src/platform/inventory.ts  the alias→deviceId join; the hard part of ingestion
-src/integrations/wire.ts   decoder/mapper contracts for the PUSH half
-src/integrations/decode/   one decoder per ENCODING, shared across vendors
-src/integrations/map/      one mapper per (vendor, platform, encoding)
-src/integrations/controller/  the PULL half: Meraki, Mist, Aruba Central
+src/integrations/http.ts   pagination dialects, watermarks - what clouds share
+src/integrations/webhook.ts  inbound: HMAC, replay window, idempotency
+src/integrations/connector.ts  the one contract: poll() and onWebhook()
+src/integrations/controller/  Meraki, Mist, Aruba Central
 src/integrations/probe.ts  the external plane — the only thing that sees silence
 src/pipeline/    collect → normalise → stream → enrich → evaluate → correlate
 src/geo/         spatial maths, PostGIS queries, GeoJSON/TopoJSON, topology

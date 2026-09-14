@@ -9,30 +9,40 @@
  * more expensive to own.
  *
  * THE STRUCTURAL DECISION THAT MATTERS: observations do not become events.
- * Only alarms and incidents do. A syslog-heavy estate pushes tens of thousands
- * of records per second, and putting those through a content-filtered event bus
- * would be both slow and ruinous. They go to a key-value overwrite and a
- * batched rules pass instead, and only the handful that turn into alarms ever
- * reach EventBridge. See `publish()`.
+ * Only alarms and incidents do. Even on cloud feeds an estate produces far more
+ * observations than decisions, and putting them through a content-filtered
+ * event bus would make the bill scale with estate size rather than with
+ * incidents. They go to a key-value overwrite and a batched rules pass instead,
+ * and only the handful that turn into alarms ever reach EventBridge. See
+ * `publish()`.
  *
- * THE SECOND DECISION: there are two collection paths and they are not
- * symmetrical. Controllers are POLLED on a schedule and their round trip is
- * owned by one connector. Devices PUSH into a collector that has already landed
- * their traffic in S3 before this pipeline runs, so the push path starts from
- * an object key rather than from a socket. Both converge on `Observation`, and
- * nothing downstream can tell which way a record arrived except by reading its
- * `plane` - which is exactly the property correlation depends on.
+ * THE SECOND DECISION: every feed is now the vendor's cloud HTTP API, in one of
+ * two directions, and they are not symmetrical.
+ *
+ *   POLL     we call them on a schedule. Complete, ordered, late. It is the
+ *            reconciling sweep, and its watermark deliberately overlaps.
+ *   WEBHOOK  they call us the moment something happens. Timely, partial,
+ *            unordered, and occasionally delivered twice.
+ *
+ * Both converge on `Observation`, and nothing downstream can tell which way a
+ * record arrived except by reading `encoding` - which correlation deliberately
+ * ignores. What correlation reads is `plane`, and that describes where the
+ * knowledge ORIGINATED rather than how it travelled. One Meraki poll returns
+ * both the switch's own reported events and the cloud's opinion of that switch;
+ * they are two witnesses, and a pipeline that keyed off the transport would see
+ * one.
  */
 import type {
   Alarm, AlarmKind, DeviceState, Incident, Observation, ObservationPlane, Principal, Severity,
 } from '../platform/types.ts';
 import { isEvent, isFlow, isMetric } from '../platform/types.ts';
 import type { Inventory } from '../platform/inventory.ts';
-import type { Connector } from '../integrations/connector.ts';
-import type { RawBatch } from '../integrations/wire.ts';
+import type { Connector, Resource } from '../integrations/connector.ts';
+import type { RawBatch } from '../integrations/http.ts';
+import { drainPages, getWatermark, setWatermark, sinceFor } from '../integrations/http.ts';
 import { connectorsFor, breakers } from '../integrations/controller/registry.ts';
 import { withRetry } from '../integrations/connector.ts';
-import { normaliseBatch } from '../integrations/wire-registry.ts';
+
 import { probeEstate } from '../integrations/probe.ts';
 import { archiveRaw, appendHistory, appendFlows } from '../aws/s3.ts';
 import { observationStream, type Batch, type BatchResult } from '../aws/kinesis.ts';
@@ -64,29 +74,60 @@ export type PipelineInput = { principal: Principal; since: string };
  * The retry wrapper and the circuit breaker are both here rather than in the
  * connector so that every controller gets identical resilience behaviour.
  */
+export type Collected = { raw: RawBatch; resource: Resource; s3Uri: string };
+
 export async function collectOne(args: {
   connector: Connector;
   input: PipelineInput;
-}): Promise<{ raw: RawBatch; s3Uri: string } | { failed: string }> {
+}): Promise<Collected[] | { failed: string }> {
   const { connector, input } = args;
   const breaker = breakers.get(connector.controller)!;
+  const out: Collected[] = [];
 
   try {
-    const raw = await breaker.run(() =>
-      withRetry('fetch:' + connector.controller, () =>
-        connector.fetchRaw({
-          tenantId: input.principal.tenantId,
-          secrets: {},                       // Secrets Manager in production
-          since: new Date(input.since),
-        }),
-      ),
-    );
+    for (const resource of connector.resources) {
+      // The watermark, not "now minus the interval". A run that is late,
+      // retried, or recovering from an outage would otherwise skip exactly the
+      // window it was late for - and skip it silently, because there is no gap
+      // to notice in a polled feed.
+      const watermark = getWatermark(input.principal.tenantId, connector.controller, resource.name);
+      const ctx = {
+        tenantId: input.principal.tenantId,
+        secrets: {},                       // Secrets Manager in production
+        since: sinceFor(watermark, new Date(input.since)),
+      };
 
-    return { raw, s3Uri: archiveRaw(raw, connector.controller) };
+      const drained = await breaker.run(() =>
+        withRetry('fetch:' + connector.controller + ':' + resource.name, () =>
+          drainPages((cursor) => resource.fetchPage(ctx, cursor), resource.firstPage(ctx)),
+        ),
+      );
+
+      if (drained.truncated) {
+        // Loud, because the alternative is a board that is quietly missing part
+        // of an estate with nothing anywhere reporting a problem.
+        log.warn('pagination ceiling hit - estate may be incomplete', {
+          controller: connector.controller, resource: resource.name, pages: drained.pages,
+        });
+      }
+
+      const raw: RawBatch = {
+        tenantId: input.principal.tenantId,
+        encoding: 'rest-json',
+        receivedAt: nowIso(),
+        source: { collector: connector.controller + '-poller', resource: resource.name },
+        records: drained.records,
+      };
+
+      out.push({ raw, resource, s3Uri: archiveRaw(raw, connector.controller) });
+    }
+
+    return out;
   } catch (err) {
     // One dead controller must not fail the run. Partial data beats no data on
-    // an operations board - a missing Central feed is survivable, a blank map
-    // is not. And the device plane is still flowing regardless.
+    // an operations board - a missing Central feed is survivable, a blank map is
+    // not - and the probe still runs regardless, which is the one plane no
+    // vendor outage can take away.
     const message = err instanceof Error ? err.message : String(err);
     log.error('collector failed, continuing', { controller: connector.controller, error: message });
     return { failed: connector.controller };
@@ -106,64 +147,93 @@ export async function collectOne(args: {
 export function normaliseControllers(
   principal: Principal,
   inventory: Inventory,
-  collected: Array<{ raw: RawBatch } | { failed: string }>,
+  collected: Array<Collected[] | { failed: string }>,
 ): Observation[] {
   const out: Observation[] = [];
   const available = connectorsFor(principal);
 
   for (const item of collected) {
-    if (!('raw' in item)) continue;
+    if (!Array.isArray(item)) continue;
 
-    // Which connector produced this batch is recorded on the object key rather
-    // than in the payload, so it is matched back by collector name.
-    const connector = available.find((c) => item.raw.source.collector.startsWith(c.controller));
-    if (!connector) continue;
+    for (const { raw, resource } of item) {
+      // Which connector produced this batch is recorded on the object key
+      // rather than in the payload, so it is matched back by collector name.
+      const connector = available.find((c) => raw.source.collector.startsWith(c.controller));
+      if (!connector) continue;
 
-    try {
-      out.push(...connector.normalise(item.raw, inventory));
-    } catch (err) {
-      log.error('controller normalise failed', {
-        controller: connector.controller,
-        error: err instanceof Error ? err.message : String(err),
-      });
+      try {
+        // Stamp the provenance HERE rather than in each connector's builder
+        // calls. The pipeline already knows which resource produced which
+        // batch, and threading it through three connectors would be three
+        // chances to forget - at which point the watermark for that resource
+        // silently never advances and the poll re-reads the same window
+        // forever.
+        for (const o of connector.normalise(raw, inventory, resource)) {
+          out.push({
+            ...o,
+            attributes: {
+              ...o.attributes,
+              controller: connector.controller,
+              resource: resource.name,
+            },
+          });
+        }
+      } catch (err) {
+        log.error('controller normalise failed', {
+          controller: connector.controller,
+          resource: resource.name,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
   }
   return out;
 }
 
 /**
- * The push half: objects the collector already landed in S3.
+ * The push half: an alert a cloud POSTed at us.
  *
- * This is what an S3 event notification invokes. The decoder is chosen from the
- * key's `encoding=` partition without opening the object; see wire-registry.ts
- * for why that matters at 128MB per object.
+ * This is what API Gateway invokes. The delivery has ALREADY been signature-
+ * verified and unwrapped by `integrations/webhook.ts` before it reaches here -
+ * this function deliberately cannot be called with unverified input, because
+ * the verdict type is what carries the batch.
+ *
+ * Same vocabulary as the polled feed, mapped by the same connector, so the
+ * observations are indistinguishable downstream apart from `encoding`. That is
+ * what lets the dedupe key collapse a webhook and the poll's later re-report of
+ * the same event into one record - and it is why the poll can safely overlap
+ * its watermark rather than trying to abut it exactly.
  */
-export function normalisePushed(
+export function normaliseWebhooks(
+  principal: Principal,
   inventory: Inventory,
   batches: RawBatch[],
-): { observations: Observation[]; unresolvedHosts: string[] } {
+): { observations: Observation[]; unhandled: number } {
   const observations: Observation[] = [];
-  const unresolved = new Set<string>();
+  const available = connectorsFor(principal);
+  let unhandled = 0;
 
   for (const batch of batches) {
-    const result = normaliseBatch(batch, inventory);
-    observations.push(...result.observations);
-    for (const host of result.unresolvedHosts) unresolved.add(host);
+    const connector = available.find((c) => batch.source.collector.startsWith(c.controller));
+    if (!connector?.onWebhook) { unhandled += batch.records.length; continue; }
 
-    // Unresolved hosts are the number that tells you the inventory has drifted,
-    // and an estate whose syslog silently fails to resolve looks exactly like a
-    // quiet estate. Logged at warn precisely so it is visible without anyone
-    // going looking.
-    if (result.stats.unresolvedHost > 0) {
-      log.warn('records dropped - device not in inventory', {
-        encoding: batch.encoding,
-        dropped: result.stats.unresolvedHost,
-        hosts: result.unresolvedHosts.join(', '),
+    try {
+      const mapped = connector.onWebhook(batch, inventory);
+      observations.push(...mapped);
+      // A delivery whose alert type nothing maps is the NORMAL case, not an
+      // error - these feeds carry a great deal that is not operationally
+      // interesting. Counted rather than logged per record, so a noisy vendor
+      // cannot flood the log.
+      unhandled += Math.max(0, batch.records.length - mapped.length);
+    } catch (err) {
+      log.error('webhook normalise failed', {
+        controller: connector.controller,
+        error: err instanceof Error ? err.message : String(err),
       });
     }
   }
 
-  return { observations, unresolvedHosts: [...unresolved] };
+  return { observations, unhandled };
 }
 
 /** The external plane. Ours, not any vendor's. */
@@ -270,8 +340,8 @@ export async function streamAndCollect(
 /**
  * Collapse events that describe the same real-world transition.
  *
- * A Cisco link failure arrives as a syslog line AND an SNMP trap from the same
- * agent, milliseconds apart, and %LINK and %LINEPROTO add a third and fourth.
+ * A port failure arrives as a webhook the instant it fires, and again in the
+ * polled event log minutes later because the watermark deliberately overlaps.
  * They share a `dedupeKey` precisely so this step can fold them into one record
  * that remembers every witness.
  *
@@ -772,6 +842,15 @@ export async function publish(
   putAlarms(principal, alarms);
   for (const incident of incidents) putIncident(principal, incident);
 
+  // AFTER the write, never before.
+  //
+  // The watermark records what we have PERSISTED, not what we fetched. Advance
+  // it at collect time and a crash between the fetch and the write loses that
+  // window permanently - the next poll asks for everything after it, the gap is
+  // never re-requested, and nothing anywhere reports a problem. In production
+  // this is part of the same transaction as the PutItem above.
+  advanceWatermarks(principal, observations);
+
   for (const alarm of alarms) {
     await bus.putEvents({
       source: 'netpulse.evaluate',
@@ -819,3 +898,90 @@ export { getInventory };
 
 /** Re-exported so the workflow and the demo agree on what a plane is. */
 export type { ObservationPlane };
+
+/**
+ * Move each resource's watermark to the newest observation we just persisted.
+ *
+ * Keyed on the encoding rather than the resource name because a webhook and a
+ * poll can both carry the same event, and only the POLL's watermark should
+ * move - a webhook arriving out of order must never advance the sweep past a
+ * window the sweep has not read. Records that arrived by webhook are therefore
+ * skipped here entirely.
+ *
+ * Takes the MAXIMUM observedAt rather than the last element: observations come
+ * back from a cloud in whatever order it felt like, and assuming the last row
+ * is the newest is how a watermark jumps backwards and re-processes an hour.
+ */
+function advanceWatermarks(principal: Principal, observations: Observation[]): void {
+  const newest = new Map<string, string>();
+
+  for (const o of observations) {
+    if (o.encoding !== 'rest-json') continue;
+    const resource = String(o.attributes.resource ?? '');
+    const controller = String(o.attributes.controller ?? '');
+    if (!resource || !controller) continue;
+
+    const key = controller + '|' + resource;
+    const current = newest.get(key);
+    if (!current || o.observedAt > current) newest.set(key, o.observedAt);
+  }
+
+  for (const [key, through] of newest) {
+    const [controller, resource] = key.split('|');
+    setWatermark({ tenantId: principal.tenantId, controller, resource, through });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Scenario replay
+// ---------------------------------------------------------------------------
+
+/**
+ * Run one scenario's feeds through the real ingest path.
+ *
+ * Lives HERE rather than in the demo or the board because both replay the same
+ * scenarios and both must get the same answer. When this was duplicated, the
+ * board and the demo disagreed about whether a scenario paged - and the board
+ * was the one that was wrong, which is the worse way round.
+ *
+ * Webhook feeds go through `onWebhook`, polled feeds through `normalise` with
+ * their resource, because that is where the plane comes from. Routing them
+ * identically would be the whole bug this refactor exists to prevent.
+ */
+export function runScenarioFeeds(
+  principal: Principal,
+  inventory: Inventory,
+  feeds: Array<{ controller: string; resource: string; records: unknown[] }>,
+  receivedAt: string,
+): { observations: Observation[]; unresolved: string[] } {
+  const available = connectorsFor(principal);
+  const out: Observation[] = [];
+
+  // Drain anything a previous scenario left behind, so the count reported is
+  // this scenario's and not the suite's running total.
+  inventory.takeUnresolved();
+
+  for (const feed of feeds) {
+    const connector = available.find((c) => c.controller === feed.controller);
+    if (!connector) continue;
+
+    const raw: RawBatch = {
+      tenantId: principal.tenantId,
+      encoding: feed.resource === 'webhook' ? 'webhook' : 'rest-json',
+      receivedAt,
+      source: { collector: feed.controller + '-scenario', resource: feed.resource },
+      records: feed.records,
+    };
+
+    if (feed.resource === 'webhook') {
+      out.push(...(connector.onWebhook?.(raw, inventory) ?? []));
+      continue;
+    }
+
+    const resource = connector.resources.find((r) => r.name === feed.resource);
+    if (!resource) continue;
+    out.push(...connector.normalise(raw, inventory, resource));
+  }
+
+  return { observations: out, unresolved: inventory.takeUnresolved() };
+}

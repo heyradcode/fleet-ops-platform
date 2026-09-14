@@ -1,19 +1,23 @@
 /**
  * Severity: one rule, applied to every vendor.
  *
- * WHY WE THROW AWAY THE VENDOR'S OWN SEVERITY, which every feed here supplies.
+ * WHY WE THROW AWAY THE VENDOR'S OWN SEVERITY, which every cloud here supplies.
  *
- * Syslog carries a severity in its PRI byte, 0-7, and all three vendors emit
- * one. They are not comparable. Cisco tags `%LINK-3-UPDOWN` as severity 3
- * whether the port was pulled by a fault or shut by an operator on purpose;
- * Junos and AOS-CX draw the line somewhere else again, and the SNMP path has no
- * severity at all, only a trap OID. Aggregating those into one board produces a
- * pile of incomparable colours that means nothing across an estate - which
- * defeats the entire point of normalising in the first place.
+ * All three rank their alerts, and the rankings are not comparable. Meraki has
+ * one scale for its dashboard, Mist another for its alarm feed, and Central a
+ * third; each is tuned to make that vendor's own console feel calm, which is a
+ * product decision made by somebody optimising for a different screen.
+ * Aggregating them produces a pile of incomparable colours that means nothing
+ * across a mixed estate - which defeats the entire point of normalising.
  *
- * So we derive it here, from thresholds we control, exactly as the fleet build
- * did. The decoders still keep the vendor's own value in `attributes` - it is
- * useful when debugging why a device said something - but nothing reads it.
+ * It is worse than merely inconsistent. A vendor has a commercial reason to
+ * under-rank a fault in its own hardware and no reason at all to rank a fault
+ * in somebody else's, so accepting their number quietly imports that bias into
+ * a board whose whole job is comparing across vendors.
+ *
+ * So we derive it here, from thresholds we control. The connectors still keep
+ * the vendor's own value in `attributes` - it is useful when debugging why a
+ * cloud said something - but nothing reads it for a decision.
  */
 import type { EventKind, MetricKind, Severity } from '../platform/types.ts';
 
