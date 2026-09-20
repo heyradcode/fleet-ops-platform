@@ -106,10 +106,10 @@ aws cognito-idp admin-create-user \
   --user-attributes Name=email,Value=operator@acme-networks.com Name=email_verified,Value=true
 ```
 
-The email domain is what the trigger looks up, so it has to be one the
-membership table in `src/auth/pre-token-generation.ts` knows:
-`acme-networks.com`, `safety.acme-networks.com`, `netpulse.io` or
-`northwind-utilities.com`. Any other domain gets a token with no tenant, the
+The email domain is what the trigger looks up, so it has to be one of the four
+in `DEMO_MEMBERSHIPS` in `src/platform/membership.ts`, which is where the
+registry lives: `acme-networks.com`, `eng.acme-networks.com`, `netpulse.io`
+or `northwind-utilities.com`. Any other domain gets a token with no tenant, the
 verifier rejects it, and the board correctly shows nothing.
 
 **3. Point the board at it.** `terraform output vercel_env` prints three

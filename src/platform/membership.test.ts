@@ -8,6 +8,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import {
   lookupTenantMembership, setMembershipLookup, resetMembershipLookup,
@@ -84,14 +85,62 @@ test('the trigger reads through the registry, so a table change reaches the toke
 
 test('the seed rows Terraform writes match the built-in table', () => {
   // Two hand-maintained copies of the same four customers WILL drift - a tenant
-  // rename has caught this repository out once already. Terraform seeds from
-  // the shape this constant documents; if someone edits one, this fails.
-  assert.deepEqual(Object.keys(DEMO_MEMBERSHIPS).sort(), [
-    'acme-networks.com',
-    'eng.acme-networks.com',
-    'netpulse.io',
-    'northwind-utilities.com',
-  ]);
-  assert.equal(DEMO_MEMBERSHIPS['acme-networks.com'].site, 'dal-01');
-  assert.equal(DEMO_MEMBERSHIPS['netpulse.io'].site, undefined);
+  // rename has caught this repository out once already.
+  //
+  // THIS TEST USED TO BE GREEN FOR THE WRONG REASON. It re-asserted the
+  // TypeScript constant against a hardcoded list and never opened the .tf at
+  // all, so when the port left `safety.acme-networks.com` with a `safety`
+  // role and a site of "dal" behind in Terraform, nothing failed. That is the
+  // documented gotcha about non-TypeScript files being invisible to every
+  // check, landing on the one test written to prevent it. Parse the HCL.
+  const tf = readFileSync(
+    new URL('../../infra/terraform/auth/membership.tf', import.meta.url), 'utf8',
+  );
+
+  // The for_each block, not the whole file - PK prefixes elsewhere mention
+  // domains too, and matching those would make this pass on the wrong text.
+  const forEach = tf.slice(tf.indexOf('for_each = {'), tf.indexOf('table_name'));
+
+  // Line-oriented rather than one big regex: HCL formatting is not stable
+  // across `terraform fmt` versions, and a regex that stops matching after a
+  // reformat fails OPEN - it parses nothing and every assertion below passes
+  // vacuously. Hence the size check.
+  const seeded = new Map<string, { roles: string[]; site?: string }>();
+  let domain = '';
+  for (const raw of forEach.split('\n')) {
+    const line = raw.trim();
+    if (line.startsWith('"') && line.endsWith('= {')) {
+      domain = line.slice(1, line.indexOf('"', 1));
+      seeded.set(domain, { roles: [] });
+      continue;
+    }
+    const eq = line.indexOf('=');
+    if (!domain || eq < 0) continue;
+    const key = line.slice(0, eq).trim();
+    const value = line.slice(eq + 1).trim();
+    if (key === 'roles') {
+      seeded.get(domain)!.roles = value.slice(1, -1).split(',')
+        .map((r) => r.trim().split('"').join(''))
+        .filter((r) => r.length > 0);
+    } else if (key === 'site' && value !== 'null') {
+      seeded.get(domain)!.site = value.slice(1, -1);
+    }
+  }
+
+  // A parse that matched nothing would make every assertion below vacuous.
+  assert.equal(seeded.size, 4, 'the for_each block did not parse - fix this test, not the .tf');
+  assert.deepEqual([...seeded.keys()].sort(), Object.keys(DEMO_MEMBERSHIPS).sort());
+
+  for (const [domain, built] of Object.entries(DEMO_MEMBERSHIPS)) {
+    const row = seeded.get(domain)!;
+    assert.deepEqual(row.roles, built.roles, domain + ': roles disagree');
+    assert.equal(row.site, built.site, domain + ': site disagrees');
+    // `safety` was not in this union, so mapGroupsToRoles dropped it and the
+    // deployed engineer silently became a viewer. A role Terraform writes that
+    // the verifier will not accept is worse than no role at all.
+    for (const r of row.roles) {
+      assert.ok(['admin', 'operator', 'engineer', 'viewer'].includes(r),
+        domain + ': "' + r + '" is not a role the JWT verifier maps');
+    }
+  }
 });

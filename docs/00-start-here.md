@@ -68,3 +68,4 @@ you can trust what it claims.
 - `docs/06-geospatial.md` — GeoJSON/TopoJSON, PostGIS, MapLibre, the lon/lat trap
 - `docs/07-data-modelling.md` — DynamoDB single-table, Aurora, S3, idempotency
 - `docs/08-terraform-cicd.md` — modules, environments, state, OIDC deploys
+- `docs/09-code-tour.md` — a walk through the code itself, file by file

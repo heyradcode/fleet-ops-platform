@@ -55,11 +55,11 @@ resource "aws_dynamodb_table_item" "membership" {
     "acme-networks.com" = {
       tenantId = "acme-networks"
       roles    = ["operator"]
-      site = "dal"
+      site = "dal-01"
     }
-    "safety.acme-networks.com" = {
+    "eng.acme-networks.com" = {
       tenantId = "acme-networks"
-      roles    = ["safety"]
+      roles    = ["engineer"]
       site = null
     }
     "northwind-utilities.com" = {
