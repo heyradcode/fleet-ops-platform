@@ -49,7 +49,7 @@ type Registration = {
 let nextId = 1;
 const registrations: Registration[] = [];
 
-/** Client side: `subscription { onDriverException(siteId: "dal") { .. } }` */
+/** Client side: `subscription { onDeviceAlarm(siteId: "dal-01") { .. } }` */
 export function subscribe(field: string, filter: Record<string, unknown>, handler: Handler): number {
   const id = nextId++;
   registrations.push({ id, field, filter, handler });

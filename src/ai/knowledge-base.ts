@@ -49,7 +49,7 @@ export type RetrievedChunk = Chunk & { score: number };
 /**
  * CHUNKING STRATEGY - the decision that determines whether RAG works.
  *
- *   Too small  -> a chunk says "escalate to the carrier NOC" with no clue what
+ *   Too small  -> a chunk says "escalate to the customer NOC" with no clue what
  *                 the symptom was. The model cites it and sounds insane.
  *   Too large  -> one chunk covers three unrelated procedures; the embedding is
  *                 an average of all of them and matches nothing well.
@@ -128,8 +128,8 @@ export class KnowledgeBase {
    * HYBRID SEARCH: a vector score fused with a lexical one.
    *
    * Why both, once a REAL embedding model is behind embed(): dense vectors
-   * know that "off course" relates to "route deviation", and are bad at exact
-   * tokens - a vehicle id, an error code, "0.8g". Keyword search is the
+   * know that "link flapping" relates to "interface instability", and are bad
+   * at exact tokens - a device id, an OID, "Gi1/0/1". Keyword search is the
    * opposite. Bedrock's HYBRID search type fuses them for you; doing it by
    * hand once makes the tradeoff concrete.
    *

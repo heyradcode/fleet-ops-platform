@@ -45,7 +45,7 @@ export function assertSameTenant(principal: Principal, tenantId: TenantId): void
 
 /**
  * Thrown when a caller is inside the right tenant but outside their scope -
- * a Dallas dispatcher reaching for Phoenix.
+ * a Dallas operator reaching for Phoenix.
  */
 export class OutOfScopeError extends Error {
   constructor(what: string) {

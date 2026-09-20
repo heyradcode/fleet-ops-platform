@@ -54,7 +54,7 @@ test('retrieval is filtered by tenant, always', async () => {
   const mine = await kb.retrieve('interface stopped forwarding', { tenantId: 'acme-networks' });
   assert.ok(mine.length > 0);
 
-  // Another carrier's query reaches none of it. Not "ranked lower" - absent.
+  // Another customer's query reaches none of it. Not "ranked lower" - absent.
   const theirs = await kb.retrieve('interface stopped forwarding', { tenantId: 'northwind-utilities' });
   assert.equal(theirs.length, 0);
 });
@@ -81,14 +81,14 @@ test('the offline embedder is lexical, NOT semantic - synonyms score zero', asyn
   // Titan should see these two assertions start to disagree with each other,
   // and should then change this test deliberately rather than delete it.
   const synonyms = cosineSimilarity(
+    await embed('link down'),
     await embed('interface stopped forwarding'),
-    await embed('truck is off course'),
   );
   assert.equal(synonyms, 0, 'no shared tokens, so a hashed bag-of-words sees nothing');
 
   const overlapping = cosineSimilarity(
-    await embed('harsh braking event'),
-    await embed('harsh braking review'),
+    await embed('optical degradation warning'),
+    await embed('optical degradation review'),
   );
   assert.ok(overlapping > 0.5, 'shared tokens DO score');
 });

@@ -105,8 +105,8 @@ export async function handler(event: ApiGatewayEvent): Promise<ApiGatewayResult>
        */
       case 'GET /map': {
         const estate = allDeviceStates(principal);
-        const byDriver = new Map(estate.map((d) => [d.deviceId, observationsForDevice(principal, d.deviceId)]));
-        const fc = devicesToFeatureCollection(estate, byDriver);
+        const byDevice = new Map(estate.map((d) => [d.deviceId, observationsForDevice(principal, d.deviceId)]));
+        const fc = devicesToFeatureCollection(estate, byDevice);
 
         if (query.format === 'topojson') {
           const topo = toTopoJson(fc);

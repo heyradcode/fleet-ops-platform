@@ -33,7 +33,7 @@ export function request(ctx) {
     operation: 'Query',
     query: {
       expression: 'PK = :pk',
-      expressionValues: util.dynamodb.toMapValues({ ':pk': `TENANT#${tenantId}#TELEMETRY` }),
+      expressionValues: util.dynamodb.toMapValues({ ':pk': `TENANT#${tenantId}#OBSERVATION` }),
     },
     scanIndexForward: false,
     limit: Math.min(ctx.args.limit ?? 25, 100),

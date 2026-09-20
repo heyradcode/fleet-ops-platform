@@ -3,7 +3,7 @@
    ==========================================================================
    Design direction: an ops console, not a dashboard.
 
-   A dispatcher watches this for a ten-hour shift. That constraint drives every
+   An operator watches this for a ten-hour shift. That constraint drives every
    choice below - density over whitespace, one accent colour that only ever
    means "look at this", and numbers set in a mono face with tabular figures so
    a column of clocks does not jitter as digits change.
@@ -76,7 +76,7 @@ body {
 }
 
 /* Every number on this board is tabular. Proportional figures make a column
-   of hours-of-service clocks shift horizontally as they count down, which is
+   of utilisation percentages shift horizontally as they change, which is
    exactly the kind of low-grade friction that makes a tool tiring. */
 .mono, .num {
   font-family: var(--data);
@@ -138,14 +138,14 @@ button {
   background: var(--amber);
 }
 
-.districts {
+.sites {
   display: flex;
   align-items: stretch;
 }
 
 /* District tabs read like the mile-marker plates on a gantry: condensed caps,
    a hairline underneath, and the active one lit amber. */
-.district {
+.site {
   font-family: var(--sign);
   font-size: 15px;
   font-weight: 600;
@@ -158,22 +158,22 @@ button {
   transition: color 120ms, border-color 120ms;
 }
 
-.district:hover { color: var(--text); }
+.site:hover { color: var(--text); }
 
-.district[aria-pressed='true'] {
+.site[aria-pressed='true'] {
   color: var(--text-strong);
   border-bottom-color: var(--amber);
   background: var(--raised);
 }
 
-.district .count {
+.site .count {
   font-family: var(--data);
   font-size: 11px;
   color: var(--faint);
   margin-left: 6px;
 }
 
-.district[aria-pressed='true'] .count { color: var(--amber); }
+.site[aria-pressed='true'] .count { color: var(--amber); }
 
 .statusbar-spacer { flex: 1; border-right: 1px solid var(--line); }
 
@@ -229,7 +229,7 @@ button {
 
 /* The map is the product; the panes serve it. 300px is the narrowest the
    roster stays readable at - id, name, EXC flag, HOS strip, clock - and every
-   pixel past that is taken from the thing a dispatcher is actually watching. */
+   pixel past that is taken from the thing an operator is actually watching. */
 .body {
   display: grid;
   grid-template-columns: 300px 1fr;
@@ -264,7 +264,7 @@ button {
   min-height: 0;
 }
 
-.driver {
+.device-row {
   display: grid;
   grid-template-columns: 8px 1fr auto;
   align-items: center;
@@ -276,9 +276,9 @@ button {
   text-align: left;
 }
 
-.driver:hover { background: var(--raised); }
+.device-row:hover { background: var(--raised); }
 
-.driver[aria-selected='true'] {
+.device-row[aria-selected='true'] {
   background: var(--raised);
   box-shadow: inset 2px 0 0 var(--amber);
 }
@@ -294,13 +294,13 @@ button {
 .status-degraded { background: var(--degraded); }
 .status-down { background: var(--down); }
 
-.driver-id {
+.device-role {
   font-family: var(--data);
   font-size: 11px;
   color: var(--dim);
 }
 
-.driver-name {
+.device-name {
   font-size: 12px;
   color: var(--text);
   white-space: nowrap;
@@ -308,7 +308,7 @@ button {
   text-overflow: ellipsis;
 }
 
-.driver-flag {
+.device-flag {
   font-family: var(--data);
   font-size: 10px;
   font-weight: 600;
@@ -318,32 +318,33 @@ button {
   color: var(--amber);
 }
 
-.driver-flag.is-critical { color: var(--critical); }
+.device-flag.is-critical { color: var(--critical); }
 
 /* --------------------------------------------------------------------------
-   THE SIGNATURE ELEMENT: the hours-of-service strip
+   THE SIGNATURE ELEMENT: the load strip
    --------------------------------------------------------------------------
-   Every driver row carries a miniature of the ELD duty-status log - the ruled
-   grid strip that drivers and dispatchers read every single day, and the one
-   artifact of this trade nobody would think to invent.
+   Every device row carries a miniature utilisation bar. A number in a column
+   tells you one box is at 91%; sixty bars tell you whether that is normal for
+   this estate at this hour, which is the question an operator is actually
+   asking and the one a table of digits answers badly.
 
-   It encodes the thing that actually ends a shift: minutes of legal drive time
-   remaining, against an 11-hour maximum, with the warning and critical marks
-   at the same thresholds the detection rules use. So the strip and the alert
-   cannot disagree - they are reading the same number.
+   Its warning and critical marks are UTILISATION_THRESHOLDS from
+   integrations/classify.ts - the same constant the capacity rule reads. So the
+   strip and the alarm cannot disagree: an amber bar on a device the rules call
+   healthy would be the symptom of two copies of one number.
 
    Repeated down sixty rows it becomes the texture of the page, which is the
-   point: a dispatcher should be able to see the shape of their shift ending
-   without reading a single digit.
+   point: you should be able to see the shape of the estate's load without
+   reading a single digit.
    -------------------------------------------------------------------------- */
 
-.hos {
+.load {
   display: flex;
   align-items: center;
   gap: 7px;
 }
 
-.hos-strip {
+.load-strip {
   position: relative;
   width: 64px;
   height: 11px;
@@ -354,7 +355,7 @@ button {
 /* The ruled grid, as on a paper log sheet. Hour divisions, drawn in the
    background rather than as elements - sixty rows of DOM ticks would be real
    cost for a purely visual cue. */
-.hos-strip::before {
+.load-strip::before {
   content: '';
   position: absolute;
   inset: 0;
@@ -367,7 +368,7 @@ button {
   opacity: 0.55;
 }
 
-.hos-fill {
+.load-fill {
   position: absolute;
   top: 0;
   left: 0;
@@ -375,10 +376,10 @@ button {
   background: var(--healthy);
 }
 
-.hos-fill.is-warning { background: var(--amber); }
-.hos-fill.is-critical { background: var(--critical); }
+.load-fill.is-warning { background: var(--amber); }
+.load-fill.is-critical { background: var(--critical); }
 
-.hos-clock {
+.load-clock {
   font-family: var(--data);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
@@ -387,8 +388,8 @@ button {
   text-align: right;
 }
 
-.hos-clock.is-warning { color: var(--amber); }
-.hos-clock.is-critical { color: var(--critical); font-weight: 600; }
+.load-clock.is-warning { color: var(--amber); }
+.load-clock.is-critical { color: var(--critical); font-weight: 600; }
 
 /* ==========================================================================
    Map
@@ -508,7 +509,7 @@ button {
 
 /* The distinction the whole architecture rests on, made visible: an exception
    that fired but was NOT corroborated is shown, dimmed, rather than hidden.
-   A dispatcher who can see the noise filter working trusts the board that is
+   An operator who can see the noise filter working trusts the board that is
    quiet. One that only ever shows alerts teaches people it cries wolf. */
 .exception.is-noise { opacity: 0.5; }
 
@@ -540,7 +541,7 @@ button {
 }
 
 /* ==========================================================================
-   Driver panel and the agent trace
+   Device panel and the agent trace
    ==========================================================================
    The panel is the only place the board opens up. Everything else is a grid of
    rows, so this earns a little more room to breathe - but only a little, and
@@ -587,7 +588,7 @@ button {
   color: var(--text-strong);
 }
 
-.panel-driverid { font-size: 11px; color: var(--dim); }
+.panel-deviceid { font-size: 11px; color: var(--dim); }
 
 .facts {
   display: grid;
@@ -678,7 +679,7 @@ button {
    The trace
    --------------------------------------------------------------------------
    Set as a log, not as chat. Fixed columns, mono throughout, one line per step:
-   a dispatcher scans this the way they scan the roster, and prose would make
+   an operator scans this the way they scan a rack, and prose would make
    that impossible.
    -------------------------------------------------------------------------- */
 
@@ -979,7 +980,7 @@ select.field-input { cursor: pointer; }
    ========================================================================== */
 
 /* Roster rows: id and name stacked tight, so the row survives at 300px. */
-.driver-who {
+.device-who {
   display: flex;
   flex-direction: column;
   min-width: 0;

@@ -153,7 +153,7 @@ module "firehose" {
 
   source_stream_arn  = module.kinesis.stream_arn
   history_bucket_arn = module.storage.history_bucket_arn
-  glue_table_arn     = "arn:aws:glue:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/netpulse/telemetry_history"
+  glue_table_arn     = "arn:aws:glue:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/netpulse/observation_history"
   role_arn           = module.storage.firehose_role_arn
 }
 

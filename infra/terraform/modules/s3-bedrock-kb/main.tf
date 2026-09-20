@@ -328,8 +328,9 @@ resource "aws_iam_role_policy" "kb" {
 # ---------------------------------------------------------------------------
 # Separate from the raw bucket on purpose. They have different lifecycles,
 # different consumers and different retention arguments: raw payloads exist so
-# a mapping bug is replayable and can age out in weeks, while position history
-# is a safety-review asset and a privacy liability that outlives them by years.
+# a mapping bug is replayable and can age out in weeks, while observation
+# history is a capacity-planning asset and a map of a customer's internal
+# network that outlives them by years.
 resource "aws_s3_bucket" "history" {
   bucket = "${var.name_prefix}-history-${data.aws_caller_identity.current.account_id}"
   tags   = { Purpose = "observations-history" }

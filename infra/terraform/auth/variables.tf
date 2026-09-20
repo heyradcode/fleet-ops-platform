@@ -44,3 +44,9 @@ variable "google_client_secret" {
   default     = ""
   sensitive   = true
 }
+
+variable "seed_demo_customers" {
+  description = "Write the four fictional demo customers into the membership table. FALSE for anything real - a deployed pool should hold your customers, not acme-networks.com. The offline board and the tests do not read this table at all; they use DEMO_MEMBERSHIPS in src/platform/membership.ts, so turning this off costs nothing locally."
+  type        = bool
+  default     = false
+}

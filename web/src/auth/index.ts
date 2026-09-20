@@ -13,11 +13,11 @@
  *
  * WHY THIS EARNS ITS PLACE rather than being a fake login form:
  *
- * The board's district scope used to be hardcoded. Signing in makes it come
+ * The board's site scope used to be hardcoded. Signing in makes it come
  * from a token that was actually minted and actually verified, so "a Dallas
  * operator cannot see Phoenix" becomes something you do by logging in as one
  * rather than something the code claims. The seven verification checks, the
- * signed district claim and the fail-closed unknown domain are all real and all
+ * signed site claim and the fail-closed unknown domain are all real and all
  * exercised.
  *
  * What is NOT real offline: the signature is HMAC with a demo secret rather
@@ -39,7 +39,7 @@ export type Realm = {
   /** The IdP Cognito would hand this user to. */
   idp: string;
   kind: 'saml' | 'oidc' | 'cognito';
-  /** Shown to the user: "Continue with your Acme Freight account". */
+  /** Shown to the user: "Continue with your Northwind Utilities account". */
   label: string;
 };
 

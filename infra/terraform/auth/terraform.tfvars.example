@@ -12,3 +12,11 @@ alert_email = "you@example.com"
 # The hosted UI domain prefix is globally unique across every AWS account, so
 # a good name is probably taken. Empty derives it from the env name.
 # domain_prefix = "netpulse-something-yours"
+
+# The four fictional demo customers (acme-networks.com and friends). OFF by
+# default: a deployed pool should hold YOUR customers, and an empty membership
+# table is the correct starting state - every domain fails closed until someone
+# is deliberately onboarded. Turning this on costs nothing locally either way,
+# because the offline board and the tests read DEMO_MEMBERSHIPS in
+# src/platform/membership.ts and never touch this table.
+# seed_demo_customers = true

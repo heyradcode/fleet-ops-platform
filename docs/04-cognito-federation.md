@@ -207,7 +207,7 @@ Cognito token
    Principal { tenantId: 'acme', roles: ['operator'] }
         │
         ▼  every repository function takes a Principal
-   PK = "TENANT#acme#TELEMETRY"
+   PK = "TENANT#acme#OBSERVATION"
         │
         ▼  and IAM independently enforces the same boundary
    Condition: dynamodb:LeadingKeys = ["TENANT#acme#*"]

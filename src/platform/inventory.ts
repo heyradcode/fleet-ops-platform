@@ -138,7 +138,7 @@ export class Inventory {
         if (existing && existing !== d.deviceId) {
           // Two devices claiming one name is a real and recurring situation - a
           // hostname reused after a hardware swap, or two branches that both
-          // called their switch `sw1`. Guessing produces telemetry silently
+          // called their switch `sw1`. Guessing produces observations silently
           // attributed to the wrong box, so we refuse to resolve it at all and
           // surface it instead.
           this.ambiguousAliases.push(key);

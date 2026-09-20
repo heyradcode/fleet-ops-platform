@@ -24,10 +24,11 @@ items you want to fetch *together* sort *next to each other*. Then you Query a
 key prefix.
 
 ```
-PK                       SK                          entity
-TENANT#acme#DRIVER         DRIVER#dal-01                 Device
-TENANT#acme#TELEMETRY       2026-09-04T10:00:00Z#a3f…   Observations
-TENANT#acme#INCIDENT     2026-09-04T10:02:00Z#inc_7f Incident
+PK                        SK                            entity
+TENANT#acme#DEVICE        DEVICE#dev-cor-dal01-01       DeviceState
+TENANT#acme#OBSERVATION   2026-09-04T10:00:00Z#a3f…     Observation
+TENANT#acme#ALARM         2026-09-04T10:01:00Z#alm_2    Alarm
+TENANT#acme#INCIDENT      2026-09-04T10:02:00Z#inc_7f   Incident
 ```
 
 Because the SK **starts with an ISO-8601 timestamp**, "this tenant's observations
@@ -38,17 +39,22 @@ ever.
 > **The rule to repeat:** model your access patterns first, then derive the
 > keys. Never the other way round.
 
+These are not illustrative. They are the shapes `keys` builds in
+`src/aws/dynamodb.ts:127`, which is the one place the layout is written down -
+if this table and that object disagree, the object is right.
+
 ### Access patterns for this product
 
 | Pattern | How |
 |---|---|
-| Recent observations for a tenant | Query `PK = TENANT#<t>#TELEMETRY`, descending, limit |
-| Signals for one device | Query **GSI1** `GSI1PK = TENANT#<t>#DRIVER#<device>` |
+| Recent observations for a tenant | Query `PK = TENANT#<t>#OBSERVATION`, descending, limit |
+| Observations for one device | Query **GSI1** `GSI1PK = TENANT#<t>#DEVICE#<device>` |
+| Every device at one site | Query **GSI1** `GSI1PK = TENANT#<t>#SITE#<site>` |
 | Open incidents | Query `PK = TENANT#<t>#INCIDENT`, descending |
-| One device by id | GetItem `PK = TENANT#<t>#DRIVER`, `SK = DRIVER#<id>` |
+| One device by id | GetItem `PK = TENANT#<t>#DEVICE`, `SK = DEVICE#<id>` |
 
 GSI1 flips the access direction — that is what a secondary index is *for*.
-Without it, "all observations for dal-01" would mean reading every reading for the
+Without it, "all observations for dev-cor-dal01-01" would mean reading every one for the
 tenant and filtering, which costs read units proportional to your **data**
 rather than to your **answer**.
 
@@ -98,9 +104,9 @@ do you guarantee the event and the write cannot diverge?"
 ### Hot partitions
 
 DynamoDB spreads load across partitions by key. A key like
-`PK = TENANT#acme#TELEMETRY` puts one tenant's entire write volume on one
+`PK = TENANT#acme#OBSERVATION` puts one tenant's entire write volume on one
 partition. Adaptive capacity absorbs a lot of this now, but if a single tenant
-outgrows it, **write-shard**: `TENANT#acme#TELEMETRY#<0-9>` and scatter-gather on
+outgrows it, **write-shard**: `TENANT#acme#OBSERVATION#<0-9>` and scatter-gather on
 read. Know the technique; don't apply it pre-emptively.
 
 → `src/aws/dynamodb.ts`, `src/platform/repository.ts`
@@ -180,7 +186,7 @@ The pipeline is at-least-once: EventBridge and Step Functions both retry. So
 make the **write** idempotent rather than trying to make delivery exactly-once.
 
 ```ts
-telemetryId = sha256(`${provider}|${sourceRef}|${observedAt}`).slice(0, 24)
+observationId = sha256(`${provider}|${sourceRef}|${observedAt}`).slice(0, 24)
 ```
 
 The same vendor reading always produces the same id, so a duplicate `PutItem`

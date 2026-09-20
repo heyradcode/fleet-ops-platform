@@ -5,7 +5,7 @@
   "States": {
     "PrepareControllerList": {
       "Type": "Pass",
-      "Comment": "The vendors THIS carrier runs - one GPS unit, one ELD, one dashcam. Kept in the definition so onboarding a vendor is a Terraform change with an audit trail, not a code deploy. Per-tenant subsets live in DynamoDB; this is the default.",
+      "Comment": "The clouds THIS customer runs - Meraki, Mist, Aruba Central. Kept in the definition so onboarding a vendor is a Terraform change with an audit trail, not a code deploy. Per-tenant subsets live in DynamoDB; this is the default.",
       "Result": {
         "providers": [
           "samsara",
@@ -19,7 +19,7 @@
 
     "PollControllers": {
       "Type": "Map",
-      "Comment": "Fan out one Lambda per vendor. MaxConcurrency 4 keeps us inside every vendor rate limit. ToleratedFailurePercentage lets the run succeed on partial data - a dead dashcam feed must not block position data.",
+      "Comment": "Fan out one Lambda per vendor. MaxConcurrency 4 keeps us inside every vendor rate limit. ToleratedFailurePercentage lets the run succeed on partial data - a dead controller feed must not block the ones still answering.",
       "ItemsPath": "$.config.providers",
       "MaxConcurrency": 4,
       "ToleratedFailurePercentage": 40,
@@ -82,7 +82,7 @@
 
     "NormaliseToObservations": {
       "Type": "Task",
-      "Comment": "Vendor payloads -> canonical Telemetry[]. Pure function; safe to retry.",
+      "Comment": "Vendor payloads -> canonical Observation[]. Pure function; safe to retry.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${normalise_function_arn}",
@@ -96,14 +96,14 @@
           "BackoffRate": 2
         }
       ],
-      "ResultSelector": { "observations.$": "$.Payload.telemetry" },
+      "ResultSelector": { "observations.$": "$.Payload.observations" },
       "ResultPath": "$.normalised",
       "Next": "EnrichAndDeduplicate"
     },
 
     "EnrichAndDeduplicate": {
       "Type": "Task",
-      "Comment": "Which site and geofences does this point fall in. Best-effort: an ELD reports a clock and has no coordinates at all, so failure continues rather than aborts. The hot path does a bbox pre-filter in memory against geofences cached at module scope - a PostGIS round trip per ping is neither fast nor cheap at 11,000/sec.",
+      "Comment": "Resolve each observation to a site, and fold duplicates sharing a dedupeKey. Best-effort: a webhook can name a device the inventory has never seen, so failure continues rather than aborts. Site lookup is an in-memory join against inventory cached at module scope - a round trip per observation is neither fast nor cheap at this rate.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${resolve_function_arn}",
@@ -116,7 +116,7 @@
           "Next": "AnyObservations"
         }
       ],
-      "ResultSelector": { "observations.$": "$.Payload.telemetry" },
+      "ResultSelector": { "observations.$": "$.Payload.observations" },
       "ResultPath": "$.resolved",
       "Next": "AnyObservations"
     },
@@ -126,7 +126,7 @@
       "Comment": "A quiet polling window is a success, not a failure.",
       "Choices": [
         {
-          "Variable": "$.resolved.telemetry[0]",
+          "Variable": "$.resolved.observations[0]",
           "IsPresent": true,
           "Next": "EvaluateRules"
         }
@@ -140,14 +140,14 @@
 
     "EvaluateRules": {
       "Type": "Task",
-      "Comment": "Per-device deterministic rules -> Alarm[], and fold the newest position into hot state. No LLM here on purpose: what pages a human at 4am must be identical every time and explainable to the person it woke.",
+      "Comment": "Per-device deterministic rules -> Alarm[], and fold the newest observation into hot state. No LLM here on purpose: what pages a human at 4am must be identical every time and explainable to the person it woke.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${evaluate_function_arn}",
         "Payload.$": "$.resolved"
       },
       "ResultSelector": {
-        "observations.$": "$.Payload.telemetry",
+        "observations.$": "$.Payload.observations",
         "devices.$": "$.Payload.devices",
         "alarms.$": "$.Payload.alarms"
       },
@@ -164,7 +164,7 @@
         "Payload.$": "$.evaluated"
       },
       "ResultSelector": {
-        "observations.$": "$.Payload.telemetry",
+        "observations.$": "$.Payload.observations",
         "devices.$": "$.Payload.devices",
         "alarms.$": "$.Payload.alarms",
         "incidents.$": "$.Payload.incidents"
@@ -175,7 +175,7 @@
 
     "PersistAndPublish": {
       "Type": "Task",
-      "Comment": "BatchWriteItem to DynamoDB, then PutEvents to EventBridge. Write before publish, so a subscriber that immediately queries cannot 404. NOTE what is published: alarms and incidents only. Telemetry is persisted and folded into hot state but never reaches the bus - at 11,000 readings/sec it would make bus cost scale with fleet size instead of with incidents.",
+      "Comment": "BatchWriteItem to DynamoDB, then PutEvents to EventBridge. Write before publish, so a subscriber that immediately queries cannot 404. NOTE what is published: alarms and incidents only. Observations are persisted and folded into hot state but never reach the bus - an estate produces far more observations than decisions, so it would make bus cost scale with estate size instead of with incidents.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${publish_function_arn}",

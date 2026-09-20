@@ -50,29 +50,42 @@ resource "aws_dynamodb_table" "membership" {
 # destroyed on the next apply. That is the property that makes seeding safe
 # here; it would not be true of a whole-table resource.
 
-resource "aws_dynamodb_table_item" "membership" {
-  for_each = {
+# FICTIONAL, AND OFF BY DEFAULT - see var.seed_demo_customers. A deployed pool
+# should hold your customers, not acme-networks.com. They stay in the file
+# because the shape of a membership row is worth documenting in the same place
+# that writes one, and because `terraform plan` with the flag on is the
+# cheapest way to check the shape before a real customer depends on it.
+locals {
+  demo_customers = {
     "acme-networks.com" = {
       tenantId = "acme-networks"
       roles    = ["operator"]
-      site = "dal-01"
+      site     = "dal-01"
     }
     "eng.acme-networks.com" = {
       tenantId = "acme-networks"
       roles    = ["engineer"]
-      site = null
+      site     = null
     }
     "northwind-utilities.com" = {
       tenantId = "northwind-utilities"
       roles    = ["viewer"]
-      site = null
+      site     = null
     }
     "netpulse.io" = {
       tenantId = "acme-networks"
       roles    = ["admin"]
-      site = null
+      site     = null
     }
   }
+}
+
+resource "aws_dynamodb_table_item" "membership" {
+  # An empty map writes no rows. The TABLE is still created either way - it is
+  # the customers in it that are optional, and an empty membership table is the
+  # correct starting state for a real pool: every domain fails closed until
+  # somebody is deliberately onboarded.
+  for_each = var.seed_demo_customers ? local.demo_customers : {}
 
   table_name = aws_dynamodb_table.membership.name
   hash_key   = aws_dynamodb_table.membership.hash_key

@@ -48,7 +48,7 @@ resource "aws_kinesis_firehose_delivery_stream" "history" {
     # Buffer until 128MB or 300s, whichever comes first. Bigger buffers make
     # better Parquet files and cheaper queries; they also delay availability,
     # so this is a freshness-versus-cost dial. History is read by analysts and
-    # safety reviewers, not by the live board, so five minutes is generous.
+    # capacity planners, not by the live board, so five minutes is generous.
     buffering_size     = 128
     buffering_interval = 300
 
@@ -80,7 +80,7 @@ resource "aws_kinesis_firehose_delivery_stream" "history" {
       schema_configuration {
         role_arn      = var.role_arn
         database_name = "netpulse"
-        table_name    = "telemetry_history"
+        table_name    = "observation_history"
       }
     }
 
@@ -97,11 +97,12 @@ resource "aws_kinesis_firehose_delivery_stream" "history" {
 # ---------------------------------------------------------------------------
 # Lifecycle: history is an asset AND a liability
 # ---------------------------------------------------------------------------
-# Position history is simultaneously an analytics asset, a safety-review asset,
-# and a record of where identifiable people were at identifiable times. The
-# retention answer is legal before it is technical, and this policy is a
-# placeholder for a decision the business has to make - not a default to accept
-# without asking.
+# Observation history is simultaneously an analytics asset, a capacity-planning
+# asset, and a detailed map of a customer's internal network over time - which
+# is exactly what an attacker would want and what a customer contract is most
+# likely to have something to say about. The retention answer is legal before it
+# is technical, and this policy is a placeholder for a decision the business has
+# to make - not a default to accept without asking.
 resource "aws_s3_bucket_lifecycle_configuration" "history" {
   bucket = replace(var.history_bucket_arn, "arn:aws:s3:::", "")
 
@@ -126,8 +127,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "history" {
       storage_class = "GLACIER_IR"
     }
 
-    # DECIDE THIS DELIBERATELY. Two years is a common answer for safety review;
-    # your jurisdiction, your insurer and your works council may all disagree.
+    # DECIDE THIS DELIBERATELY. Two years is a common answer for capacity
+    # trending; your customer contracts and their auditors may all disagree.
     expiration {
       days = 730
     }

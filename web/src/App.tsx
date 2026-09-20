@@ -176,11 +176,11 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
           <span className="brand-rule" />
         </div>
 
-        <nav className="districts" aria-label="Site">
+        <nav className="sites" aria-label="Site">
           {visibleSites.map((s) => (
             <button
               key={s.siteId}
-              className="district"
+              className="site"
               title={s.name}
               aria-pressed={siteId === s.siteId}
               onClick={() => { setSiteId(s.siteId); setSelected(undefined); }}
@@ -193,7 +193,7 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
               that carries it. */}
           {canSeeAll && (
             <button
-              className="district is-lead"
+              className="site is-all"
               aria-pressed={siteId === undefined}
               onClick={() => { setSiteId(undefined); setSelected(undefined); }}
               title="Estate-wide scope, granted by the admin role"
@@ -368,23 +368,23 @@ function DeviceRow({ device, flagged, selected, onSelect }: {
   }, [selected]);
 
   return (
-    <button ref={row} className="driver" aria-selected={selected} onClick={onSelect}>
+    <button ref={row} className="device-row" aria-selected={selected} onClick={onSelect}>
       <span className={`status-bar status-${device.status}`} aria-hidden="true" />
 
-      <span className="driver-who">
-        <span className="driver-id">{roleLabel(device.role)}</span>
-        <span className="driver-name">{device.name}</span>
+      <span className="device-who">
+        <span className="device-role">{roleLabel(device.role)}</span>
+        <span className="device-name">{device.name}</span>
       </span>
 
-      <span className="hos">
-        {flagged && <span className="driver-flag is-critical">ALM</span>}
+      <span className="load">
+        {flagged && <span className="device-flag is-critical">ALM</span>}
         {device.interfacesDown > 0 && (
           <span className="ports-down" title={device.interfacesDown + ' interfaces down'}>
             {device.interfacesDown}↓
           </span>
         )}
         <UtilisationStrip percent={device.cpuUtilisation} level={level} />
-        <span className={`hos-clock ${level ? `is-${level}` : ''}`}>
+        <span className={`load-clock ${level ? `is-${level}` : ''}`}>
           {formatPercent(device.cpuUtilisation)}
         </span>
       </span>
@@ -404,14 +404,14 @@ function UtilisationStrip({ percent, level }: { percent: number; level: LoadLeve
   const pct = Math.max(0, Math.min(100, (percent / UTILISATION_MAX) * 100));
   return (
     <span
-      className="hos-strip"
+      className="load-strip"
       role="meter"
       aria-valuenow={Math.round(percent)}
       aria-valuemin={0}
       aria-valuemax={UTILISATION_MAX}
       aria-label={`${formatPercent(percent)} utilisation`}
     >
-      <span className={`hos-fill ${level ? `is-${level}` : ''}`} style={{ width: `${pct}%` }} />
+      <span className={`load-fill ${level ? `is-${level}` : ''}`} style={{ width: `${pct}%` }} />
     </span>
   );
 }

@@ -106,11 +106,17 @@ aws cognito-idp admin-create-user \
   --user-attributes Name=email,Value=operator@acme-networks.com Name=email_verified,Value=true
 ```
 
-The email domain is what the trigger looks up, so it has to be one of the four
-in `DEMO_MEMBERSHIPS` in `src/platform/membership.ts`, which is where the
-registry lives: `acme-networks.com`, `eng.acme-networks.com`, `netpulse.io`
-or `northwind-utilities.com`. Any other domain gets a token with no tenant, the
-verifier rejects it, and the board correctly shows nothing.
+The email domain is what the trigger looks up, and **a fresh apply leaves the
+membership table empty** - `seed_demo_customers` is off by default, because a
+real pool should hold your customers rather than four fictional ones. So create
+the user, then add its domain as a row (next section). Until you do, that user
+signs in, gets a token with no tenant, the verifier rejects it, and the board
+correctly shows nothing. That is the fail-closed path, not a broken deploy.
+
+Set `seed_demo_customers = true` if you want `acme-networks.com` and friends
+written for a walkthrough. It changes nothing locally either way: the offline
+board and the tests read `DEMO_MEMBERSHIPS` in `src/platform/membership.ts`
+and never touch this table.
 
 **3. Point the board at it.** `terraform output vercel_env` prints three
 variables. Set all three on Vercel and redeploy:
@@ -135,17 +141,24 @@ aws dynamodb put-item --table-name netpulse-demo-membership --item '{
   "PK":       {"S": "TENANT_MEMBERSHIP#newco.example"},
   "tenantId": {"S": "newco"},
   "roles":    {"SS": ["operator"]},
-  "site": {"S": "phx"}
+  "site": {"S": "phx-01"}
 }'
 ```
 
-No rebuild, no deploy. Terraform seeds the four demo customers with
-`aws_dynamodb_table_item`, which manages only the rows it declares — rows
-added this way survive the next `apply` rather than being destroyed.
+No rebuild, no deploy. Terraform declares rows with `aws_dynamodb_table_item`,
+which manages only the rows it declares — rows added this way survive the next
+`apply` rather than being destroyed.
 
-Omit `site` for tenant-wide scope. `roles` is a string SET, and only
-`admin`, `safety`, `operator`, `device` and `viewer` map to anything —
-anything else degrades to `viewer` rather than failing.
+Omit `site` for tenant-wide scope, and use a real site id: they are
+`dal-01`, `aus-01`, `den-01`, `chi-01` and `phx-01` (`src/data/estate.ts`).
+A site id nothing matches is not an error — it is a scope that admits zero
+devices, so the person signs in to an empty board with nothing to explain it.
+
+`roles` is a string SET, and **only `admin`, `operator`, `engineer` and
+`viewer` mean anything**. That list is `mapGroupsToRoles` in
+`src/auth/cognito-jwt-verifier.ts`, and anything else is dropped — a row with
+one unrecognised role degrades silently to `viewer`, which is how an engineer
+ends up read-only with nothing saying why.
 
 **4. Optional: Google sign-in.** Create an OAuth client in Google Cloud with
 the authorized redirect URI `https://<domain>/oauth2/idpresponse`, then:

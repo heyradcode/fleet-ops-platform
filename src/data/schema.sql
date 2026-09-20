@@ -106,7 +106,7 @@ CREATE INDEX IF NOT EXISTS devices_name_trgm ON devices USING GIN (name gin_trgm
 -- THE UNIQUE CONSTRAINT IS THE POINT. Two devices claiming one alias is a real
 -- and recurring situation - a hostname reused after a hardware swap, or two
 -- branches that both called their switch `sw1`. The database refuses it, and
--- the ingestion path refuses to resolve it, because guessing produces telemetry
+-- the ingestion path refuses to resolve it, because guessing produces observations
 -- silently attributed to the wrong box: wrong, and looks fine.
 
 CREATE TABLE IF NOT EXISTS device_aliases (

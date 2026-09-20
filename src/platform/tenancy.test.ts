@@ -129,28 +129,28 @@ test('a site-scoped operator cannot see another site', () => {
   assert.throws(() => assertSiteInScope(dallas, 'phx-01'), OutOfScopeError);
 });
 
-test('withinScope narrows a driver list to the caller\'s district', () => {
+test('withinScope narrows a device list to the caller\'s site', () => {
   const dallas: Principal = { ...acme, scope: { kind: 'site', siteId: 'dal-01' } };
-  const fleet = [device('dev-1', 'dal-01'), device('dev-2', 'phx-01'), device('dev-3', 'dal-01')];
+  const estate = [device('dev-1', 'dal-01'), device('dev-2', 'phx-01'), device('dev-3', 'dal-01')];
 
-  const visible = withinScope(dallas, fleet).map((d) => d.deviceId);
+  const visible = withinScope(dallas, estate).map((d) => d.deviceId);
   assert.deepEqual(visible, ['dev-1', 'dev-3']);
 });
 
 test('a device-scoped principal sees only that device', () => {
   const self: Principal = { ...acme, scope: { kind: 'device', deviceId: 'dev-2' } };
-  const fleet = [device('dev-1', 'dal-01'), device('dev-2', 'phx-01')];
+  const estate = [device('dev-1', 'dal-01'), device('dev-2', 'phx-01')];
 
-  assert.deepEqual(withinScope(self, fleet).map((d) => d.deviceId), ['dev-2']);
-  // A driver has no district board at all - not even their own district's.
+  assert.deepEqual(withinScope(self, estate).map((d) => d.deviceId), ['dev-2']);
+  // A device-scoped principal has no site board at all - not even its own site's.
   assert.ok(!scopeAllowsSite(self, 'phx-01'));
 });
 
 test('an admin is tenant-scoped, which is the only way to see everything', () => {
   const admin: Principal = { ...acme, scope: { kind: 'tenant' } };
-  const fleet = [device('dev-1', 'dal-01'), device('dev-2', 'phx-01')];
+  const estate = [device('dev-1', 'dal-01'), device('dev-2', 'phx-01')];
 
-  assert.equal(withinScope(admin, fleet).length, 2);
+  assert.equal(withinScope(admin, estate).length, 2);
   assert.ok(scopeAllowsSite(admin, 'anything'));
 });
 
@@ -193,8 +193,8 @@ test('a device-bound token carries no site claim at all', async () => {
   });
 
   const claims = event.response.claimsOverrideDetails?.claimsToAddOrOverride ?? {};
-  // A driver sees their own assignments, not a board. Handing them a
-  // district-scoped token would show them every other truck in Dallas.
+  // A field engineer sees the one box they were sent to, not a board. Handing
+  // them a site-scoped token would show them every other device in Dallas.
   assert.equal(claims['custom:site'], undefined);
   assert.equal(claims['custom:tenantId'], 'acme-networks');
 });

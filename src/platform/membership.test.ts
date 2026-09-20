@@ -97,9 +97,17 @@ test('the seed rows Terraform writes match the built-in table', () => {
     new URL('../../infra/terraform/auth/membership.tf', import.meta.url), 'utf8',
   );
 
-  // The for_each block, not the whole file - PK prefixes elsewhere mention
+  // The locals block alone, not the whole file - PK prefixes elsewhere mention
   // domains too, and matching those would make this pass on the wrong text.
-  const forEach = tf.slice(tf.indexOf('for_each = {'), tf.indexOf('table_name'));
+  //
+  // These rows are seeded only when var.seed_demo_customers is on, which a
+  // real deployment leaves off. They are still worth pinning: the flag decides
+  // whether they are WRITTEN, not whether they are right, and a demo customer
+  // that disagrees with the offline board is the same drift in a quieter place.
+  const forEach = tf.slice(
+    tf.indexOf('demo_customers = {'),
+    tf.indexOf('resource "aws_dynamodb_table_item"'),
+  );
 
   // Line-oriented rather than one big regex: HCL formatting is not stable
   // across `terraform fmt` versions, and a regex that stops matching after a

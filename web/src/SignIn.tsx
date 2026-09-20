@@ -12,7 +12,7 @@
  * would drive: `resolveIdpForEmail` in src/auth/providers.ts.
  *
  * Signing in is also what makes the board's scope real rather than asserted.
- * The district on the token comes from the PreTokenGeneration trigger, and a
+ * The site on the token comes from the PreTokenGeneration trigger, and a
  * Dallas operator genuinely cannot reach Phoenix because their token does not
  * say they may.
  */
@@ -142,7 +142,7 @@ export function SignIn({ onSignedIn, initialError = null }: Props) {
  */
 function SignUp({ onBack }: { onBack(): void }) {
   const [email, setEmail] = useState('');
-  const [customerName, setCarrierName] = useState('');
+  const [customerName, setCustomerName] = useState('');
   const [estateSize, setEstateSize] = useState('50-500');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -176,7 +176,7 @@ function SignUp({ onBack }: { onBack(): void }) {
     <form className="gate-form" onSubmit={submit}>
       <h2 className="panel-h">Register a customer</h2>
       <p className="gate-note">
-        Onboarding creates the tenant, seeds its districts, and points your
+        Onboarding creates the tenant, seeds its sites, and points your
         domain at your identity provider. An operations lead confirms it.
       </p>
 
@@ -185,8 +185,8 @@ function SignUp({ onBack }: { onBack(): void }) {
         <input
           className="field-input"
           value={customerName}
-          onChange={(e) => setCarrierName(e.target.value)}
-          placeholder="Acme Freight"
+          onChange={(e) => setCustomerName(e.target.value)}
+          placeholder="Northwind Utilities"
           required
         />
       </label>

@@ -57,7 +57,7 @@ export function useDynamoMembership(tableName: string): void {
       // errors - but that guidance is about a user whose membership is known.
       // Here the membership is exactly what could not be read, so there is no
       // tenant to be a viewer OF, and inventing one would hand a stranger a
-      // token scoped to somebody's fleet. Returning undefined routes into the
+      // token scoped to somebody's estate. Returning undefined routes into the
       // trigger's existing unregistered path: a signed-in user who sees
       // nothing, which is recoverable, unlike the alternative.
       log.error('membership lookup failed', {
