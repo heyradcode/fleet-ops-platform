@@ -24,3 +24,8 @@ infra/terraform/modules/lambda/.build/
 # is exactly where real pool ids and endpoints end up.
 .env.local
 .env.*.local
+
+# Downloaded IAM access keys. Never commit these.
+creds.json
+*creds*.json
+accessKeys.csv

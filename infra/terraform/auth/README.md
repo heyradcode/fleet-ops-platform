@@ -52,7 +52,7 @@ cd infra/terraform/auth   # deploy-policy.json is referenced relatively
 aws iam attach-user-policy --user-name YOUR_USER --policy-arn arn:aws:iam::aws:policy/AmazonCognitoPowerUser
 
 # Budgets is account-scoped and no managed policy grants creating one.
-aws iam put-user-policy --user-name YOUR_USER --policy-name MeridianBudgets --policy-document file://deploy-policy.json
+aws iam put-user-policy --user-name YOUR_USER --policy-name NetpulseBudgets --policy-document file://deploy-policy.json
 ```
 
 `deploy-policy.json` sits beside this file; change the account id in it if you
