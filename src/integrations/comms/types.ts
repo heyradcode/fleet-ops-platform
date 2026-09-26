@@ -18,6 +18,16 @@
  */
 import type { TenantId } from '../../platform/types.ts';
 
+/**
+ * An error as one short line for a health record. Vendor error bodies can be
+ * long and are shown to operators; nothing past the first 160 characters has
+ * ever been the useful part.
+ */
+export function errorLine(err: unknown): string {
+  const text = err instanceof Error ? err.message : String(err);
+  return text.replace(/\s+/g, ' ').slice(0, 160);
+}
+
 /** The platforms people have accounts on - the workforce's columns. */
 export type CommsSource = 'teams' | 'genesys' | 'webex';
 

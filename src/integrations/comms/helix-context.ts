@@ -28,7 +28,7 @@ import { redactPii } from '../../ai/guardrails.ts';
 import type { CommsClient } from './client.ts';
 import type { CommsIncident } from './incidents.ts';
 import { SIGNAL_WINDOW_MS } from './signals.ts';
-import type { CommsTenantConfig } from './types.ts';
+import { errorLine, type CommsTenantConfig } from './types.ts';
 import { pullOpenTickets, pullRecentChanges, type HelixChange, type HelixTicket } from './helix.ts';
 
 /** How long before the signal window a finished change still counts. */
@@ -111,22 +111,28 @@ export function contextFor(
   return { status: 'ok', changes: relevant, tickets: open };
 }
 
-/** Fetch once, attach to every incident. A Helix failure marks context unavailable; it never throws. */
+/**
+ * Fetch once, attach to every incident. A Helix failure marks context
+ * unavailable and is RETURNED - for the health view - never thrown.
+ */
 export async function attachHelixContext(
   client: CommsClient, config: CommsTenantConfig, incidents: CommsIncident[], at: number,
-): Promise<CommsIncident[]> {
-  if (!config.helix || incidents.length === 0) return incidents;
+): Promise<{ incidents: CommsIncident[]; error?: string }> {
+  if (!config.helix || incidents.length === 0) return { incidents };
   let changes: HelixChange[];
   let tickets: HelixTicket[];
   try {
     changes = await pullRecentChanges(client, at - FETCH_SINCE_MS);
     tickets = await pullOpenTickets(client, at - FETCH_SINCE_MS);
   } catch (err) {
-    const note = 'Helix unavailable (' + (err instanceof Error ? err.message.slice(0, 80) : String(err)) +
-      ') - related changes and tickets are UNKNOWN, not absent.';
-    return incidents.map((i) => ({ ...i, context: { status: 'unavailable', note, changes: [], tickets: [] } }));
+    const error = errorLine(err);
+    const note = 'Helix unavailable (' + error.slice(0, 80) + ') - related changes and tickets are UNKNOWN, not absent.';
+    return {
+      incidents: incidents.map((i) => ({ ...i, context: { status: 'unavailable', note, changes: [], tickets: [] } })),
+      error,
+    };
   }
-  return incidents.map((i) => ({ ...i, context: contextFor(i, changes, tickets, config) }));
+  return { incidents: incidents.map((i) => ({ ...i, context: contextFor(i, changes, tickets, config) })) };
 }
 
 /** One line per candidate change, for the tool, the board and the demo. */

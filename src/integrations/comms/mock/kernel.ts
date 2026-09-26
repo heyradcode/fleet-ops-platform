@@ -275,6 +275,9 @@ export function injectFault(
   faults.set(service, { status, remaining: times, retryAfterSeconds });
 }
 
+/** Clear injected faults only - tokens already issued stay valid. For the demo's failure drill. */
+export function clearFaults(): void { faults.clear(); }
+
 function takeFault(service: ServiceId): Fault | undefined {
   const f = faults.get(service);
   if (!f) return undefined;

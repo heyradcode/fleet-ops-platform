@@ -40,6 +40,14 @@ export const SELF_EVIDENT: ReadonlySet<CommsSignalKind> = new Set<CommsSignalKin
   'trunk-call-failure', 'queue-backlog', 'queue-abandonment',
 ]);
 
+/** Which sources can witness each kind - so a missing witness can be named. */
+export const WITNESSES: Record<CommsSignalKind, SignalSource[]> = {
+  'trunk-call-failure': ['teams', 'bandwidth'],
+  'facility-media-degradation': ['teams', 'webex'],
+  'queue-backlog': ['genesys'],
+  'queue-abandonment': ['genesys'],
+};
+
 export type CommsAlarm = {
   tenantId: TenantId;
   alarmId: string;
@@ -84,8 +92,18 @@ const RANK: Record<Severity, number> = { ok: 0, info: 1, warning: 2, critical: 3
 const worst = (s: Severity[]) => s.reduce((a, b) => (RANK[b] > RANK[a] ? b : a), 'ok' as Severity);
 const subjectKey = (s: CommsSubject) => s.kind + ':' + s.id;
 
-/** Signals -> alarms. One alarm per (subject, kind), across every source that saw it. */
-export function evaluateSignals(signals: CommsSignal[]): CommsAlarm[] {
+/**
+ * Signals -> alarms. One alarm per (subject, kind), across every source that saw it.
+ *
+ * `unavailable` names the sources that FAILED this poll. An inference that
+ * lacks its second witness is held back either way - but "Webex was down, so
+ * nobody could check" and "Webex has no data on this" are different facts,
+ * and the reason says which.
+ */
+export function evaluateSignals(
+  signals: CommsSignal[], opts: { unavailable?: SignalSource[] } = {},
+): CommsAlarm[] {
+  const unavailable = opts.unavailable ?? [];
   const groups = new Map<string, CommsSignal[]>();
   for (const s of signals) {
     const k = subjectKey(s.subject) + '|' + s.kind;
@@ -113,7 +131,11 @@ export function evaluateSignals(signals: CommsSignal[]): CommsAlarm[] {
       heldBack = 'disputed: ' + dissent.join(', ') + ' measured the same subject and saw nothing wrong';
     } else if (!SELF_EVIDENT.has(first.kind) && sources.length < 2) {
       corroborated = false;
-      heldBack = 'single source (' + sources[0] + '); needs a second, independent service to agree';
+      const down = WITNESSES[first.kind].filter((s) => !sources.includes(s) && unavailable.includes(s));
+      heldBack = down.length > 0
+        ? 'single source (' + sources[0] + '); ' + down.join(', ') + ' was UNAVAILABLE this poll, ' +
+          'so corroboration could not be attempted'
+        : 'single source (' + sources[0] + '); needs a second, independent service to agree';
     }
 
     const window = firing.map((s) => s.window.to).sort()[firing.length - 1];

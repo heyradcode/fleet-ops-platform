@@ -28,6 +28,7 @@ import type { Tool } from './tools.ts';
 import { commsAlarms, commsIncidents, commsVisibleTo, commsWorkforce } from '../integrations/comms/store.ts';
 import { COMMS_SOURCES } from '../integrations/comms/types.ts';
 import { describeChange } from '../integrations/comms/helix-context.ts';
+import { describeSource, loadHealth } from '../integrations/comms/health.ts';
 
 export const COMMS_TOOLS: Tool[] = [
   {
@@ -134,6 +135,36 @@ export const COMMS_TOOLS: Tool[] = [
       }
       const unplaced = Object.entries(w.unplacedByReason).map(([k, v]) => k + ' ' + v).join(', ');
       if (unplaced) lines.push('  not placed at a facility: ' + unplaced);
+      return lines.join('\n');
+    },
+  },
+  {
+    spec: {
+      name: 'integrationHealth',
+      description:
+        'Report whether each comms data feed (Entra directory, Teams, Genesys, Webex, ' +
+        'Bandwidth, Helix) answered on the latest poll, since when a failing one has ' +
+        'been failing, and any data-quality gaps with their fixes. Use this whenever ' +
+        'data looks missing, stale or incomplete, or before concluding "nothing is ' +
+        'wrong" - a quiet board can mean a feed is down.',
+      input_schema: { type: 'object', properties: {}, required: [] },
+    },
+    execute(_input, principal) {
+      const h = loadHealth(principal);
+      if (!h) return 'No comms poll has recorded integration health yet.';
+      const lines = ['Integration health as of ' + h.asOf + ':'];
+      for (const s of h.sources) lines.push('  ' + describeSource(s));
+      const down = h.sources.filter((s) => s.status === 'down');
+      if (down.length > 0) {
+        // The inference a model most needs spelled out: absence of an
+        // incident from a down source is not evidence of health.
+        lines.push('  NOTE: ' + down.map((s) => s.source).join(', ') + ' did not answer; an absence of ' +
+          'incidents from ' + (down.length === 1 ? 'it' : 'them') + ' means UNKNOWN, not healthy.');
+      }
+      if (h.dataQuality.length > 0) {
+        lines.push('Data quality:');
+        for (const q of h.dataQuality) lines.push('  ' + q.detail + ' -> ' + q.action);
+      }
       return lines.join('\n');
     },
   },

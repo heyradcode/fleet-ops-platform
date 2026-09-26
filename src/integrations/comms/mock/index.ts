@@ -27,7 +27,7 @@ import { bandwidthApi, bandwidthInsights } from './bandwidth.ts';
 import { helixApi } from './helix.ts';
 
 export {
-  DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_WEBEX_TOKEN, injectFault, type ServiceId,
+  clearFaults, DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_WEBEX_TOKEN, injectFault, type ServiceId,
 } from './kernel.ts';
 export { HELIX_PLANTED } from './helix.ts';
 export { BANDWIDTH_ACCOUNT, BANDWIDTH_PEERS, BANDWIDTH_PLANTED } from './bandwidth.ts';

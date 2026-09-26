@@ -49,7 +49,7 @@ async function run(sources: CommsSource[] = ['teams', 'genesys', 'webex']) {
   await syncEntraDirectory(principal, client);
   const workforce = await buildWorkforce(client, { ...config, sources: ['teams', 'genesys', 'webex'] },
     loadEntraDirectory(principal));
-  const signals = await collectSignals(client, config, workforce, now());
+  const { signals } = await collectSignals(client, config, workforce, now());
   const alarms = evaluateSignals(signals);
   return { signals, alarms, incidents: correlateAlarms(alarms) };
 }

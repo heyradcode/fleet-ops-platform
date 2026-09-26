@@ -70,7 +70,8 @@ import { createCommsClient } from './integrations/comms/client.ts';
 import { runCommsPoll } from './integrations/comms/poll.ts';
 import { syncEntraDirectory } from './integrations/comms/entra-directory.ts';
 import { describeChange } from './integrations/comms/helix-context.ts';
-import { mutateEntraUser } from './integrations/comms/mock/index.ts';
+import { mutateEntraUser, injectFault, clearFaults } from './integrations/comms/mock/index.ts';
+import { describeSource } from './integrations/comms/health.ts';
 import { commsToolsFor } from './ai/comms-tools.ts';
 import { commsConfigFor, HHS_DEMO_TENANT } from './integrations/comms/config.ts';
 import { COMMS_SOURCES } from './integrations/comms/types.ts';
@@ -914,6 +915,27 @@ async function sectionComms() {
   write('   ' + answer.answer.split('\n').slice(0, 2).join(' ').replace(/\s+/g, ' ').slice(0, 220) + '...\n');
   write('   ' + dim('stored: counts per agency and facility, never the roster - ' +
     'nothing person-level is persisted') + '\n');
+
+  note('');
+  note('Integration health - is every feed answering, and is what it says usable?');
+  for (const s of poll.health.sources) write('   ' + dim(describeSource(s)) + '\n');
+  for (const q of poll.health.dataQuality.slice(0, 3)) {
+    write('   ' + dim('data quality: ' + q.detail + ' -> ' + q.action) + '\n');
+  }
+
+  note('');
+  note('Failure drill: Genesys and Webex stop answering. The poll carries on without them:');
+  injectFault('genesys', 503, 1000);
+  injectFault('webex', 503, 1000);
+  const drill = await runCommsPoll(hhsAdmin, client, config, now());
+  clearFaults();
+  for (const s of drill.health.sources.filter((x) => x.status !== 'healthy')) {
+    write('   ' + '\x1b[31m' + s.source.padEnd(10) + '\x1b[0m' + dim(describeSource(s).slice(0, 150)) + '\n');
+  }
+  write('   ' + drill.incidents.length + ' incidents still raised - ' +
+    drill.incidents.map((i) => i.subject.kind).join(', ') + '\n');
+  const heldHouston = drill.alarms.find((a) => a.subject.kind === 'facility' && !a.corroborated);
+  if (heldHouston) write('   ' + dim('Houston held back: ' + heldHouston.heldBack) + '\n');
 }
 
 // ===========================================================================

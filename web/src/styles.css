@@ -1382,6 +1382,72 @@ button.topo-node:hover { border-color: var(--amber); }
 .comms-ask .ask:disabled { opacity: 0.5; cursor: default; }
 .comms-question { resize: vertical; font-size: 12px; line-height: 1.45; }
 
+/* Integration health: a row per feed. Colour carries status only - healthy is
+   the calm green, degraded amber, down red. Caveats never get a colour. */
+.comms-health {
+  padding: 14px 18px 0;
+  max-width: 676px;
+}
+
+.comms-health-h {
+  margin: 0 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.comms-sources { list-style: none; margin: 0; padding: 0; }
+
+.comms-source {
+  display: grid;
+  grid-template-columns: 10px 120px 1fr;
+  column-gap: 8px;
+  align-items: baseline;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.comms-source-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); align-self: center; }
+.comms-source.is-healthy .comms-source-dot { background: var(--healthy); }
+.comms-source.is-degraded .comms-source-dot { background: var(--amber); }
+.comms-source.is-down .comms-source-dot { background: var(--critical); }
+
+.comms-source-name { color: var(--text); }
+.comms-source-status { font-family: var(--data); font-size: 11px; color: var(--dim); }
+.comms-source.is-down .comms-source-status { color: var(--critical); }
+.comms-source.is-degraded .comms-source-status { color: var(--amber); }
+.comms-source-since { color: var(--dim); }
+
+.comms-source-error,
+.comms-source-gap,
+.comms-source-caveat {
+  grid-column: 3;
+  font-size: 11px;
+}
+.comms-source-error { font-family: var(--data); color: var(--text); }
+.comms-source-gap { color: var(--amber); }
+.comms-source-caveat { color: var(--faint); font-style: italic; }
+
+.comms-quality {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  font-size: 11px;
+}
+
+.comms-quality li {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 10px;
+  padding: 3px 0;
+}
+
+.comms-quality-what { color: var(--text); }
+.comms-quality-fix { color: var(--dim); }
+
 @media (max-width: 1180px) {
   .comms-body { grid-template-columns: 360px 1fr; }
   .comms-body .panel { display: none; }

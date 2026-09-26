@@ -95,7 +95,7 @@ test('agent: answers a call-quality question from the comms tools, grounded in t
     tools: commsToolsFor(admin),
   });
   const called = result.trace.filter((t) => t.kind === 'tool').map((t) => t.detail.split('(')[0]);
-  assert.deepEqual(called, ['listCommsIncidents', 'queryWorkforce']);
+  assert.deepEqual(called, ['listCommsIncidents', 'queryWorkforce', 'integrationHealth']);
   assert.equal(result.stoppedBecause, 'end_turn');
   assert.match(result.answer, /LC=1120/);
   assert.match(result.answer, /teams \+ webex/);

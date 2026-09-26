@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 200 tests, no network. Picks up web/ tests too.
+pnpm test                       # 207 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180
 pnpm web:build                  # typechecks web/ AND builds it
@@ -173,6 +173,15 @@ one, change the test deliberately rather than making it pass.
   facility, CI -> SBC); queues get no context rather than a guess from ticket
   text. A Helix outage marks context UNKNOWN - never "no changes" - and never
   fails the poll. Writing tickets is a separate, unmade decision.
+- **One comms source failing costs that source, never the poll.** Each pull
+  and each signal read is isolated; the failure lands in integration health
+  (`comms/health.ts`) and in `evaluateSignals({ unavailable })`, so an
+  inference missing its second witness says "Webex was UNAVAILABLE" rather
+  than "single source" - could-not-ask is not saw-nothing. A down source's
+  columns are ABSENT from the split, not zero. Health status is coarse
+  (healthy / degraded / down / not-configured, plus `stale` after 15 min);
+  permanent limits are CAVEATS, never a status - a tile that is always amber
+  teaches people to ignore amber. Data-quality issues always name the fix.
 - **The workforce roster is never persisted.** The join links named people
   to agencies and buildings; the store keeps counts only, and the roster is
   rebuilt each poll. Comms reads need TENANT scope until an agency/facility

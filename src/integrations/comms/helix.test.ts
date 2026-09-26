@@ -147,9 +147,10 @@ test('a queue gets no context, and says why rather than guessing from ticket tex
 test('Helix down: context is UNKNOWN, the incidents survive, nothing throws', async () => {
   injectFault('helix', 503, 10);
   const out = await attachHelixContext(client(), config(), [incident('facility', '1120')], now());
-  assert.equal(out.length, 1);
-  assert.equal(out[0].context?.status, 'unavailable');
-  assert.match(out[0].context!.note!, /UNKNOWN, not absent/);
+  assert.equal(out.incidents.length, 1);
+  assert.equal(out.incidents[0].context?.status, 'unavailable');
+  assert.match(out.incidents[0].context!.note!, /UNKNOWN, not absent/);
+  assert.match(out.error!, /503/, 'and the error is returned for the health view');
 });
 
 test('end to end: the poll stores incidents with their Helix context', async () => {

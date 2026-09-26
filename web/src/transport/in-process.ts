@@ -36,6 +36,7 @@ import { runCommsPoll } from '../../../src/integrations/comms/poll.ts';
 import {
   commsAlarms, commsIncidents, commsVisibleTo, commsWorkforce,
 } from '../../../src/integrations/comms/store.ts';
+import { loadHealth } from '../../../src/integrations/comms/health.ts';
 import { knowledgeBase } from '../../../src/ai/knowledge-base.ts';
 import { putObservations, putDeviceStates } from '../../../src/platform/repository.ts';
 import { loadRunbooksFromBundle } from './runbooks.browser.ts';
@@ -271,6 +272,7 @@ export const inProcessTransport: Transport = {
       workforce: commsWorkforce(principal)!,
       incidents: commsIncidents(principal),
       heldBack: commsAlarms(principal).filter((a) => !a.corroborated),
+      health: loadHealth(principal),
     } satisfies CommsSnapshot;
   },
 

@@ -32,7 +32,7 @@ import { pullWebex, normaliseWebex } from './webex.ts';
 import type {
   AgencyAssignment, CommsAccount, CommsSource, CommsTenantConfig, FacilitySource, UnplacedReason,
 } from './types.ts';
-import { COMMS_SOURCES } from './types.ts';
+import { COMMS_SOURCES, errorLine } from './types.ts';
 
 export type WorkforceMember = {
   emailKey: string;
@@ -72,6 +72,12 @@ export type WorkforceReport = {
   unmappedWebexLocations: string[];
   /** Whether facility placement had a complete Entra directory behind it. */
   directory: { status: DirectoryStatus; users: number };
+  /**
+   * Sources whose pull FAILED this poll, with the reason. Their columns are
+   * absent from the split rather than zero - "we could not ask" is not "nobody
+   * is there", and the health view is what says which.
+   */
+  errors: Partial<Record<CommsSource, string>>;
 };
 
 /** Pull every configured source, normalise, join. The one entry point. */
@@ -80,12 +86,22 @@ export async function buildWorkforce(
 ): Promise<WorkforceReport> {
   const accounts: CommsAccount[] = [];
   const fetched: WorkforceReport['fetched'] = {};
+  const errors: WorkforceReport['errors'] = {};
   let unmappedWebexLocations: string[] = [];
 
+  // ONE SOURCE'S FAILURE IS THAT SOURCE'S, not the poll's. Before this, a
+  // Genesys 503 threw out of here and took Teams, Webex and every incident
+  // with it - the network side's "partial data beats no data" applies here
+  // for the same reason.
+  //
   // Sequential, not Promise.all. The three are independent, but a poll that
   // interleaves three services' requests is miserable to read in a log, and
   // this runs on a schedule where a second saved is worth nothing.
-  if (config.sources.includes('teams')) {
+  const attempt = async (source: CommsSource, run: () => Promise<void>) => {
+    if (!config.sources.includes(source)) return;
+    try { await run(); } catch (err) { errors[source] = errorLine(err); }
+  };
+  await attempt('teams', async () => {
     const raw = await pullTeams(client);
     fetched.teams = {
       rows: raw.configurations.rows.length,
@@ -93,13 +109,13 @@ export async function buildWorkforce(
       truncated: raw.configurations.truncated,
     };
     accounts.push(...normaliseTeams(raw, config, directory));
-  }
-  if (config.sources.includes('genesys')) {
+  });
+  await attempt('genesys', async () => {
     const raw = await pullGenesys(client);
     fetched.genesys = { rows: raw.users.rows.length, pages: raw.users.pages, truncated: raw.users.truncated };
     accounts.push(...normaliseGenesys(raw, config));
-  }
-  if (config.sources.includes('webex')) {
+  });
+  await attempt('webex', async () => {
     const raw = await pullWebex(client);
     fetched.webex = {
       rows: raw.people.rows.length,
@@ -109,10 +125,10 @@ export async function buildWorkforce(
     const w = normaliseWebex(raw, config);
     accounts.push(...w.accounts);
     unmappedWebexLocations = w.unmappedLocations;
-  }
+  });
 
   return {
-    tenantId: config.tenantId, fetched, unmappedWebexLocations,
+    tenantId: config.tenantId, fetched, unmappedWebexLocations, errors,
     directory: { status: directory.status, users: directory.users },
     ...joinWorkforce(accounts, directory),
   };
@@ -122,7 +138,7 @@ export async function buildWorkforce(
 export function joinWorkforce(
   accounts: CommsAccount[],
   directory: EntraDirectoryView = EMPTY_DIRECTORY,
-): Omit<WorkforceReport, 'tenantId' | 'fetched' | 'unmappedWebexLocations' | 'directory'> {
+): Omit<WorkforceReport, 'tenantId' | 'fetched' | 'unmappedWebexLocations' | 'directory' | 'errors'> {
   const byKey = new Map<string, WorkforceMember>();
   const duplicates = new Map<string, { email: string; source: CommsSource; count: number }>();
 

@@ -27,6 +27,7 @@ import type {
 import type { AgentResult } from '../../../src/ai/agent-core.ts';
 import type { CommsAlarm, CommsIncident } from '../../../src/integrations/comms/incidents.ts';
 import type { WorkforceSummary } from '../../../src/integrations/comms/store.ts';
+import type { IntegrationHealth } from '../../../src/integrations/comms/health.ts';
 
 export type BoardSnapshot = {
   devices: DeviceState[];
@@ -68,6 +69,8 @@ export type CommsSnapshot = {
   incidents: CommsIncident[];
   /** Raised but not corroborated, with the reason. Shown dimmed, as on the network side. */
   heldBack: CommsAlarm[];
+  /** Is every feed answering, and is what it says usable. */
+  health?: IntegrationHealth;
 };
 
 export type Transport = {
@@ -136,7 +139,7 @@ export type Transport = {
   loadComms(): Promise<CommsSnapshot | null>;
 };
 
-export type { AgentResult, CommsAlarm, CommsIncident, WorkforceSummary };
+export type { AgentResult, CommsAlarm, CommsIncident, IntegrationHealth, WorkforceSummary };
 export type { AgentTrace } from '../../../src/ai/agent-core.ts';
 
 export type { Alarm, DeviceState, DeviceStatus, Incident, Principal, Site };

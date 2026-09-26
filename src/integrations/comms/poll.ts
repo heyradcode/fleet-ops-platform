@@ -19,6 +19,8 @@ import { collectSignals, type CommsSignal } from './signals.ts';
 import { correlateAlarms, evaluateSignals, type CommsAlarm, type CommsIncident } from './incidents.ts';
 import { putCommsRun, summariseWorkforce, type WorkforceSummary } from './store.ts';
 import { attachHelixContext } from './helix-context.ts';
+import { dataQuality, observeRun, recordHealth, type IntegrationHealth } from './health.ts';
+import { errorLine, type SignalSource } from './types.ts';
 
 export type CommsPollResult = {
   /** The full roster, for the caller's use in memory. Never persisted; see store.ts. */
@@ -29,6 +31,8 @@ export type CommsPollResult = {
   signals: CommsSignal[];
   alarms: CommsAlarm[];
   incidents: CommsIncident[];
+  /** Per-source health and data quality, as recorded by this poll. */
+  health: IntegrationHealth;
 };
 
 export async function runCommsPoll(
@@ -39,19 +43,34 @@ export async function runCommsPoll(
   assertSameTenant(principal, client.tenantId);
   assertSameTenant(principal, config.tenantId);
 
+  // EVERY STEP BELOW SURVIVES ANY ONE SOURCE FAILING. A failure is recorded
+  // against that source - in the health view, and in the reason an alarm was
+  // held back - and the poll carries on with the rest.
+
   // The directory first: it is what places people, and its state is what
-  // the workforce reports as complete or not.
-  const directorySync = config.sources.includes('teams')
-    ? await syncEntraDirectory(principal, client)
-    : undefined;
+  // the workforce reports as complete or not. If the sync fails, the last
+  // committed copy is still there to read.
+  let directorySync: EntraSyncResult | undefined;
+  let directoryError: string | undefined;
+  if (config.sources.includes('teams')) {
+    try { directorySync = await syncEntraDirectory(principal, client); } catch (err) { directoryError = errorLine(err); }
+  }
   const report = await buildWorkforce(client, config, loadEntraDirectory(principal));
-  const signals = await collectSignals(client, config, report, at);
-  const alarms = evaluateSignals(signals);
+  const collected = await collectSignals(client, config, report, at);
+  const alarms = evaluateSignals(collected.signals, {
+    unavailable: Object.keys(collected.errors) as SignalSource[],
+  });
   // Context AFTER the rules have decided: Helix can explain an incident, it
   // cannot create or suppress one.
-  const incidents = await attachHelixContext(client, config, correlateAlarms(alarms), at);
+  const helix = await attachHelixContext(client, config, correlateAlarms(alarms), at);
+  const incidents = helix.incidents;
   const workforce = summariseWorkforce(report, nowIso());
 
+  const health = recordHealth(principal, at, observeRun({
+    config, directorySync, directoryError, report,
+    signalErrors: collected.errors, helixError: helix.error,
+  }), dataQuality(report, collected.unmappedBandwidthPeers));
+
   putCommsRun(principal, { workforce, alarms, incidents });
-  return { report, directorySync, workforce, signals, alarms, incidents };
+  return { report, directorySync, workforce, signals: collected.signals, alarms, incidents, health };
 }

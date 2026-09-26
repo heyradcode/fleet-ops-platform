@@ -31,7 +31,7 @@ import { sha256 } from '../../platform/crypto.ts';
 import type { Severity, TenantId } from '../../platform/types.ts';
 import type { CommsClient } from './client.ts';
 import { drainGenesys, drainGraph, drainWebex } from './client.ts';
-import type { CommsTenantConfig, SignalSource } from './types.ts';
+import { errorLine, type CommsTenantConfig, type SignalSource } from './types.ts';
 import { pullBandwidthTrunks } from './bandwidth.ts';
 import type { WorkforceMember, WorkforceReport } from './workforce.ts';
 
@@ -352,11 +352,13 @@ async function genesysQueueSignals(client: CommsClient, w: Window): Promise<Comm
  * SBC that has died fails inbound (the carrier cannot deliver) and falls
  * silent outbound (it is not sending), and a flat total would hide both.
  */
-async function bandwidthTrunkSignals(client: CommsClient, config: CommsTenantConfig, w: Window): Promise<CommsSignal[]> {
+async function bandwidthTrunkSignals(
+  client: CommsClient, config: CommsTenantConfig, w: Window,
+): Promise<{ signals: CommsSignal[]; unmappedPeers: string[] }> {
   const { from, to } = isoWindow(w);
-  const { trunks } = await pullBandwidthTrunks(client, config, from, to);
+  const { trunks, unmappedPeers } = await pullBandwidthTrunks(client, config, from, to);
   const t = COMMS_THRESHOLDS.trunkFailure;
-  return trunks
+  const signals = trunks
     .filter((k) => k.attempts >= t.minSamples)
     .map((k) => {
       const rate = k.failed / k.attempts;
@@ -373,23 +375,57 @@ async function bandwidthTrunkSignals(client: CommsClient, config: CommsTenantCon
           ', outbound ' + outbound.failed + '/' + outbound.attempts,
       });
     });
+  return { signals, unmappedPeers };
 }
 
 // ---------------------------------------------------------------------------
 
-/** Every signal for the window ending at `at`, from every source the tenant runs. */
+export type CollectedSignals = {
+  signals: CommsSignal[];
+  /**
+   * Sources that FAILED this poll. Passed to evaluateSignals, so an alarm that
+   * lacks its second witness because that witness was DOWN says so - which is
+   * a different fact from the witness having looked and seen nothing.
+   */
+  errors: Partial<Record<SignalSource, string>>;
+  /** Bandwidth peers the tenant table does not map. Data quality, not a failure. */
+  unmappedBandwidthPeers: string[];
+};
+
+/** Every signal for the window ending at `at`, from every source the tenant runs. One source failing is that source's problem. */
 export async function collectSignals(
   client: CommsClient, config: CommsTenantConfig, workforce: WorkforceReport, at: number,
-): Promise<CommsSignal[]> {
+): Promise<CollectedSignals> {
   const w: Window = { from: at - SIGNAL_WINDOW_MS, to: at };
   const members = new Map(workforce.members.map((m) => [m.emailKey, m]));
-  const out: CommsSignal[] = [];
+  const signals: CommsSignal[] = [];
+  const errors: CollectedSignals['errors'] = {};
+  let unmappedBandwidthPeers: string[] = [];
+
+  const attempt = async (source: SignalSource, run: () => Promise<void>) => {
+    try {
+      await run();
+    } catch (err) {
+      // Two Teams reads (trunks, media): keep both reasons if both fail.
+      errors[source] = errors[source] ? errors[source] + '; ' + errorLine(err) : errorLine(err);
+    }
+  };
   if (config.sources.includes('teams')) {
-    out.push(...await teamsTrunkSignals(client, w));
-    out.push(...await teamsMediaSignals(client, w, members));
+    await attempt('teams', async () => { signals.push(...await teamsTrunkSignals(client, w)); });
+    await attempt('teams', async () => { signals.push(...await teamsMediaSignals(client, w, members)); });
   }
-  if (config.sources.includes('webex')) out.push(...await webexMediaSignals(client, w, members));
-  if (config.sources.includes('genesys')) out.push(...await genesysQueueSignals(client, w));
-  if (config.bandwidth) out.push(...await bandwidthTrunkSignals(client, config, w));
-  return out;
+  if (config.sources.includes('webex')) {
+    await attempt('webex', async () => { signals.push(...await webexMediaSignals(client, w, members)); });
+  }
+  if (config.sources.includes('genesys')) {
+    await attempt('genesys', async () => { signals.push(...await genesysQueueSignals(client, w)); });
+  }
+  if (config.bandwidth) {
+    await attempt('bandwidth', async () => {
+      const b = await bandwidthTrunkSignals(client, config, w);
+      signals.push(...b.signals);
+      unmappedBandwidthPeers = b.unmappedPeers;
+    });
+  }
+  return { signals, errors, unmappedBandwidthPeers };
 }

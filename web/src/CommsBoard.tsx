@@ -20,7 +20,7 @@
 import { useState } from 'react';
 import { inProcessTransport } from './transport/in-process.ts';
 import { TraceStep } from './DevicePanel.tsx';
-import type { AgentResult, CommsAlarm, CommsIncident, WorkforceSummary } from './transport/index.ts';
+import type { AgentResult, CommsAlarm, CommsIncident, IntegrationHealth, WorkforceSummary } from './transport/index.ts';
 import type { CommsSnapshot } from './transport/index.ts';
 
 const PLATFORMS = ['teams', 'genesys', 'webex'] as const;
@@ -59,6 +59,7 @@ export function CommsBoard({ snapshot }: { snapshot: CommsSnapshot }) {
           <span>Voice users</span>
           <span className="mono">as of {snapshot.workforce.asOf.slice(11, 19)}Z</span>
         </div>
+        {snapshot.health && <Integrations health={snapshot.health} />}
         <Workforce workforce={snapshot.workforce} affected={affected} />
       </main>
 
@@ -121,6 +122,55 @@ function HeldRow({ alarm }: { alarm: CommsAlarm }) {
         <span className="verdict is-held">HELD</span>
       </div>
     </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+
+const SOURCE_LABEL: Record<string, string> = {
+  'entra-directory': 'Entra directory', teams: 'Teams', genesys: 'Genesys', webex: 'Webex',
+  bandwidth: 'Bandwidth', helix: 'Helix',
+};
+
+/**
+ * Is every feed answering? Down is red and stale says so in words; degraded
+ * is amber with the gap named; caveats are dimmed text and never a colour -
+ * a permanently amber tile would teach people to ignore amber.
+ */
+function Integrations({ health }: { health: IntegrationHealth }) {
+  return (
+    <section className="comms-health" aria-label="Integration health">
+      <h3 className="comms-health-h">Integrations</h3>
+      <ul className="comms-sources">
+        {health.sources.map((s) => (
+          <li key={s.source} className={`comms-source is-${s.status}`}>
+            <span className="comms-source-dot" aria-hidden="true" />
+            <span className="comms-source-name">{SOURCE_LABEL[s.source] ?? s.source}</span>
+            <span className="comms-source-status">
+              {s.status.replace('-', ' ')}{s.stale ? ' · stale' : ''}
+              {s.status === 'down' && (
+                <span className="comms-source-since">
+                  {' · '}{s.lastSuccessAt ? 'last good ' + s.lastSuccessAt.slice(11, 16) + 'Z' : 'no good data yet'}
+                </span>
+              )}
+            </span>
+            {s.lastError && s.status === 'down' && <span className="comms-source-error">{s.lastError}</span>}
+            {s.gaps.map((g) => <span key={g} className="comms-source-gap">{g}</span>)}
+            {s.caveats.map((c) => <span key={c} className="comms-source-caveat">{c}</span>)}
+          </li>
+        ))}
+      </ul>
+      {health.dataQuality.length > 0 && (
+        <ul className="comms-quality">
+          {health.dataQuality.map((q) => (
+            <li key={q.kind + q.detail}>
+              <span className="comms-quality-what">{q.detail}</span>
+              <span className="comms-quality-fix">{q.action}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
