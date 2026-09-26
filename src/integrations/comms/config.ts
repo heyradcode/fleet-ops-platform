@@ -56,6 +56,18 @@ export const COMMS_CONFIG: Record<string, CommsTenantConfig> = {
         'SBC2-TEAMS-DR': 'sbc2.voice.hhs.texas.example',
       },
     },
+    kurmi: {
+      tenantDbid: '9944001',
+      agencyCodes: ['HHSC', 'DSHS', 'DFPS'],
+      departmentFacility: {
+        'F-AUS0412': '0412',
+        'F-AUS0417': '0417',
+        'F-HOU1120': '1120',
+        'F-DAL1455': '1455',
+        'F-ELP2031': '2031',
+        'F-LBB3308': '3308',
+      },
+    },
   },
 };
 

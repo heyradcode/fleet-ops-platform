@@ -128,4 +128,11 @@ export type CommsTenantConfig = {
    * SBC FQDNs. A Helix record that maps to nothing is simply not attached.
    */
   helix?: { siteFacility: Record<string, string>; ciTrunk: Record<string, string> };
+  /**
+   * Kurmi: the Cisco phone estate. `tenantDbid` is the Kurmi tenant searched
+   * as. `agencyCodes` are the `param2` values that ARE agencies - anything
+   * else is counted and named, never dropped. `departmentFacility` maps the
+   * LEAF of a `kurmiDepartment` path to a facility code, case-insensitively.
+   */
+  kurmi?: { tenantDbid: string; agencyCodes: string[]; departmentFacility: Record<string, string> };
 };

@@ -52,8 +52,8 @@ function control(path: string, query: URLSearchParams): MockResponse | undefined
   if (path === '/__mock/fault') {
     const service = query.get('service') as ServiceId | null;
     const status = Number(query.get('status') ?? 429) as 429 | 500 | 502 | 503;
-    if (!service || !['teams', 'genesys', 'webex', 'bandwidth', 'helix'].includes(service)) {
-      return { status: 400, body: { message: 'service must be teams, genesys, webex, bandwidth or helix' } };
+    if (!service || !['teams', 'genesys', 'webex', 'bandwidth', 'helix', 'kurmi'].includes(service)) {
+      return { status: 400, body: { message: 'service must be teams, genesys, webex, bandwidth, helix or kurmi' } };
     }
     injectFault(service, status, Number(query.get('times') ?? 1), Number(query.get('retryAfter') ?? 2));
     return { status: 200, body: { injected: { service, status } } };
@@ -139,6 +139,9 @@ function catalogue() {
       'POST ' + ORIGIN + '/helix/api/jwt/login   (form: username, password -> text token)',
       "GET  " + ORIGIN + "/helix/api/arsys/v1/entry/CHG:Infrastructure Change?q='Actual Start Date' >= \"<iso>\"&fields=values(...)   (Authorization: AR-JWT <token>)",
       "GET  " + ORIGIN + "/helix/api/arsys/v1/entry/HPD:Help Desk?q='Status' != \"Closed\"&fields=values(...)",
+    ],
+    kurmi: [
+      'POST ' + ORIGIN + '/kurmi/Kurmi/services/API   (text/xml SOAP SEARCH_QUERY_TYPE; credentials IN the envelope)',
     ],
     controls: [
       'POST ' + ORIGIN + '/__mock/fault?service=genesys&status=429&times=2',

@@ -26,7 +26,7 @@ import type { ToolSpec } from '../aws/bedrock.ts';
 import type { Principal } from '../platform/types.ts';
 import type { Tool } from './tools.ts';
 import {
-  commsAlarms, commsIncidents, commsResolvedIncidents, commsVisibleTo, commsWorkforce,
+  commsAlarms, commsIncidents, commsPhones, commsResolvedIncidents, commsVisibleTo, commsWorkforce,
 } from '../integrations/comms/store.ts';
 import { COMMS_SOURCES } from '../integrations/comms/types.ts';
 import { describeChange } from '../integrations/comms/helix-context.ts';
@@ -121,8 +121,10 @@ export const COMMS_TOOLS: Tool[] = [
           return 'ERROR: unknown facility "' + facility + '". Known facilities: ' +
             w.byFacility.map((f) => f.code).join(', ') + '.';
         }
+        const phonesHere = commsPhones(principal)?.byFacility.find((f) => f.code === facility)?.count;
         return 'Active voice users at LC=' + facility + ' (as of ' + w.asOf + '): ' +
-          COMMS_SOURCES.map((s) => s + ' ' + (row.counts[s] ?? 0)).join(', ') + '.';
+          COMMS_SOURCES.map((s) => s + ' ' + (row.counts[s] ?? 0)).join(', ') + '.' +
+          (phonesHere !== undefined ? ' Cisco desk phones there (Kurmi): ' + phonesHere + '.' : '');
       }
 
       const lines = ['Workforce as of ' + w.asOf + (w.truncated ? ' (INCOMPLETE: a source was truncated)' : '') + ':'];
@@ -145,6 +147,16 @@ export const COMMS_TOOLS: Tool[] = [
       }
       const unplaced = Object.entries(w.unplacedByReason).map(([k, v]) => k + ' ' + v).join(', ');
       if (unplaced) lines.push('  not placed at a facility: ' + unplaced);
+      // Devices, not people - reported beside the workforce, never added to it.
+      const phones = commsPhones(principal);
+      if (phones) {
+        lines.push('Cisco desk phones (Kurmi, devices not people)' + (phones.truncated ? ' - INCOMPLETE' : '') + ': ' +
+          phones.total + ' enabled - ' +
+          Object.entries(phones.byAgency).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => k + ' ' + v).join(', ') +
+          (Object.keys(phones.unknownAgencyCodes).length
+            ? ', UNKNOWN agency codes ' + Object.entries(phones.unknownAgencyCodes).map(([k, v]) => k + ' ' + v).join(', ') : '') +
+          (phones.blankAgency ? ', no agency ' + phones.blankAgency : '') + '; ' + phones.disabled + ' disabled not counted');
+      }
       return lines.join('\n');
     },
   },

@@ -12,7 +12,7 @@ import { setClock, fixedClock, now } from '../../platform/clock.ts';
 import type { Principal } from '../../platform/types.ts';
 import { CrossTenantAccessError, OutOfScopeError } from '../../platform/tenancy.ts';
 import { mainTable } from '../../aws/dynamodb.ts';
-import { DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER, directory, mockFetch, resetMockState } from './mock/index.ts';
+import { DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER, DEMO_KURMI_USER, directory, mockFetch, resetMockState } from './mock/index.ts';
 import { createCommsClient } from './client.ts';
 import { COMMS_CONFIG, HHS_DEMO_TENANT } from './config.ts';
 import { runCommsPoll } from './poll.ts';
@@ -35,6 +35,7 @@ const client = (tenantId = HHS_DEMO_TENANT) => createCommsClient({
     webex: { token: DEMO_WEBEX_TOKEN },
     bandwidth: { ...DEMO_BANDWIDTH_USER },
     helix: { ...DEMO_HELIX_USER },
+    kurmi: { ...DEMO_KURMI_USER },
   },
   sleep: async () => {},
 });

@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 213 tests, no network. Picks up web/ tests too.
+pnpm test                       # 220 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180
 pnpm web:build                  # typechecks web/ AND builds it
@@ -247,6 +247,19 @@ network. Nothing real belongs in this repo.
   `fields=values(...)`: without it a ticket returns the submitter's name and
   email. Auth is `AR-JWT <token>`, not Bearer, and the login returns a bare
   text token with no expiry. Timestamps are `+0000` with no colon.
+- **Kurmi is SOAP: HTTP 200 is not success, and paging is not guessed.**
+  `<status>` in the body decides; a 200 with FAILURE is a failure. Credentials
+  travel IN the envelope - `client.soap()` hands them to the builder so the
+  connector never holds them, every value is XML-escaped, and no request body
+  is ever logged. The response flags `listIsNotComplete` but the one sample
+  shows no paging parameter, and a guessed one the server ignores returns page
+  one forever - so a truncated search is PARTITIONED by `ciscoName` MAC
+  prefix (`SEP0`..`SEPF`, twice), and a slice still truncated marks the
+  inventory incomplete. The field is `kurmiDepartment` (lower-case k); the
+  facility is the path's LEAF via a tenant table. Agency codes outside the
+  configured set are counted and named - the real sample's were `DPS`/`VDH`,
+  i.e. not HHS at all. Phones are DEVICES: their own inventory, never
+  columns in the (people) workforce.
 - **The agent never composes SPL.** It picks from a catalogue by name and
   passes typed parameters. SPL has commands that write (`collect`,
   `outputlookup`) and run scripts, so an injected pipe is not a data leak, it
@@ -351,7 +364,7 @@ src/integrations/connector.ts  the one contract: poll() and onWebhook()
 src/integrations/controller/  Meraki, Mist, Aruba Central
 src/integrations/probe.ts  the external plane — the only thing that sees silence
 src/integrations/splunk/   outbound HEC (a bus consumer) + catalogued SPL search
-src/integrations/comms/  Teams, Genesys, Webex, Bandwidth, Helix: client (tokens, retries, paging),
+src/integrations/comms/  Teams, Genesys, Webex, Bandwidth, Helix, Kurmi: client (tokens, retries, paging),
                  connectors, the workforce join (agency + facility split), and
                  signals -> alarms -> incidents
 src/integrations/comms/mock/  Teams (Graph), Genesys, Webex mocks: mockFetch on the

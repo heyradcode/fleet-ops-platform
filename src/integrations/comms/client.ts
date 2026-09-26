@@ -34,7 +34,7 @@ import type { CommsSource, SignalSource } from './types.ts';
  * Everything the client can call: the signal sources, plus Helix - which is
  * CONTEXT, never a signal source, and so is not in SignalSource.
  */
-export type ApiSource = SignalSource | 'helix';
+export type ApiSource = SignalSource | 'helix' | 'kurmi';
 
 export type FetchFn = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -60,6 +60,8 @@ export type CommsEndpoints = {
    * one below is the mock's, on a reserved `.example` name.
    */
   helixApi: string;
+  /** Kurmi's SOAP endpoint. PLACEHOLDER path - see comms/kurmi.ts. */
+  kurmiApi: string;
 };
 
 export const REAL_ENDPOINTS: CommsEndpoints = {
@@ -72,6 +74,7 @@ export const REAL_ENDPOINTS: CommsEndpoints = {
   bandwidthApi: 'https://api.bandwidth.com/api',
   bandwidthInsights: 'https://insights.bandwidth.com/api/v1',
   helixApi: 'https://hhs-restapi.onbmc.example',
+  kurmiApi: 'https://kurmi.hhs.example/Kurmi/services/API',
 };
 
 /** In production these come from Secrets Manager, per tenant, cached across warm starts. */
@@ -83,6 +86,8 @@ export type CommsCredentials = {
   bandwidth?: { username: string; password: string };
   /** An AR System integration user, read-only by permission as well as by code. */
   helix?: { username: string; password: string };
+  /** Kurmi: a read-only API login. Sent INSIDE every SOAP envelope - see comms/kurmi.ts. */
+  kurmi?: { login: string; password: string };
 };
 
 export class CommsHttpError extends Error {
@@ -116,6 +121,13 @@ export type CommsClient = {
   endpoints: CommsEndpoints;
   /** GET or POST with auth and retries. Throws CommsHttpError on a final failure. */
   request(source: ApiSource, url: string, init?: RequestInit): Promise<Response>;
+  /**
+   * POST a SOAP envelope whose credentials live IN THE BODY (Kurmi). The
+   * client hands its credentials to `build` rather than exposing them, so the
+   * connector never holds a password - and no body is ever logged, because
+   * every body contains one.
+   */
+  soap(source: 'kurmi', url: string, build: (auth: { login: string; password: string }) => string): Promise<Response>;
   /** How many token requests have been made, per source. For the tests and the demo. */
   tokenRequests: Record<CommsSource | 'helix', number>;
 };
@@ -193,7 +205,8 @@ export function createCommsClient(opts: {
     return fresh.token;
   }
 
-  async function authHeader(source: ApiSource): Promise<string> {
+  async function authHeader(source: ApiSource): Promise<string | undefined> {
+    if (source === 'kurmi') return undefined;   // credentials are in the envelope
     // AR-JWT, not Bearer - see the mock kernel's checkArJwt.
     if (source === 'helix') return 'AR-JWT ' + await tokenFor('helix');
     if (source === 'bandwidth') {
@@ -209,7 +222,8 @@ export function createCommsClient(opts: {
     let last: CommsHttpError | undefined;
     for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
       const headers = new Headers(init.headers);
-      headers.set('Authorization', await authHeader(source));
+      const auth = await authHeader(source);
+      if (auth) headers.set('Authorization', auth);
       // A caller asking for XML (Bandwidth's account API) keeps its Accept.
       if (!headers.has('Accept')) headers.set('Accept', 'application/json');
       const res = await opts.fetch(url, { ...init, headers });
@@ -232,7 +246,17 @@ export function createCommsClient(opts: {
     throw last!;
   }
 
-  return { tenantId: opts.tenantId, endpoints, request, tokenRequests };
+  async function soap(source: 'kurmi', url: string, build: (auth: { login: string; password: string }) => string) {
+    const c = opts.credentials.kurmi;
+    if (!c) throw new CommsHttpError(source, 0, 'no Kurmi credentials configured');
+    return request(source, url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/xml; charset=utf-8', Accept: 'text/xml' },
+      body: build({ login: c.login, password: c.password }),
+    });
+  }
+
+  return { tenantId: opts.tenantId, endpoints, request, soap, tokenRequests };
 }
 
 /** Standard base64 for a Basic header, built on the portable encoder. */

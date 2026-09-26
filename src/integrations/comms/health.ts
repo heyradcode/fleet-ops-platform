@@ -37,12 +37,13 @@ import type { ApiSource } from './client.ts';
 import type { EntraSyncResult } from './entra-directory.ts';
 import type { CommsTenantConfig } from './types.ts';
 import type { WorkforceReport } from './workforce.ts';
+import type { PhoneInventory } from './kurmi.ts';
 
 /** Every feed the health view tracks. The directory sync is its own row: it can fail while Teams answers. */
 export type HealthSource = ApiSource | 'entra-directory';
 
 export const HEALTH_SOURCES: readonly HealthSource[] = [
-  'entra-directory', 'teams', 'genesys', 'webex', 'bandwidth', 'helix',
+  'entra-directory', 'teams', 'genesys', 'webex', 'bandwidth', 'helix', 'kurmi',
 ];
 
 export type SourceStatus = 'healthy' | 'degraded' | 'down' | 'not-configured';
@@ -63,7 +64,8 @@ export type SourceHealth = {
 };
 
 export type DataQualityIssue = {
-  kind: 'unknown-domain' | 'unmapped-webex-location' | 'unmapped-bandwidth-peer' | 'facility-conflict' | 'unplaced';
+  kind: 'unknown-domain' | 'unmapped-webex-location' | 'unmapped-bandwidth-peer' | 'facility-conflict' | 'unplaced'
+    | 'unknown-agency-code' | 'blank-agency' | 'unmapped-kurmi-department' | 'kurmi-no-facility';
   count: number;
   detail: string;
   /** The fix, in words someone can act on. */
@@ -81,6 +83,7 @@ export type SourceRun = { source: HealthSource; configured: boolean; error?: str
 const CAVEATS: Partial<Record<HealthSource, string[]>> = {
   bandwidth: ['call-outcomes API shape is a PLACEHOLDER until the Insights reference is verified'],
   helix: ['field names are unverified against the customer\'s (customised) Helix forms'],
+  kurmi: ['modelled from ONE sample - no schema yet; paging unknown, so searches are partitioned by MAC prefix'],
 };
 
 /** What this poll saw, per source, from the pieces the poll already has. Pure. */
@@ -91,6 +94,8 @@ export function observeRun(args: {
   report: WorkforceReport;
   signalErrors: Partial<Record<ApiSource, string>>;
   helixError?: string;
+  kurmiError?: string;
+  phones?: PhoneInventory;
 }): SourceRun[] {
   const { config, report } = args;
   const run = (source: HealthSource, configured: boolean, error: string | undefined, gaps: string[]): SourceRun =>
@@ -112,11 +117,15 @@ export function observeRun(args: {
     run('webex', config.sources.includes('webex'), joinErrors(report.errors.webex, args.signalErrors.webex), truncated('webex')),
     run('bandwidth', !!config.bandwidth, args.signalErrors.bandwidth, []),
     run('helix', !!config.helix, args.helixError, []),
+    run('kurmi', !!config.kurmi, args.kurmiError,
+      args.phones?.truncated ? ['a MAC-prefix slice was still truncated at the depth limit - phone counts are LOW'] : []),
   ];
 }
 
 /** Data-quality issues with their fixes. Pure. */
-export function dataQuality(report: WorkforceReport, unmappedBandwidthPeers: string[]): DataQualityIssue[] {
+export function dataQuality(
+  report: WorkforceReport, unmappedBandwidthPeers: string[], phones?: PhoneInventory,
+): DataQualityIssue[] {
   const issues: DataQualityIssue[] = [];
 
   const unknown = new Map<string, number>();
@@ -149,6 +158,34 @@ export function dataQuality(report: WorkforceReport, unmappedBandwidthPeers: str
       action: 'Usually a move: update the Webex Calling location, or the Entra street address.',
     });
   }
+  if (phones) {
+    for (const [code, n] of Object.entries(phones.unknownAgencyCodes).sort()) {
+      issues.push({
+        kind: 'unknown-agency-code', count: n, detail: n + ' Cisco phone(s) with Kurmi agency "' + code + '"',
+        action: 'Either add "' + code + '" to kurmi.agencyCodes, or correct param2 on those devices in Kurmi.',
+      });
+    }
+    if (phones.blankAgency > 0) {
+      issues.push({
+        kind: 'blank-agency', count: phones.blankAgency, detail: phones.blankAgency + ' Cisco phone(s) with no agency (param2 empty)',
+        action: 'Set param2 on those devices in Kurmi to HHSC, DSHS or DFPS.',
+      });
+    }
+    for (const leaf of phones.unmappedDepartments) {
+      issues.push({
+        kind: 'unmapped-kurmi-department', count: 1, detail: 'Kurmi department "' + leaf + '"',
+        action: 'Add "' + leaf + '" to kurmi.departmentFacility with its LC code.',
+      });
+    }
+    const noLeaf = phones.unplaced['no-facility-leaf'] ?? 0;
+    if (noLeaf > 0) {
+      issues.push({
+        kind: 'kurmi-no-facility', count: noLeaf, detail: noLeaf + ' Cisco phone(s) whose department stops at the region',
+        action: 'Assign those devices a facility-level kurmiDepartment in Kurmi.',
+      });
+    }
+  }
+
   const unplaced = new Map<string, number>();
   for (const u of report.unplaced) unplaced.set(u.reason, (unplaced.get(u.reason) ?? 0) + 1);
   const actionFor: Record<string, string> = {

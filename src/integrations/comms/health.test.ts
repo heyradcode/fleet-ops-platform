@@ -12,7 +12,7 @@ import { setClock, fixedClock, now, type ControllableClock } from '../../platfor
 import type { Principal } from '../../platform/types.ts';
 import { OutOfScopeError } from '../../platform/tenancy.ts';
 import {
-  clearFaults, DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_WEBEX_TOKEN, directory,
+  clearFaults, DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_WEBEX_TOKEN, directory,
   injectFault, mockFetch, resetMockState,
 } from './mock/index.ts';
 import { createCommsClient } from './client.ts';
@@ -43,6 +43,7 @@ function setup(tenantId: string, tweak: (c: CommsTenantConfig) => void = () => {
       webex: { token: DEMO_WEBEX_TOKEN },
       bandwidth: { ...DEMO_BANDWIDTH_USER },
       helix: { ...DEMO_HELIX_USER },
+      kurmi: { ...DEMO_KURMI_USER },
     },
     sleep: async () => {},
   });
@@ -55,7 +56,7 @@ test('a normal poll: every source healthy, caveats shown but not a status', asyn
   const { poll } = setup('h-normal');
   const { health } = await poll();
   const s = byName(health.sources);
-  for (const name of ['entra-directory', 'teams', 'genesys', 'webex', 'bandwidth', 'helix']) {
+  for (const name of ['entra-directory', 'teams', 'genesys', 'webex', 'bandwidth', 'helix', 'kurmi']) {
     assert.equal(s[name].status, 'healthy', name);
   }
   assert.match(s.bandwidth.caveats.join(), /PLACEHOLDER/);
@@ -132,7 +133,7 @@ test('a configuration gap is a data-quality issue with the fix named', async () 
 test('health is stored, and read back only at tenant scope', async () => {
   const { poll, principal } = setup('h-scope');
   await poll();
-  assert.equal(loadHealth(principal)!.sources.length, 6);
+  assert.equal(loadHealth(principal)!.sources.length, 7);
   const site: Principal = { ...principal, roles: ['operator'], scope: { kind: 'site', siteId: 'x' } };
   assert.throws(() => loadHealth(site), OutOfScopeError);
 });

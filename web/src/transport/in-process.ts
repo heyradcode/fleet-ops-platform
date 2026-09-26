@@ -29,12 +29,12 @@ import {
 } from '../../../src/pipeline/steps.ts';
 import { runAgent } from '../../../src/ai/agent-core.ts';
 import { toolSpecsFor } from '../../../src/ai/tools.ts';
-import { mockFetch, directory as commsDirectory, DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER } from '../../../src/integrations/comms/mock/index.ts';
+import { mockFetch, directory as commsDirectory, DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER, DEMO_KURMI_USER } from '../../../src/integrations/comms/mock/index.ts';
 import { createCommsClient } from '../../../src/integrations/comms/client.ts';
 import { commsConfigFor } from '../../../src/integrations/comms/config.ts';
 import { runCommsPoll } from '../../../src/integrations/comms/poll.ts';
 import {
-  commsAlarms, commsIncidents, commsResolvedIncidents, commsVisibleTo, commsWorkforce,
+  commsAlarms, commsIncidents, commsPhones, commsResolvedIncidents, commsVisibleTo, commsWorkforce,
 } from '../../../src/integrations/comms/store.ts';
 import { loadHealth } from '../../../src/integrations/comms/health.ts';
 import { knowledgeBase } from '../../../src/ai/knowledge-base.ts';
@@ -204,6 +204,7 @@ function ensureCommsPolled(principal: Principal): Promise<void> {
         webex: { token: DEMO_WEBEX_TOKEN },
         bandwidth: { ...DEMO_BANDWIDTH_USER },
         helix: { ...DEMO_HELIX_USER },
+        kurmi: { ...DEMO_KURMI_USER },
       },
     });
     done = runCommsPoll(principal, client, config, now()).then(() => undefined);
@@ -274,6 +275,7 @@ export const inProcessTransport: Transport = {
       heldBack: commsAlarms(principal).filter((a) => !a.corroborated),
       health: loadHealth(principal),
       resolved: commsResolvedIncidents(principal),
+      phones: commsPhones(principal),
     } satisfies CommsSnapshot;
   },
 

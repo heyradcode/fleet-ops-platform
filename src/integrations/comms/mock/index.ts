@@ -26,11 +26,13 @@ import { genesysApi, genesysLogin } from './genesys.ts';
 import { webexAnalytics, webexApi, webexCallingAnalytics } from './webex.ts';
 import { bandwidthApi, bandwidthInsights } from './bandwidth.ts';
 import { helixApi } from './helix.ts';
+import { kurmiApi, resetKurmi } from './kurmi.ts';
 
 export {
   clearFaults, DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_WEBEX_TOKEN, injectFault, type ServiceId,
 } from './kernel.ts';
 export { HELIX_PLANTED } from './helix.ts';
+export { DEMO_KURMI_USER, KURMI_TENANT_DBID, kurmiPhones, setKurmiMaxResults } from './kurmi.ts';
 export { BANDWIDTH_ACCOUNT, BANDWIDTH_PEERS, BANDWIDTH_PLANTED } from './bandwidth.ts';
 export { mutateEntraUser, removeEntraUser, DELTA_TOKEN_TTL_MS } from './teams.ts';
 export { setPlanted } from './time.ts';
@@ -40,6 +42,7 @@ export function resetMockState(): void {
   resetKernelState();
   resetEntraChanges();
   setPlanted(true);
+  resetKurmi();
 }
 export { directory, agencyOf, facilityCodeOf, AGENCY_DOMAINS, FACILITIES } from './directory.ts';
 export { PLANTED as TEAMS_PLANTED, TEAMS_TRUNKS } from './teams.ts';
@@ -58,6 +61,7 @@ export const MOCK_HOSTS: Record<string, MockApp> = {
   'api.bandwidth.com': bandwidthApi,
   'insights.bandwidth.com': bandwidthInsights,
   'hhs-restapi.onbmc.example': helixApi,
+  'kurmi.hhs.example': kurmiApi,
 };
 
 /** Localhost path prefix -> app, for the Node server. */
@@ -72,6 +76,7 @@ export const MOCK_PREFIXES: Record<string, MockApp> = {
   '/bandwidth': bandwidthApi,
   '/bandwidth-insights': bandwidthInsights,
   '/helix': helixApi,
+  '/kurmi': kurmiApi,
 };
 
 /**

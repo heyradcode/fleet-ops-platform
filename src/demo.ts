@@ -65,7 +65,7 @@ import { checkInput, canUseTool } from './ai/guardrails.ts';
 import { b64urlEncode, b64urlDecodeText, setUuid, seededUuid } from './platform/crypto.ts';
 import { setClock, fixedClock, now, nowIso } from './platform/clock.ts';
 import { setRandom, seededRandom } from './platform/random.ts';
-import { mockFetch, directory as commsDirectory, DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER } from './integrations/comms/mock/index.ts';
+import { mockFetch, directory as commsDirectory, DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER, DEMO_KURMI_USER } from './integrations/comms/mock/index.ts';
 import { createCommsClient } from './integrations/comms/client.ts';
 import { runCommsPoll } from './integrations/comms/poll.ts';
 import { syncEntraDirectory } from './integrations/comms/entra-directory.ts';
@@ -789,6 +789,7 @@ async function sectionComms() {
       webex: { token: DEMO_WEBEX_TOKEN },
       bandwidth: { ...DEMO_BANDWIDTH_USER },
       helix: { ...DEMO_HELIX_USER },
+      kurmi: { ...DEMO_KURMI_USER },
     },
   });
   // An HHS operations lead, verified like every other principal. Tenant-wide,
@@ -859,6 +860,19 @@ async function sectionComms() {
   }
   write('   ' + dim(report.facilityConflicts.length + ' Entra/Webex facility conflicts, ' +
     report.unmappedWebexLocations.length + ' unmapped Webex locations') + '\n');
+
+  note('');
+  note('Cisco desk phones, from Kurmi over SOAP - devices, not people, so a table of their own:');
+  const ph = poll.phones;
+  if (ph) {
+    write('   ' + ph.total + ' enabled (' + ph.disabled + ' disabled not counted), ' + ph.searches + ' searches - ' +
+      dim('the first came back truncated, so it was re-asked as 16 MAC-prefix slices') + '\n');
+    write('   by agency   ' + Object.entries(ph.byAgency).sort().map(([k, v]) => k + ' ' + v).join('   ') + '\n');
+    write('   ' + dim('unknown agency codes: ' + Object.entries(ph.unknownAgencyCodes).map(([k, v]) => k + ' x' + v).join(', ') +
+      ', no agency: ' + ph.blankAgency + ' - counted and named, never dropped') + '\n');
+    write('   Houston (LC=1120) has ' + (ph.byFacility.find((f) => f.code === '1120')?.count ?? 0) +
+      ' Cisco phones too - the call-quality incident\'s reach is wider than Teams and Webex' + '\n');
+  }
 
   note('');
   note('Signals: one number per subject per window, never one per call:');

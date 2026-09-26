@@ -28,6 +28,7 @@ import type { AgentResult } from '../../../src/ai/agent-core.ts';
 import type { CommsAlarm, CommsIncident } from '../../../src/integrations/comms/incidents.ts';
 import type { WorkforceSummary } from '../../../src/integrations/comms/store.ts';
 import type { IntegrationHealth } from '../../../src/integrations/comms/health.ts';
+import type { PhoneInventory } from '../../../src/integrations/comms/kurmi.ts';
 
 export type BoardSnapshot = {
   devices: DeviceState[];
@@ -73,6 +74,8 @@ export type CommsSnapshot = {
   health?: IntegrationHealth;
   /** Recently resolved, newest first. Shown dimmed below the open ones. */
   resolved: CommsIncident[];
+  /** Cisco desk phones from Kurmi - devices, shown beside the workforce, never in it. */
+  phones?: PhoneInventory;
 };
 
 export type Transport = {
@@ -141,7 +144,7 @@ export type Transport = {
   loadComms(): Promise<CommsSnapshot | null>;
 };
 
-export type { AgentResult, CommsAlarm, CommsIncident, IntegrationHealth, WorkforceSummary };
+export type { AgentResult, CommsAlarm, CommsIncident, IntegrationHealth, PhoneInventory, WorkforceSummary };
 export type { AgentTrace } from '../../../src/ai/agent-core.ts';
 
 export type { Alarm, DeviceState, DeviceStatus, Incident, Principal, Site };

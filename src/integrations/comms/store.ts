@@ -27,6 +27,7 @@ import type { CommsAlarm, CommsIncident } from './incidents.ts';
 import type { UnplacedReason } from './types.ts';
 import { commsConfigFor } from './config.ts';
 import { openCommsIncidents, resolvedCommsIncidents } from './lifecycle.ts';
+import type { PhoneInventory } from './kurmi.ts';
 import type { WorkforceReport } from './workforce.ts';
 
 /** The workforce split, with every person-level field removed. */
@@ -90,6 +91,17 @@ export function commsWorkforce(principal: Principal): WorkforceSummary | undefin
   requireTenantScope(principal);
   const item = mainTable.query({ pk: pk(principal, 'COMMS') }).find((i) => i.SK === 'WORKFORCE#LATEST');
   return item ? strip<WorkforceSummary>(item) : undefined;
+}
+
+/** The Cisco phone inventory: counts only, overwritten each poll. */
+export function putPhoneInventory(principal: Principal, inventory: PhoneInventory): void {
+  mainTable.put({ PK: pk(principal, 'COMMS'), SK: 'PHONES#LATEST', entity: 'PhoneInventory', ...inventory });
+}
+
+export function commsPhones(principal: Principal): PhoneInventory | undefined {
+  requireTenantScope(principal);
+  const item = mainTable.get(pk(principal, 'COMMS'), 'PHONES#LATEST');
+  return item ? strip<PhoneInventory>(item) : undefined;
 }
 
 /** The OPEN incidents - one per subject that is currently a problem. */

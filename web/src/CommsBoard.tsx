@@ -20,7 +20,9 @@
 import { useState } from 'react';
 import { inProcessTransport } from './transport/in-process.ts';
 import { TraceStep } from './DevicePanel.tsx';
-import type { AgentResult, CommsAlarm, CommsIncident, IntegrationHealth, WorkforceSummary } from './transport/index.ts';
+import type {
+  AgentResult, CommsAlarm, CommsIncident, IntegrationHealth, PhoneInventory, WorkforceSummary,
+} from './transport/index.ts';
 import type { CommsSnapshot } from './transport/index.ts';
 
 const PLATFORMS = ['teams', 'genesys', 'webex'] as const;
@@ -62,6 +64,7 @@ export function CommsBoard({ snapshot }: { snapshot: CommsSnapshot }) {
         </div>
         {snapshot.health && <Integrations health={snapshot.health} />}
         <Workforce workforce={snapshot.workforce} affected={affected} />
+        {snapshot.phones && <Phones phones={snapshot.phones} affected={affected} />}
       </main>
 
       <Assistant />
@@ -304,6 +307,47 @@ function Workforce({ workforce, affected }: { workforce: WorkforceSummary; affec
           </div>
         )}
       </dl>
+    </div>
+  );
+}
+
+/**
+ * Cisco desk phones from Kurmi. DEVICES, so a table of their own: adding a
+ * phone count to a column of people would make every total meaningless.
+ */
+function Phones({ phones, affected }: { phones: PhoneInventory; affected: Set<string> }) {
+  const unknown = Object.entries(phones.unknownAgencyCodes).sort();
+  return (
+    <div className="comms-tables comms-phones">
+      {phones.truncated && (
+        <p className="comms-warning">Kurmi returned a truncated slice even after partitioning. Phone counts are LOW.</p>
+      )}
+      <table className="comms-table">
+        <caption>Cisco desk phones (Kurmi) — devices, not people · {phones.total} enabled, {phones.disabled} disabled not counted</caption>
+        <tbody>
+          {Object.entries(phones.byAgency).sort().map(([a, n]) => (
+            <tr key={a}><th scope="row">{a}</th><td className="num">{n}</td></tr>
+          ))}
+          {unknown.map(([code, n]) => (
+            <tr key={code} className="is-attention"><th scope="row">unknown code <span className="mono">{code}</span></th><td className="num">{n}</td></tr>
+          ))}
+          {phones.blankAgency > 0 && (
+            <tr className="is-attention"><th scope="row">no agency set</th><td className="num">{phones.blankAgency}</td></tr>
+          )}
+        </tbody>
+      </table>
+      <table className="comms-table">
+        <caption>Cisco desk phones by facility — Kurmi department leaf</caption>
+        <tbody>
+          {phones.byFacility.map((f) => (
+            <tr key={f.code} className={affected.has(f.code) ? 'is-attention' : ''}>
+              <th scope="row"><span className="mono">LC={f.code}</span>
+                {affected.has(f.code) && <span className="comms-flag">incident</span>}</th>
+              <td className="num">{f.count}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

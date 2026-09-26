@@ -21,7 +21,7 @@
 import { now } from '../../../platform/clock.ts';
 import { b64urlEncode, b64urlDecodeText } from '../../../platform/crypto.ts';
 
-export type ServiceId = 'teams' | 'genesys' | 'webex' | 'bandwidth' | 'helix';
+export type ServiceId = 'teams' | 'genesys' | 'webex' | 'bandwidth' | 'helix' | 'kurmi';
 
 export type MockRequest = {
   method: string;

@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { setClock, fixedClock, now, type ControllableClock } from '../../platform/clock.ts';
 import type { Principal } from '../../platform/types.ts';
 import {
-  clearFaults, DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_WEBEX_TOKEN, directory,
+  clearFaults, DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_WEBEX_TOKEN, directory,
   injectFault, mockFetch, resetMockState, setPlanted,
 } from './mock/index.ts';
 import { createCommsClient } from './client.ts';
@@ -44,6 +44,7 @@ function setup(tenantId: string) {
       webex: { token: DEMO_WEBEX_TOKEN },
       bandwidth: { ...DEMO_BANDWIDTH_USER },
       helix: { ...DEMO_HELIX_USER },
+      kurmi: { ...DEMO_KURMI_USER },
     },
     sleep: async () => {},
   });

@@ -22,6 +22,8 @@ import { attachHelixContext } from './helix-context.ts';
 import { dataQuality, observeRun, recordHealth, type IntegrationHealth } from './health.ts';
 import { errorLine, type SignalSource } from './types.ts';
 import { reconcileIncidents } from './lifecycle.ts';
+import { pullPhoneInventory, type PhoneInventory } from './kurmi.ts';
+import { putPhoneInventory } from './store.ts';
 
 export type CommsPollResult = {
   /** The full roster, for the caller's use in memory. Never persisted; see store.ts. */
@@ -37,6 +39,8 @@ export type CommsPollResult = {
   resolved: CommsIncident[];
   /** Incident ids this poll reopened - the same problem back within the reopen window. */
   reopened: string[];
+  /** The Cisco phone estate from Kurmi, when the tenant runs it and the pull succeeded. */
+  phones?: PhoneInventory;
   /** Per-source health and data quality, as recorded by this poll. */
   health: IntegrationHealth;
 };
@@ -77,14 +81,27 @@ export async function runCommsPoll(
   const incidents = lifecycle.open;
   const workforce = summariseWorkforce(report, nowIso());
 
+  // Kurmi: the Cisco phones. Independent of everything above - devices, not
+  // people - and isolated like every other source.
+  let phones: PhoneInventory | undefined;
+  let kurmiError: string | undefined;
+  if (config.kurmi) {
+    try {
+      phones = await pullPhoneInventory(client, config, nowIso());
+      putPhoneInventory(principal, phones);
+    } catch (err) {
+      kurmiError = errorLine(err);
+    }
+  }
+
   const health = recordHealth(principal, at, observeRun({
     config, directorySync, directoryError, report,
-    signalErrors: collected.errors, helixError: helix.error,
-  }), dataQuality(report, collected.unmappedBandwidthPeers));
+    signalErrors: collected.errors, helixError: helix.error, kurmiError, phones,
+  }), dataQuality(report, collected.unmappedBandwidthPeers, phones));
 
   putCommsRun(principal, { workforce, alarms });
   return {
     report, directorySync, workforce, signals: collected.signals, alarms, incidents,
-    resolved: lifecycle.resolved, reopened: lifecycle.reopened, health,
+    resolved: lifecycle.resolved, reopened: lifecycle.reopened, phones, health,
   };
 }
