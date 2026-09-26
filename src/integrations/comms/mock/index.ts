@@ -23,10 +23,12 @@ import { notModelled, resetMockState as resetKernelState } from './kernel.ts';
 import { resetEntraChanges, teamsGraph, teamsLogin } from './teams.ts';
 import { genesysApi, genesysLogin } from './genesys.ts';
 import { webexAnalytics, webexApi, webexCallingAnalytics } from './webex.ts';
+import { bandwidthApi, bandwidthInsights } from './bandwidth.ts';
 
 export {
-  DEMO_CLIENT, DEMO_WEBEX_TOKEN, injectFault, type ServiceId,
+  DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_WEBEX_TOKEN, injectFault, type ServiceId,
 } from './kernel.ts';
+export { BANDWIDTH_ACCOUNT, BANDWIDTH_PEERS, BANDWIDTH_PLANTED } from './bandwidth.ts';
 export { mutateEntraUser, removeEntraUser, DELTA_TOKEN_TTL_MS } from './teams.ts';
 
 /** Tests call this between cases: tokens, faults, and Entra directory changes. */
@@ -48,6 +50,8 @@ export const MOCK_HOSTS: Record<string, MockApp> = {
   'webexapis.com': webexApi,
   'analytics.webexapis.com': webexAnalytics,
   'analytics-calling.webexapis.com': webexCallingAnalytics,
+  'api.bandwidth.com': bandwidthApi,
+  'insights.bandwidth.com': bandwidthInsights,
 };
 
 /** Localhost path prefix -> app, for the Node server. */
@@ -59,6 +63,8 @@ export const MOCK_PREFIXES: Record<string, MockApp> = {
   '/webex': webexApi,
   '/webex-analytics': webexAnalytics,
   '/webex-calling': webexCallingAnalytics,
+  '/bandwidth': bandwidthApi,
+  '/bandwidth-insights': bandwidthInsights,
 };
 
 /**
@@ -84,6 +90,10 @@ export function splitTarget(target: string): { path: string; query: URLSearchPar
 export function toResponse(res: MockResponse): Response {
   const headers = new Headers(res.headers);
   if (res.body === undefined) return new Response(null, { status: res.status, headers });
+  if (res.xml) {
+    headers.set('Content-Type', 'application/xml');
+    return new Response(String(res.body), { status: res.status, headers });
+  }
   headers.set('Content-Type', 'application/json');
   return new Response(JSON.stringify(res.body), { status: res.status, headers });
 }

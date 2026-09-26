@@ -83,6 +83,7 @@ function IncidentRow({ incident }: { incident: CommsIncident }) {
         <span className="verdict is-paged">PAGED</span>
       </div>
       <ul className="comms-evidence">
+        {(incident.localisation ?? []).map((l) => <li key={l} className="is-where">{l}</li>)}
         {incident.evidence.map((e) => <li key={e}>{e}</li>)}
       </ul>
     </div>

@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 175 tests, no network. Picks up web/ tests too.
+pnpm test                       # 189 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180
 pnpm web:build                  # typechecks web/ AND builds it
@@ -47,6 +47,10 @@ bundler resolves imports whether or not the code path executes, so one static
 `node:fs` anywhere in the shared graph breaks the web build. CI enforces this.
 Anything platform-specific goes behind `src/platform/` — that is what
 `clock.ts`, `crypto.ts`, `random.ts` and `runbook-loader.ts` are for.
+
+**XML goes through `platform/xml.ts`.** No `DOMParser` in Node, no
+dependencies in the shared graph. It REFUSES any DOCTYPE (no XXE, no entity
+expansion) and bounds size and depth. Kurmi's SOAP will need it too.
 
 **No `Buffer`.** Same reason. `platform/crypto.ts` has `b64urlEncode` /
 `b64urlDecode`. The webhook HMAC verification in `integrations/webhook.ts` is
@@ -152,7 +156,16 @@ one, change the test deliberately rather than making it pass.
   about a site's network; Teams alone can be wrong (a client build, a media
   region). A trunk's failure rate and a queue's backlog are the system of
   record counting itself, and are exempt. A source that measured the same
-  subject and saw nothing wrong DISPUTES the alarm rather than being outvoted.
+  subject and saw nothing wrong DISPUTES an inference (holds it back, named) -
+  but only LOCALISES a count: a trunk failing Teams's calls is failing them
+  even if Bandwidth's end is fine, and the healthy end says which leg is bad.
+- **Bandwidth is the carrier's end of the same SBC, not a paging gate.** It
+  sees what Teams structurally cannot: a dead SBC's inbound calls fail AT the
+  carrier and never reach Teams, so the Direct Routing report has no row for
+  them. Peers map to SBC FQDNs by PEER ID; an unmapped peer keeps its own name
+  and still pages. The call-outcomes read (`fetchPeerOutcomes`) is a
+  PLACEHOLDER shape until the Insights reference is in hand - change it there
+  and in the mock, nowhere else. The CDR API is daily and not for detection.
 - **The workforce roster is never persisted.** The join links named people
   to agencies and buildings; the store keeps counts only, and the roster is
   rebuilt each poll. Comms reads need TENANT scope until an agency/facility
@@ -307,7 +320,7 @@ src/integrations/connector.ts  the one contract: poll() and onWebhook()
 src/integrations/controller/  Meraki, Mist, Aruba Central
 src/integrations/probe.ts  the external plane — the only thing that sees silence
 src/integrations/splunk/   outbound HEC (a bus consumer) + catalogued SPL search
-src/integrations/comms/  Teams, Genesys, Webex: client (tokens, retries, paging),
+src/integrations/comms/  Teams, Genesys, Webex, Bandwidth: client (tokens, retries, paging),
                  connectors, the workforce join (agency + facility split), and
                  signals -> alarms -> incidents
 src/integrations/comms/mock/  Teams (Graph), Genesys, Webex mocks: mockFetch on the

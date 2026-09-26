@@ -12,7 +12,7 @@ import { setClock, fixedClock, type ControllableClock } from '../../platform/clo
 import type { Principal } from '../../platform/types.ts';
 import { mainTable } from '../../aws/dynamodb.ts';
 import {
-  DEMO_CLIENT, DEMO_WEBEX_TOKEN, DELTA_TOKEN_TTL_MS, directory, injectFault, mockFetch,
+  DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DELTA_TOKEN_TTL_MS, directory, injectFault, mockFetch,
   mutateEntraUser, removeEntraUser, resetMockState,
 } from './mock/index.ts';
 import { createCommsClient } from './client.ts';
@@ -39,6 +39,7 @@ const client = (tenantId: string) => createCommsClient({
     entra: { tenantId: directory().entraTenantId, ...DEMO_CLIENT },
     genesys: { ...DEMO_CLIENT },
     webex: { token: DEMO_WEBEX_TOKEN },
+    bandwidth: { ...DEMO_BANDWIDTH_USER },
   },
   sleep: async () => {},
 });

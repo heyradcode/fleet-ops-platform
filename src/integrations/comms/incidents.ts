@@ -33,7 +33,7 @@
 import { sha256 } from '../../platform/crypto.ts';
 import type { Severity, TenantId } from '../../platform/types.ts';
 import type { CommsSignal, CommsSignalKind, CommsSubject } from './signals.ts';
-import type { CommsSource } from './types.ts';
+import type { SignalSource } from './types.ts';
 
 export const SELF_EVIDENT: ReadonlySet<CommsSignalKind> = new Set<CommsSignalKind>([
   'trunk-call-failure', 'queue-backlog', 'queue-abandonment',
@@ -46,9 +46,14 @@ export type CommsAlarm = {
   kind: CommsSignalKind;
   severity: Severity;
   /** Sources whose signal crossed a threshold. */
-  sources: CommsSource[];
+  sources: SignalSource[];
   /** Sources that measured the same subject with enough samples and saw nothing wrong. */
-  dissent: CommsSource[];
+  dissent: SignalSource[];
+  /**
+   * Where the fault is, when two vantage points on the same thing say so -
+   * e.g. which leg of a trunk. Undefined when there is only one view.
+   */
+  localisation?: string;
   signalIds: string[];
   raisedAt: string;
   /** Whether this alarm may open an incident, and if not, why not. */
@@ -65,7 +70,9 @@ export type CommsIncident = {
   subject: CommsSubject;
   alarmIds: string[];
   kinds: CommsSignalKind[];
-  sources: CommsSource[];
+  sources: SignalSource[];
+  /** From the alarms that could say where the fault is. */
+  localisation: string[];
   openedAt: string;
   evidence: string[];
 };
@@ -94,7 +101,11 @@ export function evaluateSignals(signals: CommsSignal[]): CommsAlarm[] {
 
     let corroborated = true;
     let heldBack: string | undefined;
-    if (dissent.length > 0) {
+    // A dissenting source DISPUTES an inference - facility call quality - but
+    // not a count. A trunk failing 70% of Teams's calls is failing them even
+    // if the carrier's end is fine; the carrier's view then says WHERE, which
+    // is what `localise` is for, rather than whether.
+    if (dissent.length > 0 && !SELF_EVIDENT.has(first.kind)) {
       corroborated = false;
       heldBack = 'disputed: ' + dissent.join(', ') + ' measured the same subject and saw nothing wrong';
     } else if (!SELF_EVIDENT.has(first.kind) && sources.length < 2) {
@@ -115,6 +126,7 @@ export function evaluateSignals(signals: CommsSignal[]): CommsAlarm[] {
       raisedAt: window,
       corroborated,
       heldBack,
+      localisation: localise(first.kind, first.subject, sources, dissent),
       evidence: firing.map((s) => s.detail),
     });
   }
@@ -143,10 +155,41 @@ export function correlateAlarms(alarms: CommsAlarm[]): CommsIncident[] {
       alarmIds: group.map((a) => a.alarmId),
       kinds: [...new Set(group.map((a) => a.kind))].sort(),
       sources: [...new Set(group.flatMap((a) => a.sources))].sort(),
+      localisation: group.map((a) => a.localisation).filter((l): l is string => !!l),
       openedAt,
       evidence: group.flatMap((a) => a.evidence),
     };
   }).sort((a, b) => RANK[b.severity] - RANK[a.severity] || a.title.localeCompare(b.title));
+}
+
+/**
+ * Which leg of a trunk the fault is on, from which end saw it.
+ *
+ * The SBC sits between two networks: Teams on one side, the carrier on the
+ * other. Each source watches one side. That makes the combination diagnostic
+ * in a way neither source is alone - and the three answers send three
+ * different people to look.
+ */
+export function localise(
+  kind: CommsSignalKind, subject: CommsSubject, firing: SignalSource[], ok: SignalSource[],
+): string | undefined {
+  if (kind !== 'trunk-call-failure') return undefined;
+  const teams = firing.includes('teams');
+  const carrier = firing.includes('bandwidth');
+  if (teams && carrier) {
+    return 'Both legs failing - Teams->SBC and carrier->SBC. The SBC itself, or its site, is the likely fault.';
+  }
+  if (teams && ok.includes('bandwidth')) {
+    return 'Carrier leg healthy (Bandwidth). The fault is between Teams and the SBC: its Teams-facing ' +
+      'interface, its TLS certificate, or Microsoft\'s side.';
+  }
+  if (carrier && ok.includes('teams')) {
+    return 'Teams leg healthy. The fault is on the carrier leg: Bandwidth, or the SBC\'s carrier-facing interface.';
+  }
+  if (carrier && subject.id.startsWith('bandwidth-peer:')) {
+    return 'Seen by the carrier only - no Teams trunk maps to this SIP peer.';
+  }
+  return undefined;
 }
 
 function titleFor(subject: CommsSubject): string {

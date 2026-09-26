@@ -55,6 +55,8 @@ export const COMMS_TOOLS: Tool[] = [
       for (const i of incidents) {
         lines.push('INCIDENT ' + i.incidentId + ' [' + i.severity + '] ' + i.title +
           ' - sources: ' + i.sources.join(' + '));
+        // Where, before the evidence: it is what decides who gets the call.
+        for (const l of i.localisation ?? []) lines.push('  where: ' + l);
         for (const e of i.evidence) lines.push('  evidence: ' + e);
       }
       for (const a of held) {

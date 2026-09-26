@@ -65,7 +65,7 @@ import { checkInput, canUseTool } from './ai/guardrails.ts';
 import { b64urlEncode, b64urlDecodeText, setUuid, seededUuid } from './platform/crypto.ts';
 import { setClock, fixedClock, now, nowIso } from './platform/clock.ts';
 import { setRandom, seededRandom } from './platform/random.ts';
-import { mockFetch, directory as commsDirectory, DEMO_CLIENT, DEMO_WEBEX_TOKEN } from './integrations/comms/mock/index.ts';
+import { mockFetch, directory as commsDirectory, DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER } from './integrations/comms/mock/index.ts';
 import { createCommsClient } from './integrations/comms/client.ts';
 import { runCommsPoll } from './integrations/comms/poll.ts';
 import { syncEntraDirectory } from './integrations/comms/entra-directory.ts';
@@ -785,6 +785,7 @@ async function sectionComms() {
       entra: { tenantId: commsDirectory().entraTenantId, ...DEMO_CLIENT },
       genesys: { ...DEMO_CLIENT },
       webex: { token: DEMO_WEBEX_TOKEN },
+      bandwidth: { ...DEMO_BANDWIDTH_USER },
     },
   });
   // An HHS operations lead, verified like every other principal. Tenant-wide,
@@ -861,7 +862,7 @@ async function sectionComms() {
   const signals = poll.signals;
   const colour = (sev: string) => sev === 'critical' ? '\x1b[31m' : sev === 'warning' ? '\x1b[33m' : '\x1b[90m';
   for (const sig of signals.filter((x) => x.severity !== 'ok')) {
-    write('   ' + colour(sig.severity) + sig.severity.padEnd(9) + '\x1b[0m' + sig.source.padEnd(9) + sig.detail + '\n');
+    write('   ' + colour(sig.severity) + sig.severity.padEnd(9) + '\x1b[0m' + sig.source.padEnd(10) + sig.detail + '\n');
   }
   write('   ' + dim(signals.filter((x) => x.severity === 'ok').length + ' more signals measured and healthy - ' +
     'the good trunk, the other facilities, the other queues') + '\n');
@@ -871,6 +872,15 @@ async function sectionComms() {
   for (const incident of poll.incidents) {
     write('   ' + colour(incident.severity) + 'INCIDENT' + '\x1b[0m  ' + incident.title +
       '  ' + dim('[' + incident.sources.join(' + ') + ']') + '\n');
+    for (const where of incident.localisation) write('             ' + dim('where: ' + where) + '\n');
+  }
+  // The half of the outage only the carrier saw. A dead SBC's inbound calls
+  // fail AT Bandwidth and never reach Teams - so the Teams report has no row
+  // for them, failed or otherwise.
+  const carrierOnly = poll.signals.find((x) => x.source === 'bandwidth' && x.severity !== 'ok');
+  if (carrierOnly) {
+    write('   ' + dim('the carrier\'s inbound failures never reached the SBC, so Teams has no record of them - ' +
+      'without Bandwidth that half of the outage is invisible') + '\n');
   }
 
   note('');

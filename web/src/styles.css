@@ -1260,6 +1260,11 @@ button.topo-node:hover { border-color: var(--amber); }
 
 .comms-evidence li::before { content: '· '; color: var(--faint); }
 
+/* Where the fault is decides who is called, so it reads before the evidence
+   and in the text colour, not the dimmed one. */
+.comms-evidence li.is-where { color: var(--text); }
+.comms-evidence li.is-where::before { content: '→ '; color: var(--amber); }
+
 .comms-main {
   display: flex;
   flex-direction: column;

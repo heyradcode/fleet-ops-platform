@@ -31,7 +31,8 @@ import { sha256 } from '../../platform/crypto.ts';
 import type { Severity, TenantId } from '../../platform/types.ts';
 import type { CommsClient } from './client.ts';
 import { drainGenesys, drainGraph, drainWebex } from './client.ts';
-import type { CommsSource, CommsTenantConfig } from './types.ts';
+import type { CommsTenantConfig, SignalSource } from './types.ts';
+import { pullBandwidthTrunks } from './bandwidth.ts';
 import type { WorkforceMember, WorkforceReport } from './workforce.ts';
 
 export type CommsSignalKind =
@@ -46,7 +47,7 @@ export type CommsSignal = {
   tenantId: TenantId;
   /** Content hash, so re-evaluating the same window is idempotent. */
   signalId: string;
-  source: CommsSource;
+  source: SignalSource;
   subject: CommsSubject;
   kind: CommsSignalKind;
   value: number;
@@ -213,7 +214,7 @@ async function teamsMediaSignals(client: CommsClient, w: Window, members: Map<st
 }
 
 function facilitySignals(
-  tenantId: TenantId, source: CommsSource,
+  tenantId: TenantId, source: SignalSource,
   tally: Map<string, { calls: number; degraded: number }>,
   window: { from: string; to: string }, unit: string,
 ): CommsSignal[] {
@@ -339,6 +340,42 @@ async function genesysQueueSignals(client: CommsClient, w: Window): Promise<Comm
 }
 
 // ---------------------------------------------------------------------------
+// Bandwidth - the carrier's end of the same trunks
+// ---------------------------------------------------------------------------
+
+/**
+ * Per trunk: failed / attempted, as the CARRIER counted them.
+ *
+ * Mapped peers land on the SBC's FQDN - the subject the Teams signal uses -
+ * so the two sources meet on one alarm. Unmapped peers keep their own name.
+ * The detail splits by direction because the direction IS the diagnosis: an
+ * SBC that has died fails inbound (the carrier cannot deliver) and falls
+ * silent outbound (it is not sending), and a flat total would hide both.
+ */
+async function bandwidthTrunkSignals(client: CommsClient, config: CommsTenantConfig, w: Window): Promise<CommsSignal[]> {
+  const { from, to } = isoWindow(w);
+  const { trunks } = await pullBandwidthTrunks(client, config, from, to);
+  const t = COMMS_THRESHOLDS.trunkFailure;
+  return trunks
+    .filter((k) => k.attempts >= t.minSamples)
+    .map((k) => {
+      const rate = k.failed / k.attempts;
+      const inbound = k.byDirection.inbound;
+      const outbound = k.byDirection.outbound;
+      return signal({
+        tenantId: client.tenantId, source: 'bandwidth',
+        subject: { kind: 'trunk', id: k.subjectId, name: k.subjectName },
+        kind: 'trunk-call-failure', value: rate, unit: 'ratio', sampleSize: k.attempts,
+        window: { from, to }, severity: severityFor(rate, t),
+        detail: 'carrier: ' + k.failed + ' of ' + k.attempts + ' calls failed on ' + k.subjectName +
+          (k.failureCodes.length ? ' (SIP ' + k.failureCodes.join(', ') + ')' : '') +
+          ' - inbound ' + inbound.failed + '/' + inbound.attempts +
+          ', outbound ' + outbound.failed + '/' + outbound.attempts,
+      });
+    });
+}
+
+// ---------------------------------------------------------------------------
 
 /** Every signal for the window ending at `at`, from every source the tenant runs. */
 export async function collectSignals(
@@ -353,5 +390,6 @@ export async function collectSignals(
   }
   if (config.sources.includes('webex')) out.push(...await webexMediaSignals(client, w, members));
   if (config.sources.includes('genesys')) out.push(...await genesysQueueSignals(client, w));
+  if (config.bandwidth) out.push(...await bandwidthTrunkSignals(client, config, w));
   return out;
 }

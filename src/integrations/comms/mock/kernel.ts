@@ -21,7 +21,7 @@
 import { now } from '../../../platform/clock.ts';
 import { b64urlEncode, b64urlDecodeText } from '../../../platform/crypto.ts';
 
-export type ServiceId = 'teams' | 'genesys' | 'webex';
+export type ServiceId = 'teams' | 'genesys' | 'webex' | 'bandwidth';
 
 export type MockRequest = {
   method: string;
@@ -43,7 +43,10 @@ export type MockRequest = {
 export type MockResponse = {
   status: number;
   headers?: Record<string, string>;
+  /** JSON-serialised - unless `xml` is set, in which case this is sent as-is. */
   body?: unknown;
+  /** The body is already XML text. Bandwidth's account API answers in XML. */
+  xml?: boolean;
 };
 
 type Params = Record<string, string>;
@@ -92,9 +95,11 @@ export function createApp(
         }
 
         if (!route.public) {
-          const auth = checkBearer(service, req.headers);
+          const auth = service === 'bandwidth'
+            ? checkBasic(req.headers)
+            : checkBearer(service, req.headers);
           if (auth !== 'ok') {
-            return error(401, 'unauthorized', 'bearer token ' + auth, req);
+            return error(401, 'unauthorized', 'credentials ' + auth, req);
           }
         }
 
@@ -205,6 +210,20 @@ export function checkBearer(
   const t = tokens.get(token);
   if (!t || t.service !== service) return 'invalid';
   return now() < t.expiresAt ? 'ok' : 'expired';
+}
+
+/** Bandwidth: an API user, Basic auth on every request. Announces itself as fake. */
+export const DEMO_BANDWIDTH_USER = {
+  username: 'demo-api-user',
+  password: 'demo-only-not-a-real-password',
+} as const;
+
+export function checkBasic(headers: Headers): 'ok' | 'missing' | 'invalid' {
+  const m = /^Basic\s+(\S+)$/i.exec(headers.get('authorization') ?? '');
+  if (!m) return 'missing';
+  let pair = '';
+  try { pair = atob(m[1]); } catch { return 'invalid'; }
+  return pair === DEMO_BANDWIDTH_USER.username + ':' + DEMO_BANDWIDTH_USER.password ? 'ok' : 'invalid';
 }
 
 /**

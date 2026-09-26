@@ -18,9 +18,21 @@
  */
 import type { TenantId } from '../../platform/types.ts';
 
+/** The platforms people have accounts on - the workforce's columns. */
 export type CommsSource = 'teams' | 'genesys' | 'webex';
 
 export const COMMS_SOURCES: readonly CommsSource[] = ['teams', 'genesys', 'webex'];
+
+/**
+ * A CARRIER: it sees calls and holds no users, so it is a source of signals
+ * and never a workforce platform. Kept out of CommsSource on purpose - every
+ * per-platform table in the workforce iterates CommsSource, and a Bandwidth
+ * column of dashes in each of them would be noise.
+ */
+export type CarrierSource = 'bandwidth';
+
+/** Anything that can witness a signal: a platform or a carrier. */
+export type SignalSource = CommsSource | CarrierSource;
 
 /** The agency split, per the customer: an agency, a contractor, or unknown. */
 export type AgencyAssignment =
@@ -89,4 +101,15 @@ export type CommsTenantConfig = {
    * un-place every user at that site.
    */
   webexLocationFacility: Record<string, string>;
+  /**
+   * The SIP trunking carrier, when the customer runs one we can read.
+   *
+   * `peerTrunk` maps a Bandwidth SIP peer (a "location") to the SBC FQDN the
+   * Teams Direct Routing report names - by PEER ID, because peer names are
+   * edited in a portal. It is what lets the carrier's view of a trunk and
+   * Teams's view of the same trunk land on ONE subject. A peer missing from
+   * it still produces signals, under its own name, and is reported so that
+   * someone adds it.
+   */
+  bandwidth?: { accountId: string; peerTrunk: Record<string, string> };
 };

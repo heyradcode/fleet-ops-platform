@@ -19,7 +19,7 @@
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import {
-  DEMO_CLIENT, DEMO_WEBEX_TOKEN, directory, injectFault, MOCK_PREFIXES, resetMockState,
+  DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_WEBEX_TOKEN, directory, injectFault, MOCK_PREFIXES, resetMockState,
   splitTarget, type ServiceId,
 } from '../src/integrations/comms/mock/index.ts';
 import type { MockRequest, MockResponse } from '../src/integrations/comms/mock/kernel.ts';
@@ -37,9 +37,9 @@ async function readBody(req: IncomingMessage): Promise<string> {
 
 function send(res: ServerResponse, out: MockResponse): void {
   const headers: Record<string, string> = { ...out.headers };
-  if (out.body !== undefined) headers['Content-Type'] = 'application/json';
+  if (out.body !== undefined) headers['Content-Type'] = out.xml ? 'application/xml' : 'application/json';
   res.writeHead(out.status, headers);
-  res.end(out.body === undefined ? undefined : JSON.stringify(out.body, null, 2));
+  res.end(out.body === undefined ? undefined : out.xml ? String(out.body) : JSON.stringify(out.body, null, 2));
 }
 
 /** `/__mock/...`: test controls that no vendor has. */
@@ -51,8 +51,8 @@ function control(path: string, query: URLSearchParams): MockResponse | undefined
   if (path === '/__mock/fault') {
     const service = query.get('service') as ServiceId | null;
     const status = Number(query.get('status') ?? 429) as 429 | 500 | 502 | 503;
-    if (!service || !['teams', 'genesys', 'webex'].includes(service)) {
-      return { status: 400, body: { message: 'service must be teams, genesys or webex' } };
+    if (!service || !['teams', 'genesys', 'webex', 'bandwidth'].includes(service)) {
+      return { status: 400, body: { message: 'service must be teams, genesys, webex or bandwidth' } };
     }
     injectFault(service, status, Number(query.get('times') ?? 1), Number(query.get('retryAfter') ?? 2));
     return { status: 200, body: { injected: { service, status } } };
@@ -128,6 +128,11 @@ function catalogue() {
       'GET  ' + ORIGIN + '/webex/v1/meetings?meetingType=meeting',
       'GET  ' + ORIGIN + '/webex-analytics/v1/meeting/qualities?meetingId={instanceId}',
       'GET  ' + ORIGIN + '/webex-calling/v1/cdr_feed?startTime=<iso>&endTime=<iso>',
+    ],
+    bandwidth: [
+      'GET  ' + ORIGIN + '/bandwidth/api/accounts/9900001/sites   (Basic ' + DEMO_BANDWIDTH_USER.username + ':...)',
+      'GET  ' + ORIGIN + '/bandwidth/api/accounts/9900001/sites/{siteId}/sippeers',
+      'GET  ' + ORIGIN + '/bandwidth-insights/api/v1/accounts/9900001/voice/summary?startTime=<iso>&endTime=<iso>&groupBy=location   (PLACEHOLDER shape)',
     ],
     controls: [
       'POST ' + ORIGIN + '/__mock/fault?service=genesys&status=429&times=2',

@@ -28,7 +28,7 @@ import { b64urlEncode } from '../../platform/crypto.ts';
 import { drainPages, type HttpPage, type PageCursor } from '../http.ts';
 import { log } from '../../platform/logger.ts';
 import type { TenantId } from '../../platform/types.ts';
-import type { CommsSource } from './types.ts';
+import type { CommsSource, SignalSource } from './types.ts';
 
 export type FetchFn = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -41,6 +41,13 @@ export type CommsEndpoints = {
   webexApi: string;
   /** Meeting qualities live on their own host. */
   webexAnalytics: string;
+  /** Bandwidth's account API: sites and SIP peers, in XML. */
+  bandwidthApi: string;
+  /**
+   * Bandwidth Insights: per-trunk call outcomes. PLACEHOLDER HOST AND PATHS -
+   * see comms/bandwidth.ts; the shape is unverified.
+   */
+  bandwidthInsights: string;
 };
 
 export const REAL_ENDPOINTS: CommsEndpoints = {
@@ -50,6 +57,8 @@ export const REAL_ENDPOINTS: CommsEndpoints = {
   genesysApi: 'https://api.use2.us-gov-pure.cloud',
   webexApi: 'https://webexapis.com/v1',
   webexAnalytics: 'https://analytics.webexapis.com/v1',
+  bandwidthApi: 'https://api.bandwidth.com/api',
+  bandwidthInsights: 'https://insights.bandwidth.com/api/v1',
 };
 
 /** In production these come from Secrets Manager, per tenant, cached across warm starts. */
@@ -57,15 +66,17 @@ export type CommsCredentials = {
   entra?: { tenantId: string; clientId: string; clientSecret: string };
   genesys?: { clientId: string; clientSecret: string };
   webex?: { token: string };
+  /** An API user on the Bandwidth account. Basic auth, as the account API documents. */
+  bandwidth?: { username: string; password: string };
 };
 
 export class CommsHttpError extends Error {
-  readonly source: CommsSource;
+  readonly source: SignalSource;
   readonly status: number;
   /** 429 and 5xx are worth retrying; 400, 401 and 403 never are. See ProviderError. */
   readonly retryable: boolean;
 
-  constructor(source: CommsSource, status: number, message: string) {
+  constructor(source: SignalSource, status: number, message: string) {
     super('[' + source + '] ' + status + ' ' + message);
     this.name = 'CommsHttpError';
     this.source = source;
@@ -86,7 +97,7 @@ export type CommsClient = {
   tenantId: TenantId;
   endpoints: CommsEndpoints;
   /** GET or POST with auth and retries. Throws CommsHttpError on a final failure. */
-  request(source: CommsSource, url: string, init?: RequestInit): Promise<Response>;
+  request(source: SignalSource, url: string, init?: RequestInit): Promise<Response>;
   /** How many token requests have been made, per source. For the tests and the demo. */
   tokenRequests: Record<CommsSource, number>;
 };
@@ -150,12 +161,23 @@ export function createCommsClient(opts: {
     return fresh.token;
   }
 
-  async function request(source: CommsSource, url: string, init: RequestInit = {}): Promise<Response> {
+  async function authHeader(source: SignalSource): Promise<string> {
+    if (source === 'bandwidth') {
+      // No token to fetch or refresh: a Basic credential on every request.
+      const c = opts.credentials.bandwidth;
+      if (!c) throw new CommsHttpError(source, 0, 'no Bandwidth credentials configured');
+      return 'Basic ' + basic(c.username + ':' + c.password);
+    }
+    return 'Bearer ' + await tokenFor(source);
+  }
+
+  async function request(source: SignalSource, url: string, init: RequestInit = {}): Promise<Response> {
     let last: CommsHttpError | undefined;
     for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
       const headers = new Headers(init.headers);
-      headers.set('Authorization', 'Bearer ' + await tokenFor(source));
-      headers.set('Accept', 'application/json');
+      headers.set('Authorization', await authHeader(source));
+      // A caller asking for XML (Bandwidth's account API) keeps its Accept.
+      if (!headers.has('Accept')) headers.set('Accept', 'application/json');
       const res = await opts.fetch(url, { ...init, headers });
       if (res.ok) return res;
 

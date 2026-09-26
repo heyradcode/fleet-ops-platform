@@ -29,6 +29,16 @@ export const COMMS_CONFIG: Record<string, CommsTenantConfig> = {
       'ELP Field 2031': '2031',
       'Lubbock': '3308',
     },
+    bandwidth: {
+      accountId: '9900001',
+      peerTrunk: {
+        '540101': 'sbc1.voice.hhs.texas.example',
+        '540102': 'sbc2.voice.hhs.texas.example',
+        // 540103, the legacy PBX trunk, is deliberately absent: it has no
+        // Teams counterpart, and its signals must still arrive under its own
+        // name rather than be dropped.
+      },
+    },
   },
 };
 

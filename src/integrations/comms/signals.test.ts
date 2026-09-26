@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 
 import { setClock, fixedClock, now } from '../../platform/clock.ts';
 import {
-  DEMO_CLIENT, DEMO_WEBEX_TOKEN, directory, GENESYS_PLANTED_QUEUE, mockFetch, resetMockState, TEAMS_PLANTED,
+  DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, directory, GENESYS_PLANTED_QUEUE, mockFetch, resetMockState, TEAMS_PLANTED,
 } from './mock/index.ts';
 import { createCommsClient } from './client.ts';
 import { buildWorkforce } from './workforce.ts';
@@ -36,6 +36,7 @@ async function run(sources: CommsSource[] = ['teams', 'genesys', 'webex']) {
       entra: { tenantId: directory().entraTenantId, ...DEMO_CLIENT },
       genesys: { ...DEMO_CLIENT },
       webex: { token: DEMO_WEBEX_TOKEN },
+      bandwidth: { ...DEMO_BANDWIDTH_USER },
     },
     sleep: async () => {},
   });
@@ -71,6 +72,8 @@ test('signals: exactly the planted problems fire, and nothing else does', async 
     'teams facility-media-degradation ' + TEAMS_PLANTED.degradedFacility,
     'teams trunk-call-failure ' + TEAMS_PLANTED.failingTrunk,
     'webex facility-media-degradation ' + TEAMS_PLANTED.degradedFacility,
+    // The carrier's end of the same SBC, on the same subject - mapped by peer id.
+    'bandwidth trunk-call-failure ' + TEAMS_PLANTED.failingTrunk,
   ].sort());
 });
 
@@ -98,6 +101,11 @@ test('incidents: three, one per planted subject, the facility one from two servi
 
   const facility = incidents.find((i) => i.subject.kind === 'facility')!;
   assert.deepEqual(facility.sources, ['teams', 'webex']);
+
+  // Both ends of the SBC saw it, so the incident says where: the SBC itself.
+  const trunk = incidents.find((i) => i.subject.kind === 'trunk')!;
+  assert.deepEqual(trunk.sources, ['bandwidth', 'teams']);
+  assert.match(trunk.localisation.join(' '), /Both legs failing/);
 
   // Backlog and abandonment on one queue are one incident, not two pages.
   const queue = incidents.find((i) => i.subject.kind === 'queue')!;
