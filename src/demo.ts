@@ -65,6 +65,11 @@ import { checkInput, canUseTool } from './ai/guardrails.ts';
 import { b64urlEncode, b64urlDecodeText, setUuid, seededUuid } from './platform/crypto.ts';
 import { setClock, fixedClock, now, nowIso } from './platform/clock.ts';
 import { setRandom, seededRandom } from './platform/random.ts';
+import { mockFetch, directory as commsDirectory, DEMO_CLIENT, DEMO_WEBEX_TOKEN } from './integrations/comms/mock/index.ts';
+import { createCommsClient } from './integrations/comms/client.ts';
+import { buildWorkforce } from './integrations/comms/workforce.ts';
+import { commsConfigFor, HHS_DEMO_TENANT } from './integrations/comms/config.ts';
+import { COMMS_SOURCES } from './integrations/comms/types.ts';
 import { loadRunbooksFromDisk } from './platform/runbook-loader.node.ts';
 
 // ---------------------------------------------------------------------------
@@ -109,6 +114,7 @@ async function main() {
   if (wants('rest')) { await ensureData(); await sectionRest(); }
   if (wants('geo')) { await ensureData(); sectionGeo(); }
   if (wants('ai')) { await ensureData(); await sectionAi(); }
+  if (wants('comms')) await sectionComms();
 
   summary();
 }
@@ -759,6 +765,75 @@ async function sectionAi() {
 }
 
 // ===========================================================================
+// 10. Comms sources
+// ===========================================================================
+
+async function sectionComms() {
+  section('10', 'Comms: Teams, Genesys and Webex -> one workforce');
+
+  const config = commsConfigFor(HHS_DEMO_TENANT)!;
+  // Offline, `fetch` is the mock, answering the REAL hostnames. In a Lambda it
+  // is the global; nothing else in this path changes.
+  const client = createCommsClient({
+    tenantId: HHS_DEMO_TENANT,
+    fetch: mockFetch,
+    credentials: {
+      entra: { tenantId: commsDirectory().entraTenantId, ...DEMO_CLIENT },
+      genesys: { ...DEMO_CLIENT },
+      webex: { token: DEMO_WEBEX_TOKEN },
+    },
+  });
+  const report = await buildWorkforce(client, config);
+
+  note('Three platforms, three auth schemes, three paging dialects:');
+  const how: Record<string, string> = {
+    teams: 'client credentials in the form, @odata.nextLink',
+    genesys: 'client credentials in a Basic header, pageNumber from 1',
+    webex: 'service-app bearer token, Link header',
+  };
+  for (const source of COMMS_SOURCES) {
+    const f = report.fetched[source];
+    if (!f) continue;
+    write('   ' + source.padEnd(9) + String(f.rows).padStart(4) + ' rows  ' + f.pages + ' pages' +
+      (f.truncated ? '  [33mTRUNCATED[0m' : '') + '  ' + dim(how[source]) + '\n');
+  }
+
+  note('');
+  note('Split by agency - from the email domain, lower-cased first:');
+  const agencies = Object.values(config.agencyDomains);
+  write('   ' + ''.padEnd(28) + COMMS_SOURCES.map((s) => s.padStart(9)).join('') + '\n');
+  const row = (label: string, pick: (s: NonNullable<(typeof report.byPlatform)['teams']>) => number) =>
+    write('   ' + label.padEnd(28) + COMMS_SOURCES.map((src) => {
+      const split = report.byPlatform[src];
+      return String(split ? pick(split) : '-').padStart(9);
+    }).join('') + '\n');
+  for (const a of agencies) row(a, (s) => s.byAgency[a] ?? 0);
+  for (const d of config.contractorDomains) row('contractor ' + d.split('.')[0], (s) => s.contractorsByDomain[d] ?? 0);
+  row('unknown domain', (s) => Object.values(s.unknownByDomain).reduce((x, y) => x + y, 0));
+  write('   ' + dim('not counted: ' +
+    (report.byPlatform.teams?.excluded.resourceAccounts ?? 0) + ' Teams resource accounts (not staff), ' +
+    (report.byPlatform.genesys?.excluded.inactive ?? 0) + ' inactive Genesys users') + '\n');
+
+  note('');
+  note('Split by facility - Entra LC= code first, Webex location second:');
+  for (const f of report.byFacility) {
+    write('   LC=' + f.code.padEnd(25) + COMMS_SOURCES.map((s) => String(f.counts[s] ?? 0).padStart(9)).join('') + '\n');
+  }
+  const agents = report.members.filter((m) => m.accounts.genesys && m.facility);
+  write('   ' + dim(agents.length + ' Genesys agents placed through the join - Genesys holds no facility itself') + '\n');
+
+  note('');
+  note('What could not be placed is reported, never guessed:');
+  const reasons = new Map<string, string[]>();
+  for (const u of report.unplaced) reasons.set(u.reason, [...(reasons.get(u.reason) ?? []), u.email]);
+  for (const [reason, emails] of reasons) {
+    write('   ' + reason.padEnd(26) + String(emails.length).padStart(4) + '  ' + dim('e.g. ' + emails[0]) + '\n');
+  }
+  write('   ' + dim(report.facilityConflicts.length + ' Entra/Webex facility conflicts, ' +
+    report.unmappedWebexLocations.length + ' unmapped Webex locations') + '\n');
+}
+
+// ===========================================================================
 
 async function ensureData() {
   ensurePrincipals();
@@ -791,7 +866,7 @@ function summary() {
     '   Bedrock  : ' + bedrockUsage.calls + ' model calls, ' + bedrockUsage.embeddings + ' embeddings, ' +
       bedrockUsage.inputTokens + ' in / ' + bedrockUsage.outputTokens + ' out\n' +
     '\n' + dim('   docs/  for the written explanations   infra/terraform/  for the IaC\n' +
-      '   pnpm start --only=<auth|ingest|scenarios|data|events|graphql|rest|geo|ai>') + '\n\n',
+      '   pnpm start --only=<auth|ingest|scenarios|data|events|graphql|rest|geo|ai|comms>') + '\n\n',
   );
 }
 

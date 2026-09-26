@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 139 tests, no network. Picks up web/ tests too.
+pnpm test                       # 150 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180
 pnpm web:build                  # typechecks web/ AND builds it
@@ -32,7 +32,7 @@ pnpm mock                       # mock Teams/Genesys/Webex APIs, http://127.0.0.
 pnpm verify                     # all four checks, in order
 ```
 
-`--only=` takes: `auth ingest scenarios data events graphql rest geo ai`.
+`--only=` takes: `auth ingest scenarios data events graphql rest geo ai comms`.
 Note `pnpm start --only=x` needs no `--` separator; npm did.
 
 `pnpm verify` runs typecheck, tests, the demo and the web build in that order.
@@ -280,6 +280,8 @@ src/integrations/connector.ts  the one contract: poll() and onWebhook()
 src/integrations/controller/  Meraki, Mist, Aruba Central
 src/integrations/probe.ts  the external plane — the only thing that sees silence
 src/integrations/splunk/   outbound HEC (a bus consumer) + catalogued SPL search
+src/integrations/comms/  Teams, Genesys, Webex: client (tokens, retries, paging),
+                 connectors, and the workforce join - agency + facility split
 src/integrations/comms/mock/  Teams (Graph), Genesys, Webex mocks: mockFetch on the
                  real hostnames; scripts/mock-vendors.ts serves them on localhost
 src/pipeline/    collect → normalise → stream → enrich → evaluate → correlate
