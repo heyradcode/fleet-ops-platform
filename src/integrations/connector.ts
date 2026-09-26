@@ -38,8 +38,11 @@ import type { HttpPage, PageCursor, RawBatch } from './http.ts';
 import { log } from '../platform/logger.ts';
 import { random } from '../platform/random.ts';
 
-/** The three cloud-managed estates this platform knows how to talk to. */
-export type ControllerId = 'meraki' | 'mist' | 'aruba-central';
+/**
+ * The pollers this platform knows how to talk to: three vendor clouds, and
+ * SolarWinds Orion - an on-premises poller that watches every vendor.
+ */
+export type ControllerId = 'meraki' | 'mist' | 'aruba-central' | 'solarwinds';
 
 /**
  * One endpoint on one cloud.
@@ -77,8 +80,12 @@ export type ConnectorContext = {
 
 export type Connector = {
   controller: ControllerId;
-  vendor: VendorId;
-  platform: PlatformId;
+  /**
+   * Descriptive only - the pipeline never reads it. A multi-vendor poller
+   * (SolarWinds) says so; its observations carry each DEVICE's real vendor.
+   */
+  vendor: VendorId | 'multi-vendor';
+  platform: PlatformId | 'solarwinds-orion';
   /** How the vendor authenticates us. Handy for the docs and for debugging. */
   auth: 'api-key-header' | 'oauth2-client-credentials' | 'basic' | 'bearer-token';
   /**

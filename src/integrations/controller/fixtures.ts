@@ -160,6 +160,45 @@ export const merakiWebhookAlert = {
 };
 
 // ---------------------------------------------------------------------------
+// SolarWinds Orion (SWIS) - an on-prem poller, so it sees the boxes no cloud
+// manages: the core, the distribution layer, the WAN edge.
+// ---------------------------------------------------------------------------
+
+/**
+ * Orion.Nodes. Planted: `dis-dal01-04` is DEAD - Down by ICMP - and the three
+ * access switches behind it are Unreachable. Alongside, the traps: a node whose
+ * Caption is an admin's label (resolves by IP only), an Unmanaged node (muted
+ * for maintenance), Orion's -2 "unknown" CPU sentinel, a status Orion derived
+ * from a threshold (Warning), and a node the inventory has never heard of.
+ * Captions carry the estate's SNMP sysName; IPs its management addresses.
+ */
+export const solarwindsNodes = [
+  { NodeID: 1001, Caption: 'cor-dal01-01.acme.internal', IPAddress: '10.11.0.1', Status: 1, StatusDescription: 'Node status is Up.', UnManaged: false, CPULoad: 38, LastSystemUpTimePollUtc: '2026-09-08T14:29:10.1234567' },
+  { NodeID: 1002, Caption: 'dis-dal01-03.acme.internal', IPAddress: '10.11.0.3', Status: 1, StatusDescription: 'Node status is Up.', UnManaged: false, CPULoad: 41, LastSystemUpTimePollUtc: '2026-09-08T14:29:11.0000000' },
+  { NodeID: 1003, Caption: 'dis-dal01-04.acme.internal', IPAddress: '10.11.0.4', Status: 2, StatusDescription: 'Node status is Down.', UnManaged: false, CPULoad: -2, LastSystemUpTimePollUtc: '2026-09-08T14:29:12.0000000' },
+  { NodeID: 1004, Caption: 'DAL-WAN-EDGE', IPAddress: '10.11.0.2', Status: 1, StatusDescription: 'Node status is Up.', UnManaged: false, CPULoad: 22, LastSystemUpTimePollUtc: '2026-09-08T14:29:13.0000000' },
+  { NodeID: 1005, Caption: 'acc-dal01-06.acme.internal', IPAddress: '10.11.0.6', Status: 12, StatusDescription: 'Node status is Unreachable.', UnManaged: false, CPULoad: -2, LastSystemUpTimePollUtc: '2026-09-08T14:29:14.0000000' },
+  { NodeID: 1006, Caption: 'acc-dal01-08.acme.internal', IPAddress: '10.11.0.8', Status: 12, StatusDescription: 'Node status is Unreachable.', UnManaged: false, CPULoad: -2, LastSystemUpTimePollUtc: '2026-09-08T14:29:14.0000000' },
+  { NodeID: 1007, Caption: 'acc-dal01-10.acme.internal', IPAddress: '10.11.0.10', Status: 12, StatusDescription: 'Node status is Unreachable.', UnManaged: false, CPULoad: -2, LastSystemUpTimePollUtc: '2026-09-08T14:29:14.0000000' },
+  { NodeID: 1008, Caption: 'acc-dal01-05.acme.internal', IPAddress: '10.11.0.5', Status: 9, StatusDescription: 'Node status is Unmanaged.', UnManaged: true, CPULoad: -2, LastSystemUpTimePollUtc: '2026-09-08T11:02:00.0000000' },
+  { NodeID: 1009, Caption: 'acc-dal01-07.acme.internal', IPAddress: '10.11.0.7', Status: 3, StatusDescription: 'Node status is Warning.', UnManaged: false, CPULoad: 64, LastSystemUpTimePollUtc: '2026-09-08T14:29:15.0000000' },
+  { NodeID: 1010, Caption: 'hhs-ups-mdf-01', IPAddress: '10.99.0.9', Status: 1, StatusDescription: 'Node status is Up.', UnManaged: false, CPULoad: 5, LastSystemUpTimePollUtc: '2026-09-08T14:29:16.0000000' },
+];
+
+/**
+ * Orion.NPM.Interfaces, with the node's Caption and IP navigated in (SWQL's
+ * `i.Node.Caption`). Planted: the core's port facing the dead distribution
+ * switch is oper-down - the far end's own witness. And a port an engineer
+ * SHUT (admin-down), whose oper-down must not become an alarm.
+ */
+export const solarwindsInterfaces = [
+  { InterfaceID: 50011, NodeID: 1001, NodeCaption: 'cor-dal01-01.acme.internal', NodeIPAddress: '10.11.0.1', Name: 'GigabitEthernet1/0/3', OperStatus: 1, AdminStatus: 1, LastSync: '2026-09-08T09:29:10.0000000' },
+  { InterfaceID: 50012, NodeID: 1001, NodeCaption: 'cor-dal01-01.acme.internal', NodeIPAddress: '10.11.0.1', Name: 'GigabitEthernet1/0/4', OperStatus: 2, AdminStatus: 1, LastSync: '2026-09-08T09:29:10.0000000' },
+  { InterfaceID: 50021, NodeID: 1002, NodeCaption: 'dis-dal01-03.acme.internal', NodeIPAddress: '10.11.0.3', Name: 'GigabitEthernet1/0/2', OperStatus: 2, AdminStatus: 2, LastSync: '2026-09-08T09:29:11.0000000' },
+  { InterfaceID: 50041, NodeID: 1004, NodeCaption: 'DAL-WAN-EDGE', NodeIPAddress: '10.11.0.2', Name: 'Gi1/0/1', OperStatus: 1, AdminStatus: 1, LastSync: '2026-09-08T09:29:13.0000000' },
+];
+
+// ---------------------------------------------------------------------------
 // Paging
 // ---------------------------------------------------------------------------
 

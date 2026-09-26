@@ -40,7 +40,11 @@ export const UTILISATION_THRESHOLDS = { warning: 80, critical: 95 } as const;
  * They are listed together and flagged rather than left to be inferred.
  */
 const METRIC_THRESHOLDS: Record<MetricKind, [warning: number, critical: number]> = {
-  'reachability': [1, 1],             // INVERTED: 1 reachable, 0 is the failure
+  // INVERTED: 1 reachable, 0 is the failure. [0, 0], NOT [1, 1]: with an
+  // inverted `value <= critical` test, [1, 1] made every REACHABLE device
+  // critical - invisible to the alarm rules (they test value === 0) but
+  // painted on the map and handed to the agent as critical evidence.
+  'reachability': [0, 0],
   'optical-rx-power': [-14, -18],     // INVERTED: dBm, more negative is worse
   'cpu-utilisation': [UTILISATION_THRESHOLDS.warning, UTILISATION_THRESHOLDS.critical],
   'memory-utilisation': [80, 95],     // percent

@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 220 tests, no network. Picks up web/ tests too.
+pnpm test                       # 229 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180
 pnpm web:build                  # typechecks web/ AND builds it
@@ -32,7 +32,7 @@ pnpm mock                       # mock Teams/Genesys/Webex APIs, http://127.0.0.
 pnpm verify                     # all four checks, in order
 ```
 
-`--only=` takes: `auth ingest scenarios data events graphql rest geo ai comms`.
+`--only=` takes: `auth ingest scenarios data events graphql rest geo ai comms solarwinds`.
 Note `pnpm start --only=x` needs no `--` separator; npm did.
 
 `pnpm verify` runs typecheck, tests, the demo and the web build in that order.
@@ -126,6 +126,19 @@ one, change the test deliberately rather than making it pass.
   controller, or our own probe. The far end of a link counts too — same plane,
   different chassis. `power-fault` is exempt: a chassis reporting its own dead
   PSU has no second opinion available.
+- **SolarWinds is a poller WE run, so it observes from two planes.** Its ICMP
+  node status is EXTERNAL - the same plane as our probe, so a tenant running
+  both has one external witness, not two. The SNMP counters it relays (CPU,
+  interfaces) are DEVICE. Its ALERTS are never ingested: Orion's conclusions
+  from the same polls would be one witness twice. Only Up/Down/Unreachable
+  are measurements - Warning/Critical are Orion threshold opinions, Unmanaged
+  is muted, CPU -2 is "unknown", an admin-down port is a decision. SWQL comes
+  from a fixed catalogue with values BOUND as declared `@parameters`; no time
+  filter, because Orion `LastSync` columns have no zone.
+- **Inverted metric thresholds are easy to write backwards and nothing fails.**
+  Reachability was [1, 1] - every reachable device `critical` - for a release;
+  alarms test `value === 0` directly, so only the map and the agent were
+  wrong. `classify.test.ts` pins both inverted metrics now.
 - **Duplicates collapse BEFORE the rules run.** `collapseDuplicates` folds
   records sharing a `dedupeKey`. Skip it and `evaluate` counts one port flap as
   four pieces of evidence and pages somebody.

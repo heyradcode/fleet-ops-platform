@@ -28,9 +28,10 @@ import { CircuitBreaker } from '../connector.ts';
 import { meraki } from './meraki.ts';
 import { mist } from './mist.ts';
 import { arubaCentral } from './aruba-central.ts';
+import { solarwinds } from './solarwinds.ts';
 
 /** Every controller this platform knows how to poll. */
-export const connectors: Connector[] = [meraki, mist, arubaCentral];
+export const connectors: Connector[] = [meraki, mist, arubaCentral, solarwinds];
 
 /**
  * Which controllers each customer actually runs.
@@ -57,6 +58,12 @@ const TENANT_CONTROLLERS: Record<TenantId, ControllerId[]> = {
   // pipeline/steps.ts, where single-plane alarms are raised but held back from
   // paging unless the kind is exempt.
   'orbital-health': [],
+
+  // The voice / contact-centre customer runs SolarWinds on premises and no
+  // vendor cloud. SolarWinds alone supplies TWO planes - its ICMP poll is
+  // external, the SNMP counters it relays are device - which is what lets a
+  // dead distribution switch corroborate with no cloud controller at all.
+  'hhs-demo': ['solarwinds'],
 };
 
 /** Default for a tenant with no explicit configuration: no controller. */

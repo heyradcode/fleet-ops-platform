@@ -21,7 +21,7 @@ import { assertSameTenant, tenantScopedSessionPolicy, CrossTenantAccessError } f
 
 import { buildIngestWorkflow } from './pipeline/ingest-workflow.ts';
 import {
-  runScenarioFeeds, collapseDuplicates, resolveLocations,
+  runScenarioFeeds, collapseDuplicates, resolveLocations, collectOne, normaliseControllers,
   evaluate, detectIncidents, incidentDepth,
 } from './pipeline/steps.ts';
 import { connectors, connectorsFor, breakers } from './integrations/controller/registry.ts';
@@ -121,6 +121,9 @@ async function main() {
   if (wants('geo')) { await ensureData(); sectionGeo(); }
   if (wants('ai')) { await ensureData(); await sectionAi(); }
   if (wants('comms')) await sectionComms();
+  // LAST, deliberately: it loads the HHS tenant's estate, and loading another
+  // tenant's estate regenerates the shared one (see loadEstate in CLAUDE.md).
+  if (wants('solarwinds')) await sectionSolarwinds();
 
   summary();
 }
@@ -984,6 +987,48 @@ async function sectionComms() {
 }
 
 // ===========================================================================
+// 11. SolarWinds
+// ===========================================================================
+
+async function sectionSolarwinds() {
+  section('11', 'SolarWinds: an on-prem poller, two planes, no cloud at all');
+  const hhs = verifyToken(signDemoToken({
+    sub: 'cognito_hhs_neteng', email: 'neteng@hhs.texas.example',
+    'custom:tenantId': 'hhs-demo', 'cognito:groups': ['admin'],
+  }));
+  loadEstate('hhs-demo');
+  const inventory = getInventory(hhs);
+  inventory.takeUnresolved();
+
+  note('What SolarWinds reports, and which plane it comes from:');
+  for (const c of connectorsFor(hhs)) {
+    for (const r of c.resources) write('   ' + (c.controller + '/' + r.name).padEnd(26) + r.plane.padEnd(10) + dim(planeGloss(r.plane)) + '\n');
+  }
+  write('   ' + dim('its ALERTS are not ingested - Orion conclusions from the same polls would be one witness twice') + '\n');
+
+  const since = new Date(now() - 6 * 3600_000).toISOString();
+  const collected = [];
+  for (const c of connectorsFor(hhs)) collected.push(await collectOne({ connector: c, input: { principal: hhs, since } }));
+  const observations = resolveLocations(hhs, collapseDuplicates(normaliseControllers(hhs, inventory, collected)));
+  const unresolved = inventory.takeUnresolved();
+
+  note('');
+  note('Not everything Orion says is a measurement:');
+  write('   ' + dim('Unmanaged (muted for maintenance), Warning (an Orion threshold opinion), CPU -2 ("unknown"),') + '\n');
+  write('   ' + dim('and an admin-shut port - all skipped. ' + observations.length + ' observations kept; unresolved: ' +
+    (unresolved.join(', ') || 'none') + ' - counted and named') + '\n');
+
+  note('');
+  note('A dead distribution switch, seen only by the poller - and named as the cause:');
+  const alarms = evaluate(hhs, observations);
+  for (const a of alarms) write('   ' + a.kind.padEnd(20) + a.deviceId.padEnd(20) + dim('planes: ' + a.planes.join('+')) + '\n');
+  for (const i of detectIncidents(hhs, alarms)) {
+    write('   ' + '\x1b[31mINCIDENT\x1b[0m  ' + i.title + '  ' + dim('root cause ' + i.rootCauseDeviceId) + '\n');
+  }
+  write('   ' + dim('the core link-down is recorded but not promoted alone - one box, one plane, no second witness') + '\n');
+}
+
+// ===========================================================================
 
 async function ensureData() {
   ensurePrincipals();
@@ -1016,7 +1061,7 @@ function summary() {
     '   Bedrock  : ' + bedrockUsage.calls + ' model calls, ' + bedrockUsage.embeddings + ' embeddings, ' +
       bedrockUsage.inputTokens + ' in / ' + bedrockUsage.outputTokens + ' out\n' +
     '\n' + dim('   docs/  for the written explanations   infra/terraform/  for the IaC\n' +
-      '   pnpm start --only=<auth|ingest|scenarios|data|events|graphql|rest|geo|ai|comms>') + '\n\n',
+      '   pnpm start --only=<auth|ingest|scenarios|data|events|graphql|rest|geo|ai|comms|solarwinds>') + '\n\n',
   );
 }
 
@@ -1036,7 +1081,7 @@ main().catch((err) => {
 /** One line on what each plane actually knows. Used by the ingest section. */
 function planeGloss(plane: string): string {
   switch (plane) {
-    case 'device': return 'the box detected it; the cloud only relayed it';
+    case 'device': return 'the box detected it; the cloud or poller only relayed it';
     case 'controller': return 'the cloud formed the opinion, not the device';
     case 'external': return 'we looked from outside; no vendor involved';
     default: return '';
