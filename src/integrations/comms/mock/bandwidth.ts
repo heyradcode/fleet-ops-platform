@@ -38,7 +38,7 @@ import { now } from '../../../platform/clock.ts';
 import { escapeXml } from '../../../platform/xml.ts';
 import { createApp, type MockApp, type MockRequest, type MockResponse } from './kernel.ts';
 import { streamFor } from './directory.ts';
-import { ACTIVITY_WINDOW_MS, activityAnchor, PLANTED_WINDOW_MS } from './time.ts';
+import { ACTIVITY_WINDOW_MS, activityAnchor, activityKey, PLANTED_WINDOW_MS, plantedActive } from './time.ts';
 
 export const BANDWIDTH_ACCOUNT = '9900001';
 const SITE = { id: '88001', name: 'HHS Voice', description: 'Teams Direct Routing and legacy PBX trunks' };
@@ -113,7 +113,7 @@ let cache: { anchor: number; attempts: Attempt[] } | undefined;
 
 function attempts(): Attempt[] {
   const anchor = activityAnchor();
-  if (cache?.anchor !== anchor) cache = { anchor, attempts: generate(anchor) };
+  if (cache?.anchor !== activityKey()) cache = { anchor: activityKey(), attempts: generate(anchor) };
   return cache.attempts;
 }
 
@@ -124,7 +124,7 @@ function generate(anchor: number): Attempt[] {
   for (const peer of BANDWIDTH_PEERS) {
     const base = peer.peerId === '540103' ? 0.3 : 1.1;   // per minute, per direction
     for (let t = anchor - ACTIVITY_WINDOW_MS; t < anchor; t += 60_000) {
-      const planted = peer.peerId === BANDWIDTH_PLANTED.failingPeerId && t >= incidentFrom;
+      const planted = plantedActive() && peer.peerId === BANDWIDTH_PLANTED.failingPeerId && t >= incidentFrom;
       for (const direction of ['inbound', 'outbound'] as const) {
         // A dead SBC stops SENDING, so outbound all but vanishes; inbound
         // keeps arriving from the PSTN and fails at the carrier.

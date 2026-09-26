@@ -21,6 +21,7 @@
 import type { MockApp, MockRequest, MockResponse } from './kernel.ts';
 import { notModelled, resetMockState as resetKernelState } from './kernel.ts';
 import { resetEntraChanges, teamsGraph, teamsLogin } from './teams.ts';
+import { setPlanted } from './time.ts';
 import { genesysApi, genesysLogin } from './genesys.ts';
 import { webexAnalytics, webexApi, webexCallingAnalytics } from './webex.ts';
 import { bandwidthApi, bandwidthInsights } from './bandwidth.ts';
@@ -32,11 +33,13 @@ export {
 export { HELIX_PLANTED } from './helix.ts';
 export { BANDWIDTH_ACCOUNT, BANDWIDTH_PEERS, BANDWIDTH_PLANTED } from './bandwidth.ts';
 export { mutateEntraUser, removeEntraUser, DELTA_TOKEN_TTL_MS } from './teams.ts';
+export { setPlanted } from './time.ts';
 
 /** Tests call this between cases: tokens, faults, and Entra directory changes. */
 export function resetMockState(): void {
   resetKernelState();
   resetEntraChanges();
+  setPlanted(true);
 }
 export { directory, agencyOf, facilityCodeOf, AGENCY_DOMAINS, FACILITIES } from './directory.ts';
 export { PLANTED as TEAMS_PLANTED, TEAMS_TRUNKS } from './teams.ts';

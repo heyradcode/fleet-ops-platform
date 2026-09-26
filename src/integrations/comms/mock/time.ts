@@ -25,6 +25,25 @@ export function activityAnchor(): number {
   return Math.floor(now() / ANCHOR_MS) * ANCHOR_MS;
 }
 
+/**
+ * Whether the planted problems are happening. On by default; tests and the
+ * demo turn it off to show a RECOVERY.
+ *
+ * It gates the DEGRADATION only - SBC2 failing, Houston's loss, the queue
+ * surge - never the recent traffic around them. A recovered SBC still carries
+ * calls, so it still produces a healthy measurement, and a healthy
+ * measurement is exactly what the incident lifecycle needs before it will
+ * resolve anything (see comms/lifecycle.ts).
+ */
+let planted = true;
+export function setPlanted(on: boolean): void { planted = on; }
+export function plantedActive(): boolean { return planted; }
+
+/** The activity caches' key: the anchor, and whether the plants are on. Flipping either regenerates. */
+export function activityKey(): number {
+  return activityAnchor() + (planted ? 0 : 1);
+}
+
 export function iso(ms: number): string {
   return new Date(ms).toISOString();
 }

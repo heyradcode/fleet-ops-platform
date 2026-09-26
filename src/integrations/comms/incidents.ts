@@ -86,6 +86,21 @@ export type CommsIncident = {
   context?: IncidentContext;
   openedAt: string;
   evidence: string[];
+
+  // --- Lifecycle - see lifecycle.ts. correlateAlarms sets the defaults; the
+  // --- reconciliation is what carries them across polls.
+  status: 'open' | 'resolved';
+  /** The last poll that raised it. */
+  lastSeenAt: string;
+  /** Consecutive polls that MEASURED the subject healthy. Resolves at RESOLVE_AFTER_CLEAR_POLLS. */
+  clearPolls: number;
+  /** Times it came back within the reopen window after resolving. */
+  reopenCount: number;
+  /** The worst it has been, which the current severity may have eased from. */
+  peakSeverity: Severity;
+  resolvedAt?: string;
+  /** Why it is where it is: "measured healthy 2/3", "not re-verified: webex unavailable". */
+  lifecycleNote?: string;
 };
 
 const RANK: Record<Severity, number> = { ok: 0, info: 1, warning: 2, critical: 3 };
@@ -182,6 +197,11 @@ export function correlateAlarms(alarms: CommsAlarm[]): CommsIncident[] {
       sources: [...new Set(group.flatMap((a) => a.sources))].sort(),
       localisation: group.map((a) => a.localisation).filter((l): l is string => !!l),
       openedAt,
+      status: 'open',
+      lastSeenAt: openedAt,
+      clearPolls: 0,
+      reopenCount: 0,
+      peakSeverity: worst(group.map((a) => a.severity)),
       evidence: group.flatMap((a) => a.evidence),
     };
   }).sort((a, b) => RANK[b.severity] - RANK[a.severity] || a.title.localeCompare(b.title));

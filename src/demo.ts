@@ -70,7 +70,7 @@ import { createCommsClient } from './integrations/comms/client.ts';
 import { runCommsPoll } from './integrations/comms/poll.ts';
 import { syncEntraDirectory } from './integrations/comms/entra-directory.ts';
 import { describeChange } from './integrations/comms/helix-context.ts';
-import { mutateEntraUser, injectFault, clearFaults } from './integrations/comms/mock/index.ts';
+import { mutateEntraUser, injectFault, clearFaults, setPlanted } from './integrations/comms/mock/index.ts';
 import { describeSource } from './integrations/comms/health.ts';
 import { commsToolsFor } from './ai/comms-tools.ts';
 import { commsConfigFor, HHS_DEMO_TENANT } from './integrations/comms/config.ts';
@@ -932,10 +932,41 @@ async function sectionComms() {
   for (const s of drill.health.sources.filter((x) => x.status !== 'healthy')) {
     write('   ' + '\x1b[31m' + s.source.padEnd(10) + '\x1b[0m' + dim(describeSource(s).slice(0, 150)) + '\n');
   }
-  write('   ' + drill.incidents.length + ' incidents still raised - ' +
-    drill.incidents.map((i) => i.subject.kind).join(', ') + '\n');
+  // Still OPEN, not silently resolved: a source that did not answer cannot
+  // vouch that its subject recovered. The lifecycle note says which is which.
+  write('   ' + drill.incidents.length + ' incidents still open - none resolved by a feed going quiet:' + '\n');
+  for (const i of drill.incidents) {
+    write('     ' + i.subject.name.padEnd(30) + dim(i.lifecycleNote ?? 'raised again this poll') + '\n');
+  }
   const heldHouston = drill.alarms.find((a) => a.subject.kind === 'facility' && !a.corroborated);
   if (heldHouston) write('   ' + dim('Houston held back: ' + heldHouston.heldBack) + '\n');
+  const sameIds = drill.incidents.every((i) => poll.incidents.some((p) => p.incidentId === i.incidentId));
+  write('   ' + dim('the incidents still open keep their ids and opening times - ' +
+    (sameIds ? 'one problem, one incident, across polls' : 'NEW IDS: continuity broken')) + '\n');
+
+  note('');
+  note('Recovery: the problems stop. Resolution needs a HEALTHY MEASUREMENT, three polls running:');
+  setPlanted(false);
+  let t = now();
+  for (let n = 1; n <= 3; n++) {
+    t += 5 * 60_000;
+    setClock(fixedClock(t));
+    const p = await runCommsPoll(hhsAdmin, client, config, now());
+    write('   poll +' + (n * 5) + 'min  ' + p.incidents.length + ' open' +
+      (p.resolved.length ? ', resolved: ' + p.resolved.map((r) => r.subject.name).join(', ') : '') +
+      '  ' + dim(p.incidents.map((i) => i.subject.name + ' (' + i.lifecycleNote + ')').join('; ')) + '\n');
+  }
+  note('');
+  note('And SBC2 fails again ten minutes later - the same incident reopens, it does not multiply:');
+  setPlanted(true);
+  t += 10 * 60_000;
+  setClock(fixedClock(t));
+  const flap = await runCommsPoll(hhsAdmin, client, config, now());
+  const back = flap.incidents.find((i) => i.subject.kind === 'trunk');
+  if (back) {
+    write('   ' + back.title + '  ' + dim(back.incidentId + ', reopened ' + back.reopenCount + 'x, open since ' +
+      back.openedAt.slice(11, 16) + 'Z') + '\n');
+  }
 }
 
 // ===========================================================================

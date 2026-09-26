@@ -25,7 +25,9 @@
 import type { ToolSpec } from '../aws/bedrock.ts';
 import type { Principal } from '../platform/types.ts';
 import type { Tool } from './tools.ts';
-import { commsAlarms, commsIncidents, commsVisibleTo, commsWorkforce } from '../integrations/comms/store.ts';
+import {
+  commsAlarms, commsIncidents, commsResolvedIncidents, commsVisibleTo, commsWorkforce,
+} from '../integrations/comms/store.ts';
 import { COMMS_SOURCES } from '../integrations/comms/types.ts';
 import { describeChange } from '../integrations/comms/helix-context.ts';
 import { describeSource, loadHealth } from '../integrations/comms/health.ts';
@@ -57,6 +59,10 @@ export const COMMS_TOOLS: Tool[] = [
       for (const i of incidents) {
         lines.push('INCIDENT ' + i.incidentId + ' [' + i.severity + '] ' + i.title +
           ' - sources: ' + i.sources.join(' + '));
+        lines.push('  open since ' + i.openedAt + ', last raised ' + i.lastSeenAt +
+          (i.peakSeverity !== i.severity ? ', peaked ' + i.peakSeverity : '') +
+          (i.reopenCount ? ', reopened ' + i.reopenCount + 'x (flapping)' : ''));
+        if (i.lifecycleNote) lines.push('  status: ' + i.lifecycleNote);
         // Where, before the evidence: it is what decides who gets the call.
         for (const l of i.localisation ?? []) lines.push('  where: ' + l);
         // Helix context. CANDIDATES - the tool says so in every line, so a
@@ -75,6 +81,10 @@ export const COMMS_TOOLS: Tool[] = [
       for (const a of held) {
         lines.push('HELD BACK [' + a.severity + '] ' + a.subject.name + ' ' + a.kind + ' - ' + a.heldBack);
         for (const e of a.evidence) lines.push('  evidence: ' + e);
+      }
+      const resolved = commsResolvedIncidents(principal, 5);
+      for (const r of resolved) {
+        lines.push('RESOLVED ' + r.incidentId + ' ' + r.title + ' - open ' + r.openedAt + ' to ' + r.resolvedAt);
       }
       // The rule behind the grouping, so the model does not "helpfully" join
       // a queue incident to a trunk incident on its own.

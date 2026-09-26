@@ -46,7 +46,7 @@ import {
   type MockApp, type MockRequest, type MockResponse,
 } from './kernel.ts';
 import { directory, FACILITIES, streamFor, type Person } from './directory.ts';
-import { ACTIVITY_WINDOW_MS, activityAnchor, iso, PLANTED_WINDOW_MS } from './time.ts';
+import { ACTIVITY_WINDOW_MS, activityAnchor, activityKey, iso, PLANTED_WINDOW_MS, plantedActive } from './time.ts';
 import { now } from '../../../platform/clock.ts';
 import { PLANTED as TEAMS_PLANTED } from './teams.ts';
 
@@ -181,7 +181,7 @@ let cache: { anchor: number; activity: Activity } | undefined;
 
 function activity(): Activity {
   const anchor = activityAnchor();
-  if (cache?.anchor !== anchor) cache = { anchor, activity: generate(anchor) };
+  if (cache?.anchor !== activityKey()) cache = { anchor: activityKey(), activity: generate(anchor) };
   return cache.activity;
 }
 
@@ -291,7 +291,7 @@ function meetingRecord(m: Meeting, instance: boolean) {
  */
 function qualityRecords(m: Meeting): Record<string, unknown>[] {
   const rng = streamFor('webex-quality-' + m.id);
-  const planted = m.start >= activityAnchor() - PLANTED_WINDOW_MS;
+  const planted = plantedActive() && m.start >= activityAnchor() - PLANTED_WINDOW_MS;
   return m.participants.map((p) => {
     const degraded = planted && p.facility?.code === TEAMS_PLANTED.degradedFacility;
     const minutes = Math.max(1, Math.round((m.end - m.start) / 60_000));

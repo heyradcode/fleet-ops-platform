@@ -44,7 +44,7 @@ import {
   type MockApp, type MockRequest, type MockResponse,
 } from './kernel.ts';
 import { directory, streamFor, type Person } from './directory.ts';
-import { ACTIVITY_WINDOW_MS, activityAnchor, iso, PLANTED_WINDOW_MS } from './time.ts';
+import { ACTIVITY_WINDOW_MS, activityAnchor, activityKey, iso, PLANTED_WINDOW_MS, plantedActive } from './time.ts';
 
 export const GENESYS_TOKEN_TTL_S = 86_399;
 
@@ -254,7 +254,7 @@ let cache: { anchor: number; conversations: Conversation[] } | undefined;
 
 function conversations(): Conversation[] {
   const anchor = activityAnchor();
-  if (cache?.anchor !== anchor) cache = { anchor, conversations: generate(anchor) };
+  if (cache?.anchor !== activityKey()) cache = { anchor: activityKey(), conversations: generate(anchor) };
   return cache.conversations;
 }
 
@@ -264,7 +264,7 @@ function generate(anchor: number): Conversation[] {
   const out: Conversation[] = [];
 
   for (const q of ref().queues) {
-    const planted = q.name === PLANTED_QUEUE;
+    const planted = plantedActive() && q.name === PLANTED_QUEUE;
     // Minute by minute, with a daytime curve: a contact centre at 3am and at
     // 11am are different systems.
     for (let t = anchor - ACTIVITY_WINDOW_MS; t < anchor; t += 60_000) {
@@ -395,7 +395,7 @@ function observationsQuery(req: MockRequest): MockResponse {
   const anchor = activityAnchor();
   const rng = streamFor('genesys-observations', anchor);
   const results = ref().queues.filter((q) => queues.has(q.id)).map((q) => {
-    const planted = q.name === PLANTED_QUEUE;
+    const planted = plantedActive() && q.name === PLANTED_QUEUE;
     const members = q.memberKeys.length;
     const onQueue = Math.max(1, Math.floor(members * (planted ? 0.5 : 0.6)));
     const interacting = planted ? onQueue : Math.floor(onQueue * (0.4 + rng() * 0.4));

@@ -1248,6 +1248,15 @@ button.topo-node:hover { border-color: var(--amber); }
 .comms-incident .exception { border-bottom: 0; cursor: default; }
 .comms-incident .exception:hover { background: none; }
 .comms-incident.is-noise { opacity: 0.5; }
+.comms-incident.is-resolved { opacity: 0.35; }
+
+.comms-lifecycle {
+  margin: 0;
+  padding: 0 12px 4px 86px;
+  font-family: var(--data);
+  font-size: 10.5px;
+  color: var(--dim);
+}
 
 .comms-evidence {
   list-style: none;

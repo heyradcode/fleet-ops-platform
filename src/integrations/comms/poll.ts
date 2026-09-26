@@ -21,6 +21,7 @@ import { putCommsRun, summariseWorkforce, type WorkforceSummary } from './store.
 import { attachHelixContext } from './helix-context.ts';
 import { dataQuality, observeRun, recordHealth, type IntegrationHealth } from './health.ts';
 import { errorLine, type SignalSource } from './types.ts';
+import { reconcileIncidents } from './lifecycle.ts';
 
 export type CommsPollResult = {
   /** The full roster, for the caller's use in memory. Never persisted; see store.ts. */
@@ -30,7 +31,12 @@ export type CommsPollResult = {
   workforce: WorkforceSummary;
   signals: CommsSignal[];
   alarms: CommsAlarm[];
+  /** Every incident OPEN after this poll - continuing ones keep their id and opening time. */
   incidents: CommsIncident[];
+  /** Incidents this poll resolved (measured healthy for enough consecutive polls). */
+  resolved: CommsIncident[];
+  /** Incident ids this poll reopened - the same problem back within the reopen window. */
+  reopened: string[];
   /** Per-source health and data quality, as recorded by this poll. */
   health: IntegrationHealth;
 };
@@ -62,8 +68,13 @@ export async function runCommsPoll(
   });
   // Context AFTER the rules have decided: Helix can explain an incident, it
   // cannot create or suppress one.
+  const unavailable = Object.keys(collected.errors) as SignalSource[];
   const helix = await attachHelixContext(client, config, correlateAlarms(alarms), at);
-  const incidents = helix.incidents;
+  // Continuity: this window's incidents folded into the open set. Resolution
+  // needs a HEALTHY MEASUREMENT - see lifecycle.ts - so the signals and the
+  // unavailable sources go in, not just the incidents.
+  const lifecycle = reconcileIncidents(principal, at, helix.incidents, collected.signals, unavailable);
+  const incidents = lifecycle.open;
   const workforce = summariseWorkforce(report, nowIso());
 
   const health = recordHealth(principal, at, observeRun({
@@ -71,6 +82,9 @@ export async function runCommsPoll(
     signalErrors: collected.errors, helixError: helix.error,
   }), dataQuality(report, collected.unmappedBandwidthPeers));
 
-  putCommsRun(principal, { workforce, alarms, incidents });
-  return { report, directorySync, workforce, signals: collected.signals, alarms, incidents, health };
+  putCommsRun(principal, { workforce, alarms });
+  return {
+    report, directorySync, workforce, signals: collected.signals, alarms, incidents,
+    resolved: lifecycle.resolved, reopened: lifecycle.reopened, health,
+  };
 }

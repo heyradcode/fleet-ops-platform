@@ -47,7 +47,7 @@ import {
 } from './kernel.ts';
 import { b64urlDecodeText, b64urlEncode } from '../../../platform/crypto.ts';
 import { directory, streamFor, type Person } from './directory.ts';
-import { ACTIVITY_WINDOW_MS, activityAnchor, iso, isoDuration, PLANTED_WINDOW_MS } from './time.ts';
+import { ACTIVITY_WINDOW_MS, activityAnchor, activityKey, iso, isoDuration, PLANTED_WINDOW_MS, plantedActive } from './time.ts';
 
 const GRAPH = 'https://graph.microsoft.com/v1.0';
 export const GRAPH_TOKEN_TTL_S = 3599;
@@ -325,7 +325,7 @@ let cache: { anchor: number; activity: Activity } | undefined;
 
 function activity(): Activity {
   const anchor = activityAnchor();
-  if (cache?.anchor !== anchor) cache = { anchor, activity: generate(anchor) };
+  if (cache?.anchor !== activityKey()) cache = { anchor: activityKey(), activity: generate(anchor) };
   return cache.activity;
 }
 
@@ -339,7 +339,7 @@ function generate(anchor: number): Activity {
   // --- Direct Routing: PSTN calls over the customer's own SBCs -------------
   const directRouting: Record<string, unknown>[] = [];
   const pstnCall = (p: Person, invite: number, trunk: string) => {
-    const planted = trunk === PLANTED.failingTrunk && invite >= incidentFrom;
+    const planted = plantedActive() && trunk === PLANTED.failingTrunk && invite >= incidentFrom;
     const failed = planted ? rng() < 0.7 : rng() < 0.02;
     const duration = failed ? 0 : 20 + Math.floor(rng() * 600);
     const inbound = rng() < 0.5;
@@ -400,7 +400,7 @@ function generate(anchor: number): Activity {
       ? incidentFrom + Math.floor(rng() * (PLANTED_WINDOW_MS - 60_000))
       : start + Math.floor(rng() * ACTIVITY_WINDOW_MS);
     const seconds = 30 + Math.floor(rng() * 1200);
-    const degraded = t0 >= incidentFrom &&
+    const degraded = plantedActive() && t0 >= incidentFrom &&
       (caller.facility?.code === PLANTED.degradedFacility || callee.facility?.code === PLANTED.degradedFacility);
     const recordId = id();
     const sessionId = id();

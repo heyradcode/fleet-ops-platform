@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 207 tests, no network. Picks up web/ tests too.
+pnpm test                       # 213 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180
 pnpm web:build                  # typechecks web/ AND builds it
@@ -182,6 +182,15 @@ one, change the test deliberately rather than making it pass.
   (healthy / degraded / down / not-configured, plus `stale` after 15 min);
   permanent limits are CAVEATS, never a status - a tile that is always amber
   teaches people to ignore amber. Data-quality issues always name the fix.
+- **A comms incident resolves on a HEALTHY MEASUREMENT, never on silence.**
+  One open incident per subject (`comms/lifecycle.ts`), keeping its id and
+  opening time across polls. A poll counts toward resolution only when every
+  kind in the incident was MEASURED `ok` on that subject; three in a row
+  resolve it. A source that was down, or too few samples, is UNKNOWN - it
+  neither counts nor resets. Still firing but held back RESETS. A dead SBC at
+  3am produces no signal at all, which is exactly why "no alarm" is not
+  "recovered". Back within 30 minutes reopens the same incident (flap count),
+  it does not open a new one.
 - **The workforce roster is never persisted.** The join links named people
   to agencies and buildings; the store keeps counts only, and the roster is
   rebuilt each poll. Comms reads need TENANT scope until an agency/facility

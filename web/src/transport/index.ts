@@ -71,6 +71,8 @@ export type CommsSnapshot = {
   heldBack: CommsAlarm[];
   /** Is every feed answering, and is what it says usable. */
   health?: IntegrationHealth;
+  /** Recently resolved, newest first. Shown dimmed below the open ones. */
+  resolved: CommsIncident[];
 };
 
 export type Transport = {

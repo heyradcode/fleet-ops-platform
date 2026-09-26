@@ -26,6 +26,7 @@ import type { Principal } from '../../platform/types.ts';
 import type { CommsAlarm, CommsIncident } from './incidents.ts';
 import type { UnplacedReason } from './types.ts';
 import { commsConfigFor } from './config.ts';
+import { openCommsIncidents, resolvedCommsIncidents } from './lifecycle.ts';
 import type { WorkforceReport } from './workforce.ts';
 
 /** The workforce split, with every person-level field removed. */
@@ -74,19 +75,14 @@ export function requireTenantScope(principal: Principal): void {
   }
 }
 
+/** Incidents are NOT written here - lifecycle.ts owns them, one open record per subject. */
 export function putCommsRun(principal: Principal, run: {
   workforce: WorkforceSummary;
   alarms: CommsAlarm[];
-  incidents: CommsIncident[];
 }): void {
   mainTable.put({ PK: pk(principal, 'COMMS'), SK: 'WORKFORCE#LATEST', entity: 'CommsWorkforce', ...run.workforce });
   mainTable.batchPut(run.alarms.map((a) => ({
     PK: pk(principal, 'COMMSALARM'), SK: a.raisedAt + '#' + a.alarmId, entity: 'CommsAlarm', ...a,
-  })));
-  // Keyed by content hash, so a re-poll of the same window overwrites rather
-  // than duplicates - the same idempotency the observation ids buy.
-  mainTable.batchPut(run.incidents.map((i) => ({
-    PK: pk(principal, 'COMMSINC'), SK: i.openedAt + '#' + i.incidentId, entity: 'CommsIncident', ...i,
   })));
 }
 
@@ -96,9 +92,16 @@ export function commsWorkforce(principal: Principal): WorkforceSummary | undefin
   return item ? strip<WorkforceSummary>(item) : undefined;
 }
 
-export function commsIncidents(principal: Principal, limit = 25): CommsIncident[] {
+/** The OPEN incidents - one per subject that is currently a problem. */
+export function commsIncidents(principal: Principal): CommsIncident[] {
   requireTenantScope(principal);
-  return mainTable.query({ pk: pk(principal, 'COMMSINC'), scanIndexForward: false, limit }).map(strip<CommsIncident>);
+  return openCommsIncidents(principal);
+}
+
+/** Recently resolved, newest first. */
+export function commsResolvedIncidents(principal: Principal, limit = 10): CommsIncident[] {
+  requireTenantScope(principal);
+  return resolvedCommsIncidents(principal, limit);
 }
 
 export function commsAlarms(principal: Principal, limit = 50): CommsAlarm[] {

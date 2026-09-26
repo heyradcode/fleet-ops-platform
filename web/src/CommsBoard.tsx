@@ -48,6 +48,7 @@ export function CommsBoard({ snapshot }: { snapshot: CommsSnapshot }) {
         <div className="roster-list">
           {snapshot.incidents.map((i) => <IncidentRow key={i.incidentId} incident={i} />)}
           {snapshot.heldBack.map((a) => <HeldRow key={a.alarmId} alarm={a} />)}
+          {snapshot.resolved.map((i) => <ResolvedRow key={i.incidentId} incident={i} />)}
           {snapshot.incidents.length === 0 && snapshot.heldBack.length === 0 && (
             <p className="empty">Nothing raised on any trunk, facility or queue. Quiet is the goal.</p>
           )}
@@ -81,8 +82,14 @@ function IncidentRow({ incident }: { incident: CommsIncident }) {
           {' · '}
           {incident.sources.join(' + ')}
         </span>
-        <span className="verdict is-paged">PAGED</span>
+        <span className="verdict is-paged">{incident.reopenCount ? 'REOPENED' : 'PAGED'}</span>
       </div>
+      <p className="comms-lifecycle">
+        open since {incident.openedAt.slice(11, 16)}Z
+        {incident.peakSeverity !== incident.severity ? ' · peaked ' + incident.peakSeverity : ''}
+        {incident.reopenCount ? ' · flapped ' + incident.reopenCount + '×' : ''}
+        {incident.lifecycleNote ? ' · ' + incident.lifecycleNote : ''}
+      </p>
       <ul className="comms-evidence">
         {(incident.localisation ?? []).map((l) => <li key={l} className="is-where">{l}</li>)}
         {incident.context?.status === 'ok' && incident.context.changes.map((c) => (
@@ -120,6 +127,23 @@ function HeldRow({ alarm }: { alarm: CommsAlarm }) {
           {alarm.heldBack}
         </span>
         <span className="verdict is-held">HELD</span>
+      </div>
+    </div>
+  );
+}
+
+/** Resolved, dimmed further than held-back: history, not attention. */
+function ResolvedRow({ incident }: { incident: CommsIncident }) {
+  return (
+    <div className="comms-incident is-resolved">
+      <div className="exception">
+        <span className="exception-time">{(incident.resolvedAt ?? '').slice(11, 19)}</span>
+        <span className="exception-kind">{SUBJECT_LABEL[incident.subject.kind]}</span>
+        <span className="exception-detail">
+          <b>{incident.title}</b>
+          {' · open '}{incident.openedAt.slice(11, 16)}–{(incident.resolvedAt ?? '').slice(11, 16)}Z
+        </span>
+        <span className="verdict is-held">RESOLVED</span>
       </div>
     </div>
   );

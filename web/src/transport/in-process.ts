@@ -34,7 +34,7 @@ import { createCommsClient } from '../../../src/integrations/comms/client.ts';
 import { commsConfigFor } from '../../../src/integrations/comms/config.ts';
 import { runCommsPoll } from '../../../src/integrations/comms/poll.ts';
 import {
-  commsAlarms, commsIncidents, commsVisibleTo, commsWorkforce,
+  commsAlarms, commsIncidents, commsResolvedIncidents, commsVisibleTo, commsWorkforce,
 } from '../../../src/integrations/comms/store.ts';
 import { loadHealth } from '../../../src/integrations/comms/health.ts';
 import { knowledgeBase } from '../../../src/ai/knowledge-base.ts';
@@ -273,6 +273,7 @@ export const inProcessTransport: Transport = {
       incidents: commsIncidents(principal),
       heldBack: commsAlarms(principal).filter((a) => !a.corroborated),
       health: loadHealth(principal),
+      resolved: commsResolvedIncidents(principal),
     } satisfies CommsSnapshot;
   },
 

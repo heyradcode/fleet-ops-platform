@@ -51,6 +51,7 @@ const incident = (kind: 'facility' | 'trunk' | 'queue', id: string): CommsIncide
   tenantId: HHS_DEMO_TENANT, incidentId: 'i-' + id, title: 't', severity: 'critical',
   subject: { kind, id, name: id }, alarmIds: [], kinds: [], sources: [], localisation: [],
   openedAt: new Date(now()).toISOString(), evidence: [],
+  status: 'open', lastSeenAt: new Date(now()).toISOString(), clearPolls: 0, reopenCount: 0, peakSeverity: 'critical',
 });
 
 // ---------------------------------------------------------------------------
