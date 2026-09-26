@@ -22,6 +22,46 @@ import { resolveIdpForEmail, IDENTITY_PROVIDERS } from '../../../src/auth/provid
 
 const STORAGE_KEY = 'netpulse.session';
 
+/**
+ * One-click accounts for the sign-in page - OFFLINE ONLY. They exist because
+ * the local issuer has no passwords: any address at a registered domain signs
+ * in, and a click saves typing one. A real user pool cannot honour a click
+ * without a password, which is why SignIn shows these only when `usingCognito`
+ * is false.
+ *
+ * Each account is at a DIFFERENT domain because the domain is what decides
+ * scope (see platform/membership.ts) - five domains, five different boards.
+ * `local.test.ts` pins every one of them to a registered membership, so this
+ * list cannot drift into offering an account that then fails to sign in.
+ */
+export const DEMO_ACCOUNTS: ReadonlyArray<{ name: string; email: string; shows: string }> = [
+  {
+    name: 'Dallas operator',
+    email: 'operator@acme-networks.com',
+    shows: 'One site, DAL-01. The board offers no other - the token forbids it.',
+  },
+  {
+    name: 'Network engineer',
+    email: 'engineer@eng.acme-networks.com',
+    shows: 'The whole Acme estate, read-only: can ask the assistant, cannot act.',
+  },
+  {
+    name: 'Operations lead',
+    email: 'lead@netpulse.io',
+    shows: 'The whole Acme estate, admin. Every site tab, and the write tools.',
+  },
+  {
+    name: 'Northwind viewer',
+    email: 'noc@northwind-utilities.com',
+    shows: 'A different customer entirely. Nothing of Acme\'s is reachable.',
+  },
+  {
+    name: 'HHS operations lead',
+    email: 'ops-lead@hhs.texas.example',
+    shows: 'Voice and contact centre - Teams, Genesys, Webex, Bandwidth, Helix, Kurmi. Opens the comms view.',
+  },
+];
+
 
 function labelFor(idp: string): string {
   return idp === 'COGNITO' ? 'Continue with email' : `Continue with ${idp}`;
