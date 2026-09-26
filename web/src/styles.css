@@ -1265,6 +1265,14 @@ button.topo-node:hover { border-color: var(--amber); }
 .comms-evidence li.is-where { color: var(--text); }
 .comms-evidence li.is-where::before { content: '→ '; color: var(--amber); }
 
+/* Helix context: a candidate change reads in the text colour - it is the
+   first thing to check - but carries no amber, because it is not a finding. */
+.comms-evidence li.is-change,
+.comms-evidence li.is-ticket { color: var(--text); }
+.comms-evidence li.is-change::before { content: 'Δ '; color: var(--accent-cool); }
+.comms-evidence li.is-ticket::before { content: '# '; color: var(--accent-cool); }
+.comms-evidence li.is-context-note { font-style: italic; }
+
 .comms-main {
   display: flex;
   flex-direction: column;

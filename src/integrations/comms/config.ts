@@ -39,6 +39,23 @@ export const COMMS_CONFIG: Record<string, CommsTenantConfig> = {
         // name rather than be dropped.
       },
     },
+    helix: {
+      siteFacility: {
+        'Central Office': '0412',
+        'North Austin Campus': '0417',
+        'Houston Regional Office': '1120',
+        'Dallas Regional Office': '1455',
+        'El Paso Field Office': '2031',
+        'Lubbock Field Office': '3308',
+        // 'Austin Data Center' is deliberately absent: it houses the SBCs,
+        // not staff, and mapping it to a facility would attach every data
+        // centre change to that facility's call quality.
+      },
+      ciTrunk: {
+        'SBC1-TEAMS-DR': 'sbc1.voice.hhs.texas.example',
+        'SBC2-TEAMS-DR': 'sbc2.voice.hhs.texas.example',
+      },
+    },
   },
 };
 

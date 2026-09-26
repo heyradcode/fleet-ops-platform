@@ -37,9 +37,10 @@ async function readBody(req: IncomingMessage): Promise<string> {
 
 function send(res: ServerResponse, out: MockResponse): void {
   const headers: Record<string, string> = { ...out.headers };
-  if (out.body !== undefined) headers['Content-Type'] = out.xml ? 'application/xml' : 'application/json';
+  const raw = out.xml || out.contentType;
+  if (out.body !== undefined) headers['Content-Type'] = out.contentType ?? (out.xml ? 'application/xml' : 'application/json');
   res.writeHead(out.status, headers);
-  res.end(out.body === undefined ? undefined : out.xml ? String(out.body) : JSON.stringify(out.body, null, 2));
+  res.end(out.body === undefined ? undefined : raw ? String(out.body) : JSON.stringify(out.body, null, 2));
 }
 
 /** `/__mock/...`: test controls that no vendor has. */
@@ -51,8 +52,8 @@ function control(path: string, query: URLSearchParams): MockResponse | undefined
   if (path === '/__mock/fault') {
     const service = query.get('service') as ServiceId | null;
     const status = Number(query.get('status') ?? 429) as 429 | 500 | 502 | 503;
-    if (!service || !['teams', 'genesys', 'webex', 'bandwidth'].includes(service)) {
-      return { status: 400, body: { message: 'service must be teams, genesys, webex or bandwidth' } };
+    if (!service || !['teams', 'genesys', 'webex', 'bandwidth', 'helix'].includes(service)) {
+      return { status: 400, body: { message: 'service must be teams, genesys, webex, bandwidth or helix' } };
     }
     injectFault(service, status, Number(query.get('times') ?? 1), Number(query.get('retryAfter') ?? 2));
     return { status: 200, body: { injected: { service, status } } };
@@ -133,6 +134,11 @@ function catalogue() {
       'GET  ' + ORIGIN + '/bandwidth/api/accounts/9900001/sites   (Basic ' + DEMO_BANDWIDTH_USER.username + ':...)',
       'GET  ' + ORIGIN + '/bandwidth/api/accounts/9900001/sites/{siteId}/sippeers',
       'GET  ' + ORIGIN + '/bandwidth-insights/api/v1/accounts/9900001/voice/summary?startTime=<iso>&endTime=<iso>&groupBy=location   (PLACEHOLDER shape)',
+    ],
+    helix: [
+      'POST ' + ORIGIN + '/helix/api/jwt/login   (form: username, password -> text token)',
+      "GET  " + ORIGIN + "/helix/api/arsys/v1/entry/CHG:Infrastructure Change?q='Actual Start Date' >= \"<iso>\"&fields=values(...)   (Authorization: AR-JWT <token>)",
+      "GET  " + ORIGIN + "/helix/api/arsys/v1/entry/HPD:Help Desk?q='Status' != \"Closed\"&fields=values(...)",
     ],
     controls: [
       'POST ' + ORIGIN + '/__mock/fault?service=genesys&status=429&times=2',

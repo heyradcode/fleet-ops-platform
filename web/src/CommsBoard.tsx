@@ -84,6 +84,19 @@ function IncidentRow({ incident }: { incident: CommsIncident }) {
       </div>
       <ul className="comms-evidence">
         {(incident.localisation ?? []).map((l) => <li key={l} className="is-where">{l}</li>)}
+        {incident.context?.status === 'ok' && incident.context.changes.map((c) => (
+          <li key={c.id} className="is-change">
+            change {c.id} “{c.summary}” — {c.endedMinutesBefore === null ? 'in progress'
+              : c.endedMinutesBefore < 0 ? 'ended during the window'
+                : 'ended ' + c.endedMinutesBefore + ' min before'} · candidate, not cause
+          </li>
+        ))}
+        {incident.context?.status === 'ok' && incident.context.tickets.map((t) => (
+          <li key={t.id} className="is-ticket">already in Helix: {t.id} “{t.summary}” · {t.group ?? 'unassigned'}</li>
+        ))}
+        {incident.context && incident.context.status !== 'ok' && (
+          <li className="is-context-note">{incident.context.note}</li>
+        )}
         {incident.evidence.map((e) => <li key={e}>{e}</li>)}
       </ul>
     </div>

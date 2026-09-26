@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 189 tests, no network. Picks up web/ tests too.
+pnpm test                       # 200 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180
 pnpm web:build                  # typechecks web/ AND builds it
@@ -166,6 +166,13 @@ one, change the test deliberately rather than making it pass.
   and still pages. The call-outcomes read (`fetchPeerOutcomes`) is a
   PLACEHOLDER shape until the Insights reference is in hand - change it there
   and in the mock, nowhere else. The CDR API is daily and not for detection.
+- **Helix is CONTEXT, never evidence - and read-only.** Like Splunk: a
+  change record never becomes a signal and cannot page or suppress anything.
+  It is attached AFTER the rules decide, as a CANDIDATE explanation, and every
+  surface says "candidate". Matching goes through tenant tables (Helix site ->
+  facility, CI -> SBC); queues get no context rather than a guess from ticket
+  text. A Helix outage marks context UNKNOWN - never "no changes" - and never
+  fails the poll. Writing tickets is a separate, unmade decision.
 - **The workforce roster is never persisted.** The join links named people
   to agencies and buildings; the store keeps counts only, and the roster is
   rebuilt each poll. Comms reads need TENANT scope until an agency/facility
@@ -216,6 +223,12 @@ network. Nothing real belongs in this repo.
   index the event in the year 56000; a JSON array indexes the whole batch as
   ONE event. Both return 200, both look like success, and both leave the
   customer paying for an index their searches cannot see.
+- **AR qualifications are BUILT, never concatenated** (`qualification()` in
+  `comms/helix.ts`). `q=` is a query language; values are escaped by doubling
+  `"`, field names checked against an allow-pattern. Always send
+  `fields=values(...)`: without it a ticket returns the submitter's name and
+  email. Auth is `AR-JWT <token>`, not Bearer, and the login returns a bare
+  text token with no expiry. Timestamps are `+0000` with no colon.
 - **The agent never composes SPL.** It picks from a catalogue by name and
   passes typed parameters. SPL has commands that write (`collect`,
   `outputlookup`) and run scripts, so an injected pipe is not a data leak, it
@@ -320,7 +333,7 @@ src/integrations/connector.ts  the one contract: poll() and onWebhook()
 src/integrations/controller/  Meraki, Mist, Aruba Central
 src/integrations/probe.ts  the external plane — the only thing that sees silence
 src/integrations/splunk/   outbound HEC (a bus consumer) + catalogued SPL search
-src/integrations/comms/  Teams, Genesys, Webex, Bandwidth: client (tokens, retries, paging),
+src/integrations/comms/  Teams, Genesys, Webex, Bandwidth, Helix: client (tokens, retries, paging),
                  connectors, the workforce join (agency + facility split), and
                  signals -> alarms -> incidents
 src/integrations/comms/mock/  Teams (Graph), Genesys, Webex mocks: mockFetch on the

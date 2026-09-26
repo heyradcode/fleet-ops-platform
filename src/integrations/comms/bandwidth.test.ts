@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 
 import { setClock, fixedClock, now } from '../../platform/clock.ts';
 import {
-  BANDWIDTH_ACCOUNT, BANDWIDTH_PEERS, DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_WEBEX_TOKEN,
+  BANDWIDTH_ACCOUNT, BANDWIDTH_PEERS, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER, DEMO_CLIENT, DEMO_WEBEX_TOKEN,
   directory, mockFetch, resetMockState, TEAMS_PLANTED,
 } from './mock/index.ts';
 import { CommsHttpError, createCommsClient, type CommsCredentials } from './client.ts';
@@ -31,6 +31,7 @@ function client(creds: Partial<CommsCredentials> = {}) {
       genesys: { ...DEMO_CLIENT },
       webex: { token: DEMO_WEBEX_TOKEN },
       bandwidth: { ...DEMO_BANDWIDTH_USER },
+      helix: { ...DEMO_HELIX_USER },
       ...creds,
     },
     sleep: async () => {},

@@ -30,6 +30,12 @@ import { log } from '../../platform/logger.ts';
 import type { TenantId } from '../../platform/types.ts';
 import type { CommsSource, SignalSource } from './types.ts';
 
+/**
+ * Everything the client can call: the signal sources, plus Helix - which is
+ * CONTEXT, never a signal source, and so is not in SignalSource.
+ */
+export type ApiSource = SignalSource | 'helix';
+
 export type FetchFn = (input: string, init?: RequestInit) => Promise<Response>;
 
 /** Base URLs. The defaults are the real hosts; override to point at `pnpm mock`. */
@@ -48,6 +54,12 @@ export type CommsEndpoints = {
    * see comms/bandwidth.ts; the shape is unverified.
    */
   bandwidthInsights: string;
+  /**
+   * The customer's Helix (AR System) REST host. Per customer on BMC's SaaS -
+   * `{customer}-restapi.onbmc.com` - so there is no single real default; the
+   * one below is the mock's, on a reserved `.example` name.
+   */
+  helixApi: string;
 };
 
 export const REAL_ENDPOINTS: CommsEndpoints = {
@@ -59,6 +71,7 @@ export const REAL_ENDPOINTS: CommsEndpoints = {
   webexAnalytics: 'https://analytics.webexapis.com/v1',
   bandwidthApi: 'https://api.bandwidth.com/api',
   bandwidthInsights: 'https://insights.bandwidth.com/api/v1',
+  helixApi: 'https://hhs-restapi.onbmc.example',
 };
 
 /** In production these come from Secrets Manager, per tenant, cached across warm starts. */
@@ -68,15 +81,17 @@ export type CommsCredentials = {
   webex?: { token: string };
   /** An API user on the Bandwidth account. Basic auth, as the account API documents. */
   bandwidth?: { username: string; password: string };
+  /** An AR System integration user, read-only by permission as well as by code. */
+  helix?: { username: string; password: string };
 };
 
 export class CommsHttpError extends Error {
-  readonly source: SignalSource;
+  readonly source: ApiSource;
   readonly status: number;
   /** 429 and 5xx are worth retrying; 400, 401 and 403 never are. See ProviderError. */
   readonly retryable: boolean;
 
-  constructor(source: SignalSource, status: number, message: string) {
+  constructor(source: ApiSource, status: number, message: string) {
     super('[' + source + '] ' + status + ' ' + message);
     this.name = 'CommsHttpError';
     this.source = source;
@@ -84,6 +99,9 @@ export class CommsHttpError extends Error {
     this.retryable = status === 429 || status >= 500;
   }
 }
+
+/** Helix's JWT lifetime. Not returned by the login call; an hour is the AR System default. */
+export const HELIX_TOKEN_TTL_S = 3600;
 
 /** Refresh this long before a token's stated expiry. */
 export const TOKEN_HEADROOM_MS = 60_000;
@@ -97,9 +115,9 @@ export type CommsClient = {
   tenantId: TenantId;
   endpoints: CommsEndpoints;
   /** GET or POST with auth and retries. Throws CommsHttpError on a final failure. */
-  request(source: SignalSource, url: string, init?: RequestInit): Promise<Response>;
+  request(source: ApiSource, url: string, init?: RequestInit): Promise<Response>;
   /** How many token requests have been made, per source. For the tests and the demo. */
-  tokenRequests: Record<CommsSource, number>;
+  tokenRequests: Record<CommsSource | 'helix', number>;
 };
 
 export function createCommsClient(opts: {
@@ -112,12 +130,26 @@ export function createCommsClient(opts: {
 }): CommsClient {
   const endpoints = opts.endpoints ?? REAL_ENDPOINTS;
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-  const cache = new Map<CommsSource, CachedToken>();
-  const tokenRequests: Record<CommsSource, number> = { teams: 0, genesys: 0, webex: 0 };
+  const cache = new Map<CommsSource | 'helix', CachedToken>();
+  const tokenRequests: Record<CommsSource | 'helix', number> = { teams: 0, genesys: 0, webex: 0, helix: 0 };
 
-  async function fetchToken(source: CommsSource): Promise<CachedToken> {
+  async function fetchToken(source: CommsSource | 'helix'): Promise<CachedToken> {
     tokenRequests[source]++;
     let res: Response;
+    if (source === 'helix') {
+      const c = opts.credentials.helix;
+      if (!c) throw new CommsHttpError(source, 0, 'no Helix credentials configured');
+      res = await opts.fetch(endpoints.helixApi + '/api/jwt/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ username: c.username, password: c.password }).toString(),
+      });
+      if (!res.ok) throw new CommsHttpError(source, res.status, 'Helix login failed: ' + await res.text());
+      // A BARE TOKEN, as text, with no expiry in the response. The lifetime
+      // is server configuration (an hour by default), so it is assumed here
+      // and refreshed early like every other token.
+      return { token: (await res.text()).trim(), expiresAt: now() + HELIX_TOKEN_TTL_S * 1000 };
+    }
     if (source === 'teams') {
       const c = opts.credentials.entra;
       if (!c) throw new CommsHttpError(source, 0, 'no Entra credentials configured');
@@ -153,7 +185,7 @@ export function createCommsClient(opts: {
     return { token: body.access_token, expiresAt: now() + body.expires_in * 1000 };
   }
 
-  async function tokenFor(source: CommsSource): Promise<string> {
+  async function tokenFor(source: CommsSource | 'helix'): Promise<string> {
     const cached = cache.get(source);
     if (cached && now() < cached.expiresAt - TOKEN_HEADROOM_MS) return cached.token;
     const fresh = await fetchToken(source);
@@ -161,7 +193,9 @@ export function createCommsClient(opts: {
     return fresh.token;
   }
 
-  async function authHeader(source: SignalSource): Promise<string> {
+  async function authHeader(source: ApiSource): Promise<string> {
+    // AR-JWT, not Bearer - see the mock kernel's checkArJwt.
+    if (source === 'helix') return 'AR-JWT ' + await tokenFor('helix');
     if (source === 'bandwidth') {
       // No token to fetch or refresh: a Basic credential on every request.
       const c = opts.credentials.bandwidth;
@@ -171,7 +205,7 @@ export function createCommsClient(opts: {
     return 'Bearer ' + await tokenFor(source);
   }
 
-  async function request(source: SignalSource, url: string, init: RequestInit = {}): Promise<Response> {
+  async function request(source: ApiSource, url: string, init: RequestInit = {}): Promise<Response> {
     let last: CommsHttpError | undefined;
     for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
       const headers = new Headers(init.headers);

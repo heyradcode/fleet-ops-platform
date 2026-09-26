@@ -18,6 +18,7 @@ import { loadEntraDirectory, syncEntraDirectory, type EntraSyncResult } from './
 import { collectSignals, type CommsSignal } from './signals.ts';
 import { correlateAlarms, evaluateSignals, type CommsAlarm, type CommsIncident } from './incidents.ts';
 import { putCommsRun, summariseWorkforce, type WorkforceSummary } from './store.ts';
+import { attachHelixContext } from './helix-context.ts';
 
 export type CommsPollResult = {
   /** The full roster, for the caller's use in memory. Never persisted; see store.ts. */
@@ -46,7 +47,9 @@ export async function runCommsPoll(
   const report = await buildWorkforce(client, config, loadEntraDirectory(principal));
   const signals = await collectSignals(client, config, report, at);
   const alarms = evaluateSignals(signals);
-  const incidents = correlateAlarms(alarms);
+  // Context AFTER the rules have decided: Helix can explain an incident, it
+  // cannot create or suppress one.
+  const incidents = await attachHelixContext(client, config, correlateAlarms(alarms), at);
   const workforce = summariseWorkforce(report, nowIso());
 
   putCommsRun(principal, { workforce, alarms, incidents });

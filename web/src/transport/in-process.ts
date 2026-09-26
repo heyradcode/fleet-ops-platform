@@ -29,7 +29,7 @@ import {
 } from '../../../src/pipeline/steps.ts';
 import { runAgent } from '../../../src/ai/agent-core.ts';
 import { toolSpecsFor } from '../../../src/ai/tools.ts';
-import { mockFetch, directory as commsDirectory, DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER } from '../../../src/integrations/comms/mock/index.ts';
+import { mockFetch, directory as commsDirectory, DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER } from '../../../src/integrations/comms/mock/index.ts';
 import { createCommsClient } from '../../../src/integrations/comms/client.ts';
 import { commsConfigFor } from '../../../src/integrations/comms/config.ts';
 import { runCommsPoll } from '../../../src/integrations/comms/poll.ts';
@@ -202,6 +202,7 @@ function ensureCommsPolled(principal: Principal): Promise<void> {
         genesys: { ...DEMO_CLIENT },
         webex: { token: DEMO_WEBEX_TOKEN },
         bandwidth: { ...DEMO_BANDWIDTH_USER },
+        helix: { ...DEMO_HELIX_USER },
       },
     });
     done = runCommsPoll(principal, client, config, now()).then(() => undefined);

@@ -21,7 +21,7 @@
 import { now } from '../../../platform/clock.ts';
 import { b64urlEncode, b64urlDecodeText } from '../../../platform/crypto.ts';
 
-export type ServiceId = 'teams' | 'genesys' | 'webex' | 'bandwidth';
+export type ServiceId = 'teams' | 'genesys' | 'webex' | 'bandwidth' | 'helix';
 
 export type MockRequest = {
   method: string;
@@ -47,6 +47,8 @@ export type MockResponse = {
   body?: unknown;
   /** The body is already XML text. Bandwidth's account API answers in XML. */
   xml?: boolean;
+  /** The body is already text of this type - Helix's login returns a bare token. */
+  contentType?: string;
 };
 
 type Params = Record<string, string>;
@@ -95,9 +97,9 @@ export function createApp(
         }
 
         if (!route.public) {
-          const auth = service === 'bandwidth'
-            ? checkBasic(req.headers)
-            : checkBearer(service, req.headers);
+          const auth = service === 'bandwidth' ? checkBasic(req.headers)
+            : service === 'helix' ? checkArJwt(req.headers)
+              : checkBearer(service, req.headers);
           if (auth !== 'ok') {
             return error(401, 'unauthorized', 'credentials ' + auth, req);
           }
@@ -211,6 +213,25 @@ export function checkBearer(
   if (!t || t.service !== service) return 'invalid';
   return now() < t.expiresAt ? 'ok' : 'expired';
 }
+
+/**
+ * Helix (AR System): `Authorization: AR-JWT <token>`. Not "Bearer" - a client
+ * that sends the token under the scheme every other API uses gets a 401 and
+ * a token that looks perfectly valid.
+ */
+export function checkArJwt(headers: Headers): 'ok' | 'missing' | 'invalid' | 'expired' {
+  const m = /^AR-JWT\s+(\S+)$/.exec(headers.get('authorization') ?? '');
+  if (!m) return 'missing';
+  const t = tokens.get(m[1]);
+  if (!t || t.service !== 'helix') return 'invalid';
+  return now() < t.expiresAt ? 'ok' : 'expired';
+}
+
+/** Helix: an integration user. Announces itself as fake. */
+export const DEMO_HELIX_USER = {
+  username: 'netpulse-integration',
+  password: 'demo-only-not-a-real-password',
+} as const;
 
 /** Bandwidth: an API user, Basic auth on every request. Announces itself as fake. */
 export const DEMO_BANDWIDTH_USER = {

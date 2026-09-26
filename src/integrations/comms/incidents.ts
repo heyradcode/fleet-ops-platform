@@ -34,6 +34,7 @@ import { sha256 } from '../../platform/crypto.ts';
 import type { Severity, TenantId } from '../../platform/types.ts';
 import type { CommsSignal, CommsSignalKind, CommsSubject } from './signals.ts';
 import type { SignalSource } from './types.ts';
+import type { IncidentContext } from './helix-context.ts';
 
 export const SELF_EVIDENT: ReadonlySet<CommsSignalKind> = new Set<CommsSignalKind>([
   'trunk-call-failure', 'queue-backlog', 'queue-abandonment',
@@ -73,6 +74,8 @@ export type CommsIncident = {
   sources: SignalSource[];
   /** From the alarms that could say where the fault is. */
   localisation: string[];
+  /** Candidate changes and existing tickets from Helix. Context, never evidence. */
+  context?: IncidentContext;
   openedAt: string;
   evidence: string[];
 };

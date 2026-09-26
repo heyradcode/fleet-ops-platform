@@ -27,6 +27,7 @@ import type { Principal } from '../platform/types.ts';
 import type { Tool } from './tools.ts';
 import { commsAlarms, commsIncidents, commsVisibleTo, commsWorkforce } from '../integrations/comms/store.ts';
 import { COMMS_SOURCES } from '../integrations/comms/types.ts';
+import { describeChange } from '../integrations/comms/helix-context.ts';
 
 export const COMMS_TOOLS: Tool[] = [
   {
@@ -57,6 +58,17 @@ export const COMMS_TOOLS: Tool[] = [
           ' - sources: ' + i.sources.join(' + '));
         // Where, before the evidence: it is what decides who gets the call.
         for (const l of i.localisation ?? []) lines.push('  where: ' + l);
+        // Helix context. CANDIDATES - the tool says so in every line, so a
+        // model summarising it has the qualifier in front of it.
+        if (i.context?.status === 'ok') {
+          for (const c of i.context.changes) lines.push('  recent change: ' + describeChange(c));
+          for (const t of i.context.tickets) {
+            lines.push('  already in Helix: ' + t.id + ' "' + t.summary + '" (' + t.status + ', ' + (t.group ?? 'unassigned') + ')');
+          }
+          if (i.context.changes.length === 0) lines.push('  recent change: none on this subject in Helix');
+        } else if (i.context) {
+          lines.push('  helix: ' + i.context.note);
+        }
         for (const e of i.evidence) lines.push('  evidence: ' + e);
       }
       for (const a of held) {

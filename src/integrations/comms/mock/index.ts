@@ -24,10 +24,12 @@ import { resetEntraChanges, teamsGraph, teamsLogin } from './teams.ts';
 import { genesysApi, genesysLogin } from './genesys.ts';
 import { webexAnalytics, webexApi, webexCallingAnalytics } from './webex.ts';
 import { bandwidthApi, bandwidthInsights } from './bandwidth.ts';
+import { helixApi } from './helix.ts';
 
 export {
-  DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_WEBEX_TOKEN, injectFault, type ServiceId,
+  DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_WEBEX_TOKEN, injectFault, type ServiceId,
 } from './kernel.ts';
+export { HELIX_PLANTED } from './helix.ts';
 export { BANDWIDTH_ACCOUNT, BANDWIDTH_PEERS, BANDWIDTH_PLANTED } from './bandwidth.ts';
 export { mutateEntraUser, removeEntraUser, DELTA_TOKEN_TTL_MS } from './teams.ts';
 
@@ -52,6 +54,7 @@ export const MOCK_HOSTS: Record<string, MockApp> = {
   'analytics-calling.webexapis.com': webexCallingAnalytics,
   'api.bandwidth.com': bandwidthApi,
   'insights.bandwidth.com': bandwidthInsights,
+  'hhs-restapi.onbmc.example': helixApi,
 };
 
 /** Localhost path prefix -> app, for the Node server. */
@@ -65,6 +68,7 @@ export const MOCK_PREFIXES: Record<string, MockApp> = {
   '/webex-calling': webexCallingAnalytics,
   '/bandwidth': bandwidthApi,
   '/bandwidth-insights': bandwidthInsights,
+  '/helix': helixApi,
 };
 
 /**
@@ -90,8 +94,8 @@ export function splitTarget(target: string): { path: string; query: URLSearchPar
 export function toResponse(res: MockResponse): Response {
   const headers = new Headers(res.headers);
   if (res.body === undefined) return new Response(null, { status: res.status, headers });
-  if (res.xml) {
-    headers.set('Content-Type', 'application/xml');
+  if (res.xml || res.contentType) {
+    headers.set('Content-Type', res.contentType ?? 'application/xml');
     return new Response(String(res.body), { status: res.status, headers });
   }
   headers.set('Content-Type', 'application/json');

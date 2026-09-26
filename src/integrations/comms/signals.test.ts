@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 
 import { setClock, fixedClock, now } from '../../platform/clock.ts';
 import {
-  DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, directory, GENESYS_PLANTED_QUEUE, mockFetch, resetMockState, TEAMS_PLANTED,
+  DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER, directory, GENESYS_PLANTED_QUEUE, mockFetch, resetMockState, TEAMS_PLANTED,
 } from './mock/index.ts';
 import { createCommsClient } from './client.ts';
 import { buildWorkforce } from './workforce.ts';
@@ -37,6 +37,7 @@ async function run(sources: CommsSource[] = ['teams', 'genesys', 'webex']) {
       genesys: { ...DEMO_CLIENT },
       webex: { token: DEMO_WEBEX_TOKEN },
       bandwidth: { ...DEMO_BANDWIDTH_USER },
+      helix: { ...DEMO_HELIX_USER },
     },
     sleep: async () => {},
   });

@@ -112,4 +112,10 @@ export type CommsTenantConfig = {
    * someone adds it.
    */
   bandwidth?: { accountId: string; peerTrunk: Record<string, string> };
+  /**
+   * Helix ITSM, for CONTEXT on incidents (never as evidence). Maps Helix's
+   * vocabulary onto our subjects: site names -> facility codes, CI names ->
+   * SBC FQDNs. A Helix record that maps to nothing is simply not attached.
+   */
+  helix?: { siteFacility: Record<string, string>; ciTrunk: Record<string, string> };
 };

@@ -65,10 +65,11 @@ import { checkInput, canUseTool } from './ai/guardrails.ts';
 import { b64urlEncode, b64urlDecodeText, setUuid, seededUuid } from './platform/crypto.ts';
 import { setClock, fixedClock, now, nowIso } from './platform/clock.ts';
 import { setRandom, seededRandom } from './platform/random.ts';
-import { mockFetch, directory as commsDirectory, DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER } from './integrations/comms/mock/index.ts';
+import { mockFetch, directory as commsDirectory, DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER } from './integrations/comms/mock/index.ts';
 import { createCommsClient } from './integrations/comms/client.ts';
 import { runCommsPoll } from './integrations/comms/poll.ts';
 import { syncEntraDirectory } from './integrations/comms/entra-directory.ts';
+import { describeChange } from './integrations/comms/helix-context.ts';
 import { mutateEntraUser } from './integrations/comms/mock/index.ts';
 import { commsToolsFor } from './ai/comms-tools.ts';
 import { commsConfigFor, HHS_DEMO_TENANT } from './integrations/comms/config.ts';
@@ -786,6 +787,7 @@ async function sectionComms() {
       genesys: { ...DEMO_CLIENT },
       webex: { token: DEMO_WEBEX_TOKEN },
       bandwidth: { ...DEMO_BANDWIDTH_USER },
+      helix: { ...DEMO_HELIX_USER },
     },
   });
   // An HHS operations lead, verified like every other principal. Tenant-wide,
@@ -873,6 +875,15 @@ async function sectionComms() {
     write('   ' + colour(incident.severity) + 'INCIDENT' + '\x1b[0m  ' + incident.title +
       '  ' + dim('[' + incident.sources.join(' + ') + ']') + '\n');
     for (const where of incident.localisation) write('             ' + dim('where: ' + where) + '\n');
+    // Helix: context, never evidence - see comms/helix-context.ts.
+    if (incident.context?.status === 'ok') {
+      for (const c of incident.context.changes) write('             ' + dim('change: ' + describeChange(c)) + '\n');
+      for (const t of incident.context.tickets) {
+        write('             ' + dim('already in Helix: ' + t.id + ' "' + t.summary + '" - ' + (t.group ?? 'unassigned')) + '\n');
+      }
+    } else if (incident.context) {
+      write('             ' + dim('helix: ' + (incident.context.note ?? '')) + '\n');
+    }
   }
   // The half of the outage only the carrier saw. A dead SBC's inbound calls
   // fail AT Bandwidth and never reach Teams - so the Teams report has no row
