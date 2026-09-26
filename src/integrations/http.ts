@@ -125,7 +125,18 @@ export const MAX_PAGES_PER_RUN = 50;
 export async function drainPages(
   fetchPage: (cursor: PageCursor) => Promise<HttpPage>,
   start: PageCursor,
-): Promise<{ records: unknown[]; pages: number; truncated: boolean }> {
+): Promise<{
+  records: unknown[];
+  pages: number;
+  truncated: boolean;
+  /**
+   * Where the drain stopped: `done`, or the cursor to resume from. Callers
+   * that can resume across runs - Graph's delta sync, whose first listing of
+   * a 75,000-user directory is longer than one run's page ceiling - save this
+   * and start there next time instead of from page one.
+   */
+  next: PageCursor;
+}> {
   const records: unknown[] = [];
   let cursor = start;
   let pages = 0;
@@ -141,7 +152,7 @@ export async function drainPages(
     cursor = page.next;
   }
 
-  return { records, pages, truncated: cursor.kind !== 'done' && pages >= MAX_PAGES_PER_RUN };
+  return { records, pages, truncated: cursor.kind !== 'done' && pages >= MAX_PAGES_PER_RUN, next: cursor };
 }
 
 function sameCursor(a: PageCursor, b: PageCursor): boolean {

@@ -37,6 +37,8 @@ export type WorkforceSummary = {
   facilityConflicts: number;
   unmappedWebexLocations: string[];
   truncated: boolean;
+  /** Placement is only as complete as this. */
+  directory: WorkforceReport['directory'];
 };
 
 export function summariseWorkforce(report: WorkforceReport, asOf: string): WorkforceSummary {
@@ -52,6 +54,7 @@ export function summariseWorkforce(report: WorkforceReport, asOf: string): Workf
     // actionable part: someone has to add them to the table.
     unmappedWebexLocations: report.unmappedWebexLocations,
     truncated: Object.values(report.fetched).some((f) => f?.truncated),
+    directory: report.directory,
   };
 }
 

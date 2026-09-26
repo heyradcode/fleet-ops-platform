@@ -101,6 +101,14 @@ export const COMMS_TOOLS: Tool[] = [
       }
 
       const lines = ['Workforce as of ' + w.asOf + (w.truncated ? ' (INCOMPLETE: a source was truncated)' : '') + ':'];
+      // Say so when placement is not final - a model that reports a facility
+      // count as settled while the first directory sync is still running is
+      // confidently wrong in a way nobody can see.
+      if (w.directory.status === 'first-sync-in-progress' || w.directory.status === 'never-synced') {
+        lines.push('  NOTE: the Entra directory sync has not finished; facility counts are incomplete.');
+      } else if (w.directory.status === 'resyncing') {
+        lines.push('  NOTE: the Entra directory is resyncing; facility counts use the previous copy.');
+      }
       for (const s of COMMS_SOURCES) {
         const p = w.byPlatform[s];
         if (!p) continue;

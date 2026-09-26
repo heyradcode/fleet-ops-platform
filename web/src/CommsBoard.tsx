@@ -128,6 +128,16 @@ function Workforce({ workforce, affected }: { workforce: WorkforceSummary; affec
 
   return (
     <div className="comms-tables">
+      {(workforce.directory.status === 'first-sync-in-progress' || workforce.directory.status === 'never-synced') && (
+        <p className="comms-warning">
+          The Entra directory is still on its first sync. Facility counts are incomplete until it finishes.
+        </p>
+      )}
+      {workforce.directory.status === 'resyncing' && (
+        <p className="comms-warning">
+          The Entra directory is resyncing. Facility counts use the previous copy meanwhile.
+        </p>
+      )}
       {workforce.truncated && (
         <p className="comms-warning">
           A source returned a truncated listing. These counts are LOW, not complete.

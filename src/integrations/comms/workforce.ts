@@ -21,10 +21,12 @@
  * moved buildings and whose phone did not.
  *
  * Genesys has no facility of its own. An employee inherits theirs from the
- * join; a contractor, who is not in Entra, stays unplaced and is counted.
+ * synced Entra directory (entra-directory.ts), looked up by a hash of their
+ * address; a contractor, who is not in Entra, stays unplaced and is counted.
  */
 import type { CommsClient } from './client.ts';
-import { pullTeams, normaliseTeams, type EntraPlacement } from './teams.ts';
+import { pullTeams, normaliseTeams } from './teams.ts';
+import { EMPTY_DIRECTORY, type DirectoryStatus, type EntraDirectoryView } from './entra-directory.ts';
 import { pullGenesys, normaliseGenesys } from './genesys.ts';
 import { pullWebex, normaliseWebex } from './webex.ts';
 import type {
@@ -68,14 +70,17 @@ export type WorkforceReport = {
   facilityConflicts: Array<{ email: string; entra: string; webex: string }>;
   duplicateAccounts: Array<{ email: string; source: CommsSource; count: number }>;
   unmappedWebexLocations: string[];
+  /** Whether facility placement had a complete Entra directory behind it. */
+  directory: { status: DirectoryStatus; users: number };
 };
 
 /** Pull every configured source, normalise, join. The one entry point. */
-export async function buildWorkforce(client: CommsClient, config: CommsTenantConfig): Promise<WorkforceReport> {
+export async function buildWorkforce(
+  client: CommsClient, config: CommsTenantConfig, directory: EntraDirectoryView,
+): Promise<WorkforceReport> {
   const accounts: CommsAccount[] = [];
   const fetched: WorkforceReport['fetched'] = {};
   let unmappedWebexLocations: string[] = [];
-  let placement: EntraPlacement = new Map();
 
   // Sequential, not Promise.all. The three are independent, but a poll that
   // interleaves three services' requests is miserable to read in a log, and
@@ -84,12 +89,10 @@ export async function buildWorkforce(client: CommsClient, config: CommsTenantCon
     const raw = await pullTeams(client);
     fetched.teams = {
       rows: raw.configurations.rows.length,
-      pages: raw.configurations.pages + raw.users.pages,
-      truncated: raw.configurations.truncated || raw.users.truncated,
+      pages: raw.configurations.pages,
+      truncated: raw.configurations.truncated,
     };
-    const t = normaliseTeams(raw, config);
-    accounts.push(...t.accounts);
-    placement = t.placement;
+    accounts.push(...normaliseTeams(raw, config, directory));
   }
   if (config.sources.includes('genesys')) {
     const raw = await pullGenesys(client);
@@ -108,14 +111,18 @@ export async function buildWorkforce(client: CommsClient, config: CommsTenantCon
     unmappedWebexLocations = w.unmappedLocations;
   }
 
-  return { tenantId: config.tenantId, fetched, unmappedWebexLocations, ...joinWorkforce(accounts, placement) };
+  return {
+    tenantId: config.tenantId, fetched, unmappedWebexLocations,
+    directory: { status: directory.status, users: directory.users },
+    ...joinWorkforce(accounts, directory),
+  };
 }
 
 /** Pure. Accounts -> people and the split. */
 export function joinWorkforce(
   accounts: CommsAccount[],
-  placement: EntraPlacement = new Map(),
-): Omit<WorkforceReport, 'tenantId' | 'fetched' | 'unmappedWebexLocations'> {
+  directory: EntraDirectoryView = EMPTY_DIRECTORY,
+): Omit<WorkforceReport, 'tenantId' | 'fetched' | 'unmappedWebexLocations' | 'directory'> {
   const byKey = new Map<string, WorkforceMember>();
   const duplicates = new Map<string, { email: string; source: CommsSource; count: number }>();
 
@@ -143,7 +150,7 @@ export function joinWorkforce(
   for (const m of byKey.values()) {
     // Entra's placement covers everyone in Entra, voice-enabled or not; the
     // Teams account's own facility is the same fact for Teams Voice users.
-    const inEntra = placement.get(m.emailKey);
+    const inEntra = directory.placementByEmail(m.emailKey);
     const entra = m.accounts.teams?.facility ??
       (inEntra && 'code' in inEntra ? { code: inEntra.code, source: 'entra-street-address' as const } : undefined);
     const webex = m.accounts.webex?.facility;
@@ -152,9 +159,14 @@ export function joinWorkforce(
       facilityConflicts.push({ email: accountEmail(m), entra: entra.code, webex: webex.code });
     }
     if (!m.facility) {
+      // An employee not found while the first sync is still running is not
+      // "unplaceable", merely not placed YET - and saying so is the difference
+      // between an ops lead waiting an hour and filing a data-quality ticket.
+      const pending = directory.status === 'first-sync-in-progress' || directory.status === 'never-synced';
       m.unplaced = m.accounts.teams?.unplaced ??
         (inEntra && 'unplaced' in inEntra ? inEntra.unplaced : undefined) ??
-        m.accounts.webex?.unplaced ?? 'no-facility-source';
+        m.accounts.webex?.unplaced ??
+        (pending && m.agency.kind === 'agency' ? 'directory-sync-incomplete' : 'no-facility-source');
     }
   }
 

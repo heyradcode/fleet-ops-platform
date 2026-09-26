@@ -19,14 +19,21 @@
  * and in every browser, so the board can use `mockFetch` in the tab.
  */
 import type { MockApp, MockRequest, MockResponse } from './kernel.ts';
-import { notModelled } from './kernel.ts';
-import { teamsGraph, teamsLogin } from './teams.ts';
+import { notModelled, resetMockState as resetKernelState } from './kernel.ts';
+import { resetEntraChanges, teamsGraph, teamsLogin } from './teams.ts';
 import { genesysApi, genesysLogin } from './genesys.ts';
 import { webexAnalytics, webexApi, webexCallingAnalytics } from './webex.ts';
 
 export {
-  DEMO_CLIENT, DEMO_WEBEX_TOKEN, injectFault, resetMockState, type ServiceId,
+  DEMO_CLIENT, DEMO_WEBEX_TOKEN, injectFault, type ServiceId,
 } from './kernel.ts';
+export { mutateEntraUser, removeEntraUser, DELTA_TOKEN_TTL_MS } from './teams.ts';
+
+/** Tests call this between cases: tokens, faults, and Entra directory changes. */
+export function resetMockState(): void {
+  resetKernelState();
+  resetEntraChanges();
+}
 export { directory, agencyOf, facilityCodeOf, AGENCY_DOMAINS, FACILITIES } from './directory.ts';
 export { PLANTED as TEAMS_PLANTED, TEAMS_TRUNKS } from './teams.ts';
 export { PLANTED_QUEUE as GENESYS_PLANTED_QUEUE, genesysQueues } from './genesys.ts';

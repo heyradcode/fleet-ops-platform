@@ -17,6 +17,8 @@ import type { Person } from './mock/directory.ts';
 import { GRAPH_TOKEN_TTL_S } from './mock/teams.ts';
 import { createCommsClient, CommsHttpError, TOKEN_HEADROOM_MS, type CommsCredentials } from './client.ts';
 import { buildWorkforce } from './workforce.ts';
+import { loadEntraDirectory, syncEntraDirectory } from './entra-directory.ts';
+import type { Principal } from '../../platform/types.ts';
 import { COMMS_CONFIG, HHS_DEMO_TENANT } from './config.ts';
 import type { CommsTenantConfig } from './types.ts';
 
@@ -49,6 +51,17 @@ function client(creds = credentials()) {
 
 const config = (): CommsTenantConfig => structuredClone(COMMS_CONFIG[HHS_DEMO_TENANT]);
 
+const PRINCIPAL: Principal = {
+  sub: 'test', email: 'ops-lead@hhs.texas.example', tenantId: HHS_DEMO_TENANT,
+  roles: ['admin'], scope: { kind: 'tenant' }, identityProvider: 'cognito',
+};
+
+/** Sync the Entra directory, then build - the order the poll uses. */
+async function workforce(c = client(), cfg = config()) {
+  await syncEntraDirectory(PRINCIPAL, c);
+  return buildWorkforce(c, cfg, loadEntraDirectory(PRINCIPAL));
+}
+
 /** Ground truth: group people by a key, the way the split should. */
 function countBy(people: Person[], key: (p: Person) => string | undefined): Record<string, number> {
   const out: Record<string, number> = {};
@@ -67,7 +80,7 @@ const contractorKey = (p: Person) => p.kind === 'contractor' ? p.email.split('@'
 // ---------------------------------------------------------------------------
 
 test('workforce: every platform drains completely', async () => {
-  const report = await buildWorkforce(client(), config());
+  const report = await workforce();
   for (const source of ['teams', 'genesys', 'webex'] as const) {
     assert.equal(report.fetched[source]!.truncated, false, source + ' truncated');
     assert.ok(report.fetched[source]!.rows > 0, source + ' returned nothing');
@@ -79,7 +92,7 @@ test('workforce: every platform drains completely', async () => {
 });
 
 test('workforce: per-agency counts match the directory on every platform', async () => {
-  const report = await buildWorkforce(client(), config());
+  const report = await workforce();
   const people = directory().people;
 
   const teams = people.filter((p) => p.teamsVoice);
@@ -99,14 +112,14 @@ test('workforce: per-agency counts match the directory on every platform', async
 });
 
 test('workforce: the upper-cased domain lands in its agency, not in unknown', async () => {
-  const report = await buildWorkforce(client(), config());
+  const report = await workforce();
   const shouty = directory().people.find((p) => /@[A-Z.]+$/.test(p.email))!;
   const member = report.members.find((m) => m.emailKey === shouty.email.toLowerCase())!;
   assert.deepEqual(member.agency, { kind: 'agency', agency: shouty.agency });
 });
 
 test('workforce: facilities match the directory, including via the Entra join', async () => {
-  const report = await buildWorkforce(client(), config());
+  const report = await workforce();
   const people = directory().people;
 
   const teams = people.filter((p) => p.teamsVoice);
@@ -130,7 +143,7 @@ test('workforce: facilities match the directory, including via the Entra join', 
 });
 
 test('workforce: the unplaceable are reported with the right reason, never guessed', async () => {
-  const report = await buildWorkforce(client(), config());
+  const report = await workforce();
   const reason = (email: string) =>
     report.unplaced.find((u) => u.email.toLowerCase() === email.toLowerCase())?.reason;
 
@@ -152,7 +165,7 @@ test('workforce: the unplaceable are reported with the right reason, never guess
 test('workforce: a domain the tenant never listed is counted and named', async () => {
   const cfg = config();
   cfg.contractorDomains = cfg.contractorDomains.filter((d) => d !== 'staffing-co.example');
-  const report = await buildWorkforce(client(), cfg);
+  const report = await workforce(client(), cfg);
   const expected = directory().people.filter((p) =>
     p.inGenesys && p.genesysActive && p.email.endsWith('@staffing-co.example')).length;
   assert.ok(expected > 0);
@@ -162,7 +175,7 @@ test('workforce: a domain the tenant never listed is counted and named', async (
 test('workforce: a Webex location missing from the table is reported by name', async () => {
   const cfg = config();
   delete cfg.webexLocationFacility['Lubbock'];
-  const report = await buildWorkforce(client(), cfg);
+  const report = await workforce(client(), cfg);
   const lubbockWebexOnly = directory().people.filter((p) => p.inWebex && p.facility?.code === '3308');
   assert.ok(lubbockWebexOnly.length > 0, 'the table entry must matter for this test to mean anything');
   assert.deepEqual(report.unmappedWebexLocations, ['Lubbock']);

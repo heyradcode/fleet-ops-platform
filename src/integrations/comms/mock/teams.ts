@@ -45,6 +45,7 @@ import {
   BadRequest, createApp, DEMO_CLIENT, decodeCursor, encodeCursor, intParam, issueToken,
   withQuery, type MockApp, type MockRequest, type MockResponse,
 } from './kernel.ts';
+import { b64urlDecodeText, b64urlEncode } from '../../../platform/crypto.ts';
 import { directory, streamFor, type Person } from './directory.ts';
 import { ACTIVITY_WINDOW_MS, activityAnchor, iso, isoDuration, PLANTED_WINDOW_MS } from './time.ts';
 
@@ -113,7 +114,8 @@ export const teamsLogin: MockApp = createApp('teams', 'login', [
 // ---------------------------------------------------------------------------
 
 function graphError(status: number, _code: string, message: string): MockResponse {
-  const code = status === 401 ? 'InvalidAuthenticationToken'
+  const code = status === 410 ? 'resyncRequired'
+    : status === 401 ? 'InvalidAuthenticationToken'
     : status === 429 ? 'TooManyRequests'
       : status === 400 ? 'BadRequest'
         : status === 503 ? 'ServiceUnavailable'
@@ -154,7 +156,53 @@ const USER_DEFAULT_PROPS = [
   'officeLocation', 'preferredLanguage', 'surname', 'userPrincipalName', 'id',
 ] as const;
 
+// ---------------------------------------------------------------------------
+// Directory changes, for /users/delta
+// ---------------------------------------------------------------------------
+
+/**
+ * Changes made to Entra after the directory was generated: a person moves
+ * building, is renamed, or leaves. Tests and the demo drive these; the delta
+ * endpoint reports them.
+ *
+ * VERSIONED, because that is what a delta token is: "everything after version
+ * N". A token that remembered a TIME instead would miss a change stamped a
+ * moment before a slow page finished - the same gap the network watermarks
+ * overlap to avoid.
+ */
+type Change = { version: number; removed: boolean; props: Record<string, unknown> };
+let entraVersion = 0;
+const changes = new Map<string, Change>();
+
+/** Move, rename or otherwise edit one Entra user. Props are merged over the directory's. */
+export function mutateEntraUser(
+  id: string, patch: { streetAddress?: string | null; userPrincipalName?: string },
+): void {
+  entraVersion++;
+  const prev = changes.get(id);
+  changes.set(id, { version: entraVersion, removed: false, props: { ...prev?.props, ...patch } });
+}
+
+export function removeEntraUser(id: string): void {
+  entraVersion++;
+  changes.set(id, { version: entraVersion, removed: true, props: {} });
+}
+
+export function resetEntraChanges(): void {
+  entraVersion = 0;
+  changes.clear();
+}
+
+/** How long a delta token stays valid. Seven days per Graph's guidance - verify for users. */
+export const DELTA_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
 function entraUsers(): Record<string, unknown>[] {
+  return baseEntraUsers()
+    .filter((u) => !changes.get(String(u.id))?.removed)
+    .map((u) => ({ ...u, ...changes.get(String(u.id))?.props }));
+}
+
+function baseEntraUsers(): Record<string, unknown>[] {
   const d = directory();
   const people = d.people.filter((p) => p.inTeams).map((p) => ({
     id: p.ids.entra,
@@ -466,7 +514,92 @@ function callRecordWindow(filter: string | null): { from: number; to: number } {
   return { from, to };
 }
 
+type DeltaState =
+  | { k: 'initial'; o: number; v: number; s: string | null }
+  | { k: 'changes'; o: number; from: number; to: number; s: string | null }
+  | { k: 'link'; v: number; t: number; s: string | null };
+
+const encodeState = (st: DeltaState) => b64urlEncode(JSON.stringify(st));
+function decodeState(token: string): DeltaState {
+  try {
+    return JSON.parse(b64urlDecodeText(token)) as DeltaState;
+  } catch {
+    throw new BadRequest('invalid delta or skip token');
+  }
+}
+
+/**
+ * `GET /users/delta` - a full listing first, then only what changed.
+ *
+ * THE TRAPS, faithful to the real endpoint:
+ *   - The first sync is a full listing, paged by `$skiptoken`, and only its
+ *     LAST page carries `@odata.deltaLink`. Stop early and you have no
+ *     deltaLink - resume from the nextLink you saved, or start again.
+ *   - Page size is set by the `Prefer: odata.maxpagesize` HEADER, not `$top`.
+ *   - `$select` is remembered INSIDE the tokens. A client that appends it to
+ *     a nextLink is building URLs it was told to treat as opaque.
+ *   - A changed user comes back with its id and ONLY the changed properties.
+ *     A client that overwrites its record with the row blanks every field
+ *     the change did not touch.
+ *   - A removed user is `{ id, '@removed': { reason } }` and nothing else.
+ *   - A delta token older than seven days is a 410: resync from scratch.
+ */
+function usersDelta(req: MockRequest): MockResponse {
+  const pref = /odata\.maxpagesize=(\d+)/.exec(req.headers.get('prefer') ?? '');
+  const pageSize = Math.min(999, Math.max(1, pref ? Number(pref[1]) : 100));
+  const skip = req.query.get('$skiptoken');
+  const delta = req.query.get('$deltatoken');
+  const link = (st: DeltaState) =>
+    req.base + req.path + '?' + (st.k === 'link' ? '$deltatoken=' : '$skiptoken=') + encodeState(st);
+
+  let state: DeltaState;
+  if (skip) state = decodeState(skip);
+  else if (delta) {
+    const d = decodeState(delta);
+    if (d.k !== 'link') throw new BadRequest('invalid delta token');
+    if (now() - d.t > DELTA_TOKEN_TTL_MS) {
+      return graphError(410, '', 'Resync required. The delta token has expired; restart with a full sync.');
+    }
+    state = { k: 'changes', o: 0, from: d.v, to: entraVersion, s: d.s };
+  } else {
+    state = { k: 'initial', o: 0, v: entraVersion, s: req.query.get('$select') };
+  }
+  if (state.k === 'link') throw new BadRequest('a delta token is not a skip token');
+
+  let rows: Record<string, unknown>[];
+  if (state.k === 'initial') {
+    rows = selectProps(entraUsers(), state.s);
+  } else {
+    const { from, to } = state;
+    const selected = state.s ? state.s.split(',').map((x) => x.trim()) : [...USER_DEFAULT_PROPS];
+    rows = [...changes.entries()]
+      .filter(([, c]) => c.version > from && c.version <= to)
+      .sort(([, a], [, b]) => a.version - b.version)
+      .map(([id, c]) => c.removed
+        ? { id, '@removed': { reason: 'deleted' } }
+        : { id, ...Object.fromEntries(Object.entries(c.props).filter(([k]) => selected.includes(k))) });
+  }
+
+  const page = rows.slice(state.o, state.o + pageSize);
+  const body: Record<string, unknown> = { '@odata.context': GRAPH + '/$metadata#users', value: page };
+  if (state.o + pageSize < rows.length) {
+    body['@odata.nextLink'] = link({ ...state, o: state.o + pageSize });
+  } else {
+    // The deltaLink's version is where the sync STARTED, not where it ended:
+    // a change made while a long initial listing was being paged may or may
+    // not be on a page already fetched, so the next delta must include it.
+    const v = state.k === 'initial' ? state.v : state.to;
+    body['@odata.deltaLink'] = link({ k: 'link', v, t: now(), s: state.s });
+  }
+  return { status: 200, body };
+}
+
 export const teamsGraph: MockApp = createApp('teams', 'graph', [
+  {
+    method: 'GET',
+    pattern: '/v1.0/users/delta',
+    handler: usersDelta,
+  },
   {
     method: 'GET',
     pattern: '/v1.0/users',

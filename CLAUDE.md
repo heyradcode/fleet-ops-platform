@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 167 tests, no network. Picks up web/ tests too.
+pnpm test                       # 175 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180
 pnpm web:build                  # typechecks web/ AND builds it
@@ -244,6 +244,15 @@ network. Nothing real belongs in this repo.
   hands them a token with no tenant claim, which the verifier then rejects —
   so the symptom is "nobody can sign in" pointing at code that is correct.
   Terraform pins it; a test pins the response shape.
+- **The Entra directory is synced by DELTA, and the first sync spans runs.**
+  75,000 users is ~76 pages, past the per-run ceiling, so `syncEntraDirectory`
+  saves the nextLink it stopped at and resumes there. A full sync writes a new
+  GENERATION and flips to it only when its last page lands - readers never
+  see a half-built directory. Delta rows carry ONLY changed properties: merge
+  them, never overwrite. The deltaLink is saved after the writes, like every
+  watermark. A 410 means the token expired: resync, serving the old copy.
+  Stored per user: a per-tenant salted hash of the address and a facility
+  code - never the address.
 - **Cognito custom attributes are a one-way door.** They cannot be renamed or
   removed once the pool exists, and there is a cap of 50.
 - **Shared thresholds live in one place.** `UTILISATION_THRESHOLDS` in

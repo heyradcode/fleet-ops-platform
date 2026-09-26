@@ -68,6 +68,8 @@ import { setRandom, seededRandom } from './platform/random.ts';
 import { mockFetch, directory as commsDirectory, DEMO_CLIENT, DEMO_WEBEX_TOKEN } from './integrations/comms/mock/index.ts';
 import { createCommsClient } from './integrations/comms/client.ts';
 import { runCommsPoll } from './integrations/comms/poll.ts';
+import { syncEntraDirectory } from './integrations/comms/entra-directory.ts';
+import { mutateEntraUser } from './integrations/comms/mock/index.ts';
 import { commsToolsFor } from './ai/comms-tools.ts';
 import { commsConfigFor, HHS_DEMO_TENANT } from './integrations/comms/config.ts';
 import { COMMS_SOURCES } from './integrations/comms/types.ts';
@@ -806,6 +808,19 @@ async function sectionComms() {
     write('   ' + source.padEnd(9) + String(f.rows).padStart(4) + ' rows  ' + f.pages + ' pages' +
       (f.truncated ? '  [33mTRUNCATED[0m' : '') + '  ' + dim(how[source]) + '\n');
   }
+
+  note('');
+  note('The Entra directory - where people sit - by DELTA, not a 75,000-user listing each poll:');
+  const sync = poll.directorySync!;
+  write('   first poll   ' + sync.mode + ' sync, ' + sync.rowsApplied + ' users in ' + sync.pages +
+    ' page(s), status ' + sync.status + '\n');
+  // Someone moves building. The next poll asks Graph only for what changed.
+  const mover = commsDirectory().people.find((x) => x.inTeams && x.facility?.code === '0412')!;
+  mutateEntraUser(mover.ids.entra, { streetAddress: '48 Placeholder St LC=1120' });
+  const delta = await syncEntraDirectory(hhsAdmin, client);
+  write('   next poll    ' + delta.mode + ', ' + delta.rowsApplied + ' change applied in ' + delta.pages +
+    ' page - one person moved LC=0412 -> LC=1120\n');
+  write('   ' + dim('stored per user: a salted hash of the address and a facility code - never the address') + '\n');
 
   note('');
   note('Split by agency - from the email domain, lower-cased first:');

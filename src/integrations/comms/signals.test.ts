@@ -16,6 +16,7 @@ import {
 } from './mock/index.ts';
 import { createCommsClient } from './client.ts';
 import { buildWorkforce } from './workforce.ts';
+import { loadEntraDirectory, syncEntraDirectory } from './entra-directory.ts';
 import { COMMS_CONFIG, HHS_DEMO_TENANT } from './config.ts';
 import { collectSignals, COMMS_THRESHOLDS, isoDurationMs, type CommsSignal } from './signals.ts';
 import { correlateAlarms, evaluateSignals } from './incidents.ts';
@@ -39,7 +40,13 @@ async function run(sources: CommsSource[] = ['teams', 'genesys', 'webex']) {
     sleep: async () => {},
   });
   // The workforce always needs Entra for placement, whichever signal sources run.
-  const workforce = await buildWorkforce(client, { ...config, sources: ['teams', 'genesys', 'webex'] });
+  const principal = {
+    sub: 'test', email: 'ops-lead@hhs.texas.example', tenantId: HHS_DEMO_TENANT,
+    roles: ['admin' as const], scope: { kind: 'tenant' as const }, identityProvider: 'cognito' as const,
+  };
+  await syncEntraDirectory(principal, client);
+  const workforce = await buildWorkforce(client, { ...config, sources: ['teams', 'genesys', 'webex'] },
+    loadEntraDirectory(principal));
   const signals = await collectSignals(client, config, workforce, now());
   const alarms = evaluateSignals(signals);
   return { signals, alarms, incidents: correlateAlarms(alarms) };

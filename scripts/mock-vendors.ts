@@ -107,6 +107,7 @@ function catalogue() {
     teams: [
       'POST ' + ORIGIN + '/msft-login/' + d.entraTenantId + '/oauth2/v2.0/token',
       'GET  ' + ORIGIN + '/graph/v1.0/users?$select=id,userPrincipalName,department,streetAddress',
+      'GET  ' + ORIGIN + '/graph/v1.0/users/delta?$select=id,userPrincipalName,streetAddress   (Prefer: odata.maxpagesize=N)',
       'GET  ' + ORIGIN + '/graph/v1.0/admin/teams/userConfigurations?$filter=isEnterpriseVoiceEnabled eq true',
       'GET  ' + ORIGIN + '/graph/v1.0/communications/callRecords?$filter=startDateTime ge <iso>',
       'GET  ' + ORIGIN + '/graph/v1.0/communications/callRecords/{id}?$expand=sessions($expand=segments)',

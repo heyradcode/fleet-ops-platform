@@ -41,7 +41,9 @@ export type UnplacedReason =
   | 'malformed-facility-code'  // something LC-like that is not LC=NNNN
   | 'no-webex-location'        // Webex Calling user with no location
   | 'unmapped-webex-location'  // a location the tenant table does not know
-  | 'no-facility-source';      // e.g. Genesys: the platform holds none
+  | 'no-facility-source'       // e.g. Genesys: the platform holds none
+  | 'directory-sync-incomplete' // the first Entra sync has not finished yet
+  | 'not-in-directory';        // a Teams account Entra's directory does not list
 
 /** One account on one platform, normalised. Pure output of a normaliser. */
 export type CommsAccount = {

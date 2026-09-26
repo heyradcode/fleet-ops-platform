@@ -74,6 +74,11 @@ export class DynamoTable {
     return this.#items.get(pk)?.get(sk);
   }
 
+  /** DeleteItem. Deleting an item that is not there is not an error, as in DynamoDB. */
+  delete(pk: string, sk: string): void {
+    this.#items.get(pk)?.delete(sk);
+  }
+
   /**
    * Query one partition, optionally restricted to a sort-key prefix/range and
    * reversed. This is the ONLY read pattern you should be using in production.

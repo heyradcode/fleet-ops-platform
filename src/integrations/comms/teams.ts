@@ -1,31 +1,23 @@
 /**
  * Microsoft Teams Voice users, via Graph.
  *
- * TWO CALLS, JOINED BY ENTRA OBJECT ID, because neither holds everything:
+ * `/admin/teams/userConfigurations`, FILTERED at the source to
+ * `isEnterpriseVoiceEnabled eq true`. Entra holds ~75,000 accounts at this
+ * customer and most are not phone users; pulling them all to filter locally
+ * costs ~75 pages a run against a throttled API, for rows that are then
+ * thrown away.
  *
- *   /admin/teams/userConfigurations   who is voice-enabled, and their number
- *   /users?$select=...streetAddress   where they sit (LC=NNNN in the address)
- *
- * The first is FILTERED at the source to `isEnterpriseVoiceEnabled eq true`.
- * Entra holds ~75,000 accounts at this customer and most are not phone users;
- * pulling them all to filter locally costs ~75 pages a run against a
- * throttled API, for rows that are then thrown away.
- *
- * The second is the expensive one and the known gap. `/users` has no voice
- * flag to filter on, so a full pull is 75,000 rows - about 76 pages of 999,
- * which is PAST `MAX_PAGES_PER_RUN` and would come back `truncated`. The
- * production answer is a `/users/delta` query: one full sync, then only
- * changes. The mock does not model delta yet, so this pulls the whole list
- * and surfaces `truncated` rather than hiding it.
- *
- * `$select` IS NOT OPTIONAL. Graph's default property set omits
- * `streetAddress`, so without it every user comes back unplaced and nothing
- * errors.
+ * WHERE THEY SIT comes from the synced Entra directory (entra-directory.ts),
+ * keyed by object id - not from a `/users` listing here. That listing was 76
+ * pages of 999 at this customer, past the per-run page ceiling, so it came
+ * back truncated on every poll. The delta sync reads the directory once and
+ * then only its changes.
  */
 import type { CommsClient, Drained } from './client.ts';
 import { drainGraph } from './client.ts';
-import { assignAgency, facilityFromAddress } from './classify.ts';
-import type { CommsAccount, CommsTenantConfig, UnplacedReason } from './types.ts';
+import { assignAgency } from './classify.ts';
+import type { EntraDirectoryView } from './entra-directory.ts';
+import type { CommsAccount, CommsTenantConfig } from './types.ts';
 
 type UserConfigurationRow = {
   id: string;
@@ -35,74 +27,47 @@ type UserConfigurationRow = {
   telephoneNumbers: Array<{ telephoneNumber: string; assignmentCategory: string }>;
 };
 
-type EntraUserRow = {
-  id: string;
-  userPrincipalName: string;
-  mail: string | null;
-  displayName: string;
-  streetAddress: string | null;
-};
-
-export type TeamsRaw = {
-  configurations: Drained<UserConfigurationRow>;
-  users: Drained<EntraUserRow>;
-};
+export type TeamsRaw = { configurations: Drained<UserConfigurationRow> };
 
 export async function pullTeams(client: CommsClient): Promise<TeamsRaw> {
-  const g = client.endpoints.graph;
   const configurations = await drainGraph<UserConfigurationRow>(client,
-    g + '/admin/teams/userConfigurations?$filter=' +
+    client.endpoints.graph + '/admin/teams/userConfigurations?$filter=' +
     encodeURIComponent('isEnterpriseVoiceEnabled eq true') + '&$top=999');
-  const users = await drainGraph<EntraUserRow>(client,
-    g + '/users?$select=id,userPrincipalName,mail,displayName,streetAddress&$top=999');
-  return { configurations, users };
+  return { configurations };
 }
 
-/**
- * Where Entra places each person, keyed by lower-cased UPN - for EVERY Entra
- * user, not only the voice-enabled ones.
- *
- * This is why the full `/users` pull is worth its cost. A Genesys agent or a
- * Webex user who has no Teams phone is still an Entra user with an address,
- * and without this they would be unplaceable for no reason but which phone
- * system their agency happened to buy.
- */
-export type EntraPlacement = Map<string, { code: string } | { unplaced: UnplacedReason }>;
-
-/** Pure. Raw Graph rows -> accounts and placement. Replayable over archived pages. */
-export function normaliseTeams(raw: TeamsRaw, config: CommsTenantConfig): {
-  accounts: CommsAccount[];
-  placement: EntraPlacement;
-} {
-  const users = new Map(raw.users.rows.map((u) => [u.id, u]));
-  const placement: EntraPlacement = new Map(
-    raw.users.rows.map((u) => [u.userPrincipalName.toLowerCase(), facilityFromAddress(u.streetAddress)]));
-
-  const accounts = raw.configurations.rows
+/** Pure. Raw Graph rows plus the directory -> accounts. Replayable over archived pages. */
+export function normaliseTeams(
+  raw: TeamsRaw, config: CommsTenantConfig, directory: EntraDirectoryView,
+): CommsAccount[] {
+  return raw.configurations.rows
     .filter((c) => c.isEnterpriseVoiceEnabled)
     .map((c): CommsAccount => {
-      const user = users.get(c.id);
-      // The UPN is the sign-in name; `mail` can differ, and is null on
-      // resource accounts. The UPN is what Genesys and Webex usernames match.
+      // The UPN is the sign-in name, and what Genesys and Webex usernames match.
       const email = c.userPrincipalName;
       const resource = c.accountType === 'resourceAccount';
-      const place = facilityFromAddress(user?.streetAddress);
+      const place = directory.placementById(c.id);
       return {
         source: 'teams',
         sourceUserId: c.id,
         email,
         emailKey: email.toLowerCase(),
-        displayName: user?.displayName ?? email,
+        // Names are not read from the directory any more - it stores none.
+        // The UPN is enough to act on, and nothing downstream persists it.
+        displayName: email,
         agency: assignAgency(email, config),
         kind: resource ? 'resource' : 'person',
         voice: true,
         active: true,
         ...(resource ? {}
-          : 'code' in place
+          : place && 'code' in place
             ? { facility: { code: place.code, source: 'entra-street-address' as const } }
-            : { unplaced: place.unplaced }),
+            : {
+              unplaced: place && 'unplaced' in place ? place.unplaced
+                : directory.status === 'complete' || directory.status === 'resyncing'
+                  ? 'not-in-directory' as const
+                  : 'directory-sync-incomplete' as const,
+            }),
       };
     });
-
-  return { accounts, placement };
 }
