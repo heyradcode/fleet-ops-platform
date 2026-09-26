@@ -271,7 +271,9 @@ function generate(anchor: number): Conversation[] {
       const hour = new Date(t).getUTCHours();
       const daytime = hour >= 13 && hour <= 23;   // 8am-6pm Central, roughly
       const surge = planted && t >= incidentFrom;
-      const rate = (daytime ? 0.9 : 0.1) * (surge ? 2 : 1);
+      // The surge ignores the time of day, so the planted incident is there
+      // whenever the mock server is queried, not only in Texas office hours.
+      const rate = surge ? 1.8 : daytime ? 0.9 : 0.1;
       let arrivals = Math.floor(rate) + (rng() < rate % 1 ? 1 : 0);
       while (arrivals-- > 0) {
         const waitMs = surge ? 180_000 + Math.floor(rng() * 540_000) : Math.floor(rng() * 45_000);

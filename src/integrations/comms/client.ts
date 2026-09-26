@@ -39,6 +39,8 @@ export type CommsEndpoints = {
   genesysLogin: string;
   genesysApi: string;
   webexApi: string;
+  /** Meeting qualities live on their own host. */
+  webexAnalytics: string;
 };
 
 export const REAL_ENDPOINTS: CommsEndpoints = {
@@ -47,6 +49,7 @@ export const REAL_ENDPOINTS: CommsEndpoints = {
   genesysLogin: 'https://login.use2.us-gov-pure.cloud',
   genesysApi: 'https://api.use2.us-gov-pure.cloud',
   webexApi: 'https://webexapis.com/v1',
+  webexAnalytics: 'https://analytics.webexapis.com/v1',
 };
 
 /** In production these come from Secrets Manager, per tenant, cached across warm starts. */

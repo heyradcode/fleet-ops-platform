@@ -70,6 +70,8 @@ import { createCommsClient } from './integrations/comms/client.ts';
 import { buildWorkforce } from './integrations/comms/workforce.ts';
 import { commsConfigFor, HHS_DEMO_TENANT } from './integrations/comms/config.ts';
 import { COMMS_SOURCES } from './integrations/comms/types.ts';
+import { collectSignals } from './integrations/comms/signals.ts';
+import { evaluateSignals, correlateAlarms } from './integrations/comms/incidents.ts';
 import { loadRunbooksFromDisk } from './platform/runbook-loader.node.ts';
 
 // ---------------------------------------------------------------------------
@@ -831,6 +833,31 @@ async function sectionComms() {
   }
   write('   ' + dim(report.facilityConflicts.length + ' Entra/Webex facility conflicts, ' +
     report.unmappedWebexLocations.length + ' unmapped Webex locations') + '\n');
+
+  note('');
+  note('Signals: one number per subject per window, never one per call:');
+  const signals = await collectSignals(client, config, report, now());
+  const colour = (sev: string) => sev === 'critical' ? '\x1b[31m' : sev === 'warning' ? '\x1b[33m' : '\x1b[90m';
+  for (const sig of signals.filter((x) => x.severity !== 'ok')) {
+    write('   ' + colour(sig.severity) + sig.severity.padEnd(9) + '\x1b[0m' + sig.source.padEnd(9) + sig.detail + '\n');
+  }
+  write('   ' + dim(signals.filter((x) => x.severity === 'ok').length + ' more signals measured and healthy - ' +
+    'the good trunk, the other facilities, the other queues') + '\n');
+
+  note('');
+  note('Alarms -> incidents. A facility needs two services to agree; a counter is its own witness:');
+  const alarms = evaluateSignals(signals);
+  for (const incident of correlateAlarms(alarms)) {
+    write('   ' + colour(incident.severity) + 'INCIDENT' + '\x1b[0m  ' + incident.title +
+      '  ' + dim('[' + incident.sources.join(' + ') + ']') + '\n');
+  }
+
+  note('');
+  note('Take Webex away and the same Houston evidence is held back, not paged:');
+  const teamsOnly = evaluateSignals(signals.filter((x) => x.source !== 'webex'));
+  for (const held of teamsOnly.filter((a) => !a.corroborated)) {
+    write('   ' + held.subject.name.padEnd(12) + dim(held.heldBack ?? '') + '\n');
+  }
 }
 
 // ===========================================================================

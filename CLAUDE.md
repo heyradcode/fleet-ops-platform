@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 150 tests, no network. Picks up web/ tests too.
+pnpm test                       # 157 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180
 pnpm web:build                  # typechecks web/ AND builds it
@@ -140,6 +140,19 @@ one, change the test deliberately rather than making it pass.
   routing adjacency takes three. Under five minutes splits one outage into
   several pages; an hour collapses an afternoon of flapping into one permanent
   incident.
+- **Comms data is people and subjects, not devices.** Teams, Genesys and
+  Webex produce a workforce (joined on the lower-cased email) and SIGNALS about
+  trunks, facilities and queues. They have their own types in
+  `integrations/comms/`; do not push them through `Observation`/`Alarm`, which
+  are keyed on a DeviceId that would have to be faked.
+- **Call records are aggregated before any rule sees them.** One number per
+  (subject, kind, window), and no rate below its minimum sample - the same
+  argument that keeps flows out of the operational store.
+- **Facility call quality needs two SERVICES to agree.** It is an inference
+  about a site's network; Teams alone can be wrong (a client build, a media
+  region). A trunk's failure rate and a queue's backlog are the system of
+  record counting itself, and are exempt. A source that measured the same
+  subject and saw nothing wrong DISPUTES the alarm rather than being outvoted.
 - **Scope comes from the token, not the request.** Repository and resolver
   functions take a `Principal` and derive keys from it. An operator with no site
   claim gets *device* scope, not the whole estate — widening access is a
@@ -281,7 +294,8 @@ src/integrations/controller/  Meraki, Mist, Aruba Central
 src/integrations/probe.ts  the external plane — the only thing that sees silence
 src/integrations/splunk/   outbound HEC (a bus consumer) + catalogued SPL search
 src/integrations/comms/  Teams, Genesys, Webex: client (tokens, retries, paging),
-                 connectors, and the workforce join - agency + facility split
+                 connectors, the workforce join (agency + facility split), and
+                 signals -> alarms -> incidents
 src/integrations/comms/mock/  Teams (Graph), Genesys, Webex mocks: mockFetch on the
                  real hostnames; scripts/mock-vendors.ts serves them on localhost
 src/pipeline/    collect → normalise → stream → enrich → evaluate → correlate
