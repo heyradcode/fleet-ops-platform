@@ -15,5 +15,7 @@
   // The Lambda entry point lives under infra/ because it belongs to the
   // deployment rather than the platform - but it is TypeScript that ships,
   // and a file nothing typechecks is a file that breaks in CloudWatch.
-  "include": ["src/**/*.ts", "infra/terraform/auth/lambda-entry.ts"]
+  // scripts/*.ts are Node entry points (the mock-vendor server), so they are
+  // typechecked here but sit outside src/ and its no-`node:` rule.
+  "include": ["src/**/*.ts", "scripts/**/*.ts", "infra/terraform/auth/lambda-entry.ts"]
 }

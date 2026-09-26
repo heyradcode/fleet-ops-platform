@@ -24,6 +24,7 @@
     "typecheck": "tsc --noEmit",
     "web": "pnpm --filter @netpulse/web dev",
     "web:build": "pnpm --filter @netpulse/web build",
+    "mock": "node scripts/mock-vendors.ts",
     "verify": "pnpm typecheck && pnpm test && pnpm start && pnpm web:build",
     "build:lambda": "node scripts/build-lambda.mjs"
   },
