@@ -222,7 +222,8 @@ export function DevicePanel({
 
 /* -------------------------------------------------------------------------- */
 
-function TraceStep({ step }: { step: AgentTrace }) {
+/** Exported for the comms view, whose assistant shows its working the same way. */
+export function TraceStep({ step }: { step: AgentTrace }) {
   // A refused tool is the interesting case, so it is styled as one rather than
   // hidden. This is the authorisation rule made watchable.
   const refused = step.detail.endsWith('-> error') || step.kind === 'guardrail';

@@ -1224,3 +1224,157 @@ button.topo-node:hover { border-color: var(--amber); }
   color: var(--dim);
   font-size: 10px;
 }
+
+/* ==========================================================================
+   Comms view: Teams, Genesys, Webex
+   ==========================================================================
+   The same grammar as the network board - a feed of what needs a decision,
+   dense tables, the assistant's working on the right - because an ops lead
+   switching views should not have to learn a second screen. No map: the
+   subjects here are trunks, queues and facility codes, none of which has a
+   coordinate, and drawing them on one would invent data.
+   ========================================================================== */
+
+/* A second ROLE of the board, not another site - hence its own divider. */
+.view-switch { border-right: 1px solid var(--line-bright); }
+
+.comms-body {
+  display: grid;
+  grid-template-columns: 420px 1fr 340px;
+  min-height: 0;
+}
+
+.comms-incident { border-bottom: 1px solid var(--line); }
+.comms-incident .exception { border-bottom: 0; cursor: default; }
+.comms-incident .exception:hover { background: none; }
+.comms-incident.is-noise { opacity: 0.5; }
+
+.comms-evidence {
+  list-style: none;
+  margin: 0;
+  padding: 0 12px 8px 86px;
+  font-family: var(--data);
+  font-size: 11px;
+  color: var(--dim);
+}
+
+.comms-evidence li::before { content: '· '; color: var(--faint); }
+
+.comms-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--ground);
+}
+
+.comms-tables {
+  overflow-y: auto;
+  min-height: 0;
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.comms-table {
+  width: 100%;
+  max-width: 640px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.comms-table caption {
+  text-align: left;
+  padding-bottom: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.comms-table th,
+.comms-table td {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  font-weight: 400;
+}
+
+.comms-table thead th {
+  font-family: var(--sign);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.comms-table td.num,
+.comms-table thead th:not(:first-child) { text-align: right; width: 96px; }
+
+.comms-table td.num { color: var(--text-strong); }
+.comms-table tbody th { color: var(--text); }
+.comms-table tr.is-minor th,
+.comms-table tr.is-minor td { color: var(--dim); }
+
+/* Amber means attention and nothing else: a facility with an open incident,
+   or a domain the tenant has not configured. */
+.comms-table tr.is-attention th { color: var(--amber); box-shadow: inset 2px 0 0 var(--amber); }
+
+.comms-flag {
+  margin-left: 8px;
+  font-family: var(--data);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--amber);
+  border: 1px solid var(--amber-dim);
+  padding: 1px 4px;
+}
+
+.comms-foot {
+  margin: 0;
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.comms-foot div { display: grid; grid-template-columns: 96px 1fr; gap: 10px; }
+.comms-foot dt {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.comms-foot dd { margin: 0; color: var(--dim); }
+.comms-foot .is-attention dd { color: var(--amber); }
+
+.comms-warning {
+  margin: 0;
+  max-width: 640px;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--text);
+  background: rgba(240, 162, 2, 0.08);
+  border-left: 2px solid var(--amber);
+}
+
+.comms-ask { display: flex; flex-direction: column; gap: 7px; margin-bottom: 12px; }
+.comms-ask .ask { align-self: flex-start; }
+.comms-ask .ask:disabled { opacity: 0.5; cursor: default; }
+.comms-question { resize: vertical; font-size: 12px; line-height: 1.45; }
+
+@media (max-width: 1180px) {
+  .comms-body { grid-template-columns: 360px 1fr; }
+  .comms-body .panel { display: none; }
+}
+
+@media (max-width: 880px) {
+  .comms-body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  .comms-body .roster { max-height: 45vh; }
+}

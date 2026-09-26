@@ -10,10 +10,10 @@
  * shows what the RULES decided, not a hand-written list of things that look
  * like alerts. If the corroboration rule changes, this board changes with it.
  */
-import type { BoardSnapshot, HealthTick, Transport } from './index.ts';
+import type { BoardSnapshot, CommsSnapshot, HealthTick, Transport } from './index.ts';
 import type { Alarm, DeviceStatus, Incident, Principal } from '../../../src/platform/types.ts';
 
-import { setClock, fixedClock } from '../../../src/platform/clock.ts';
+import { setClock, fixedClock, now } from '../../../src/platform/clock.ts';
 import { setRandom, seededRandom } from '../../../src/platform/random.ts';
 import { setUuid, seededUuid } from '../../../src/platform/crypto.ts';
 import { verifyToken, signDemoToken } from '../../../src/auth/cognito-jwt-verifier.ts';
@@ -28,7 +28,14 @@ import {
   runScenarioFeeds, collapseDuplicates, resolveLocations, evaluate, detectIncidents,
 } from '../../../src/pipeline/steps.ts';
 import { runAgent } from '../../../src/ai/agent-core.ts';
-import { TOOL_SPECS } from '../../../src/ai/tools.ts';
+import { toolSpecsFor } from '../../../src/ai/tools.ts';
+import { mockFetch, directory as commsDirectory, DEMO_CLIENT, DEMO_WEBEX_TOKEN } from '../../../src/integrations/comms/mock/index.ts';
+import { createCommsClient } from '../../../src/integrations/comms/client.ts';
+import { commsConfigFor } from '../../../src/integrations/comms/config.ts';
+import { runCommsPoll } from '../../../src/integrations/comms/poll.ts';
+import {
+  commsAlarms, commsIncidents, commsVisibleTo, commsWorkforce,
+} from '../../../src/integrations/comms/store.ts';
 import { knowledgeBase } from '../../../src/ai/knowledge-base.ts';
 import { putObservations, putDeviceStates } from '../../../src/platform/repository.ts';
 import { loadRunbooksFromBundle } from './runbooks.browser.ts';
@@ -175,6 +182,33 @@ function prepareAgent(): Promise<void> {
   return agentReady;
 }
 
+/**
+ * One comms poll per tenant per page load, against the vendor mocks - which
+ * answer the REAL hostnames through `mockFetch`, in the tab. The same
+ * runCommsPoll a scheduled Lambda would run, writing to the same store the
+ * agent's tools read, so the board and the assistant cannot disagree.
+ */
+const commsPolled = new Map<string, Promise<void>>();
+
+function ensureCommsPolled(principal: Principal): Promise<void> {
+  let done = commsPolled.get(principal.tenantId);
+  if (!done) {
+    const config = commsConfigFor(principal.tenantId)!;
+    const client = createCommsClient({
+      tenantId: principal.tenantId,
+      fetch: mockFetch,
+      credentials: {
+        entra: { tenantId: commsDirectory().entraTenantId, ...DEMO_CLIENT },
+        genesys: { ...DEMO_CLIENT },
+        webex: { token: DEMO_WEBEX_TOKEN },
+      },
+    });
+    done = runCommsPoll(principal, client, config, now()).then(() => undefined);
+    commsPolled.set(principal.tenantId, done);
+  }
+  return done;
+}
+
 export const inProcessTransport: Transport = {
   setSession(principal) {
     session = principal;
@@ -217,8 +251,25 @@ export const inProcessTransport: Transport = {
     return runAgent({
       question,
       principal: caller(),
-      tools: TOOL_SPECS,
+      // Per caller: a comms tenant's assistant also gets the comms tools.
+      // For every network-only tenant this is exactly TOOL_SPECS, as before.
+      tools: toolSpecsFor(caller(), { readOnly: false }),
     });
+  },
+
+  async loadComms() {
+    ensureSeeded();
+    const principal = caller();
+    if (!commsVisibleTo(principal)) return null;
+
+    // The CALLER polls - a tenant-wide principal, which is exactly who
+    // commsVisibleTo admits - so there is no privileged principal involved.
+    await ensureCommsPolled(principal);
+    return {
+      workforce: commsWorkforce(principal)!,
+      incidents: commsIncidents(principal),
+      heldBack: commsAlarms(principal).filter((a) => !a.corroborated),
+    } satisfies CommsSnapshot;
   },
 
   subscribeHealth(siteId, onTick) {

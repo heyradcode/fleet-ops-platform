@@ -77,6 +77,13 @@ locals {
       roles    = ["admin"]
       site     = null
     }
+    # The voice / contact-centre demo tenant. Tenant-wide admin because comms
+    # data has no site to scope to - see src/integrations/comms/store.ts.
+    "hhs.texas.example" = {
+      tenantId = "hhs-demo"
+      roles    = ["admin"]
+      site     = null
+    }
   }
 }
 

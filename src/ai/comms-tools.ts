@@ -25,8 +25,7 @@
 import type { ToolSpec } from '../aws/bedrock.ts';
 import type { Principal } from '../platform/types.ts';
 import type { Tool } from './tools.ts';
-import { commsConfigFor } from '../integrations/comms/config.ts';
-import { commsAlarms, commsIncidents, commsWorkforce } from '../integrations/comms/store.ts';
+import { commsAlarms, commsIncidents, commsVisibleTo, commsWorkforce } from '../integrations/comms/store.ts';
 import { COMMS_SOURCES } from '../integrations/comms/types.ts';
 
 export const COMMS_TOOLS: Tool[] = [
@@ -120,8 +119,5 @@ export const COMMS_TOOLS: Tool[] = [
 
 /** Comms tool specs for this caller: empty unless the tenant runs comms and the scope is tenant-wide. */
 export function commsToolsFor(principal: Principal): ToolSpec[] {
-  const config = commsConfigFor(principal.tenantId);
-  if (!config || config.sources.length === 0) return [];
-  if (principal.scope.kind !== 'tenant') return [];
-  return COMMS_TOOLS.map((t) => t.spec);
+  return commsVisibleTo(principal) ? COMMS_TOOLS.map((t) => t.spec) : [];
 }

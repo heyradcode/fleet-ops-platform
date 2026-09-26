@@ -25,6 +25,7 @@ import { pk, OutOfScopeError } from '../../platform/tenancy.ts';
 import type { Principal } from '../../platform/types.ts';
 import type { CommsAlarm, CommsIncident } from './incidents.ts';
 import type { UnplacedReason } from './types.ts';
+import { commsConfigFor } from './config.ts';
 import type { WorkforceReport } from './workforce.ts';
 
 /** The workforce split, with every person-level field removed. */
@@ -52,6 +53,16 @@ export function summariseWorkforce(report: WorkforceReport, asOf: string): Workf
     unmappedWebexLocations: report.unmappedWebexLocations,
     truncated: Object.values(report.fetched).some((f) => f?.truncated),
   };
+}
+
+/**
+ * Whether this caller gets comms at all: their tenant runs comms sources and
+ * their scope is tenant-wide. The ONE definition, used by the agent's tool
+ * list and by the board, so the two cannot disagree about who sees what.
+ */
+export function commsVisibleTo(principal: Principal): boolean {
+  const config = commsConfigFor(principal.tenantId);
+  return !!config && config.sources.length > 0 && principal.scope.kind === 'tenant';
 }
 
 export function requireTenantScope(principal: Principal): void {

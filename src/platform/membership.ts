@@ -72,6 +72,10 @@ export const DEMO_MEMBERSHIPS: Record<string, Membership> = {
   'northwind-utilities.com': { tenantId: 'northwind-utilities', roles: ['viewer'] },
   // The platform team.
   'netpulse.io': { tenantId: 'acme-networks', roles: ['admin'] },
+  // The voice / contact-centre customer (Teams, Genesys, Webex). Tenant-wide:
+  // comms subjects are facilities and queues, not sites, so there is no site
+  // to narrow an operator to yet. A `.example` domain, like every fixture.
+  'hhs.texas.example': { tenantId: 'hhs-demo', roles: ['admin'] },
 };
 
 /** The lookup key. One function, so the storage and the trigger cannot disagree. */

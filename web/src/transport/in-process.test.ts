@@ -248,3 +248,38 @@ test('a Dallas operator subscribing to Phoenix health receives nothing', async (
   assert.ok(seen.length >= 1);
   assert.ok(seen.every((n) => n === 0));
 });
+
+// ---------------------------------------------------------------------------
+// The comms view
+// ---------------------------------------------------------------------------
+
+const HHS_LEAD = 'ops-lead@hhs.texas.example';   // admin, tenant hhs-demo
+
+test('comms: an HHS lead gets the comms view, with the planted incidents', async () => {
+  await signInAs(HHS_LEAD);
+  const comms = await inProcessTransport.loadComms();
+  assert.ok(comms, 'a comms tenant, tenant-wide, must get the view');
+  assert.deepEqual(comms.incidents.map((i) => i.subject.kind).sort(), ['facility', 'queue', 'trunk']);
+  assert.ok(comms.workforce.byFacility.length > 0);
+});
+
+test('comms: the snapshot carries counts, never a person', async () => {
+  await signInAs(HHS_LEAD);
+  const comms = await inProcessTransport.loadComms();
+  assert.ok(!JSON.stringify(comms).includes('@'), 'no email address reaches the board');
+});
+
+test('comms: network-only tenants get null - no view to offer, not an empty one', async () => {
+  for (const email of [OPERATOR, LEAD, ENGINEER]) {
+    await signInAs(email);
+    assert.equal(await inProcessTransport.loadComms(), null, email);
+  }
+});
+
+test('comms: the HHS lead\'s assistant is offered the comms tools', async () => {
+  await signInAs(HHS_LEAD);
+  await inProcessTransport.loadComms();
+  const result = await inProcessTransport.askAgent('Why is call quality bad in Houston?');
+  const tools = result.trace.filter((t) => t.kind === 'tool').map((t) => t.detail.split('(')[0]);
+  assert.ok(tools.includes('listCommsIncidents'), tools.join(', '));
+});

@@ -15,6 +15,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { SiteMap, type BasemapMode } from './SiteMap.tsx';
 import { DevicePanel } from './DevicePanel.tsx';
+import { CommsBoard } from './CommsBoard.tsx';
 import { inProcessTransport } from './transport/in-process.ts';
 import { SignIn } from './SignIn.tsx';
 import { useRestoredSession } from './auth/useSession.ts';
@@ -25,7 +26,7 @@ import {
 } from './format.ts';
 import type { Session } from './auth/index.ts';
 import type {
-  Alarm, BoardSnapshot, DeviceState, HealthTick,
+  Alarm, BoardSnapshot, CommsSnapshot, DeviceState, HealthTick,
 } from './transport/index.ts';
 
 /**
@@ -63,6 +64,18 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
   const [tick, setTick] = useState<HealthTick | null>(null);
   const [basemap, setBasemap] = useState<BasemapMode | undefined>();
   const [basemapActual, setBasemapActual] = useState<BasemapMode>('canvas');
+
+  // The comms view exists only when the token admits it; `null` from the
+  // transport means "not yours", and the switch is then never rendered - the
+  // same rule as the site tabs: do not offer what the token forbids.
+  const [comms, setComms] = useState<CommsSnapshot | null>(null);
+  const [view, setView] = useState<'network' | 'comms'>('network');
+  useEffect(() => {
+    let stale = false;
+    inProcessTransport.loadComms().then((snapshot) => { if (!stale) setComms(snapshot); });
+    return () => { stale = true; };
+  }, []);
+  const showComms = view === 'comms' && comms !== null;
 
   // --- Snapshot ------------------------------------------------------------
   useEffect(() => {
@@ -176,7 +189,19 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
           <span className="brand-rule" />
         </div>
 
-        <nav className="sites" aria-label="Site">
+        {comms && (
+          <nav className="sites view-switch" aria-label="View">
+            <button className="site" aria-pressed={view === 'network'} onClick={() => setView('network')}>
+              network
+            </button>
+            <button className="site" aria-pressed={view === 'comms'} onClick={() => setView('comms')}>
+              comms
+              {comms.incidents.length > 0 && <span className="count">{comms.incidents.length}</span>}
+            </button>
+          </nav>
+        )}
+
+        {!showComms && <nav className="sites" aria-label="Site">
           {visibleSites.map((s) => (
             <button
               key={s.siteId}
@@ -201,16 +226,31 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
               all
             </button>
           )}
-        </nav>
+        </nav>}
 
         <div className="statusbar-spacer" />
 
-        <div className={`tally ${criticalCount > 0 ? 'is-critical' : ''}`}>
-          <span className="n">{board?.incidents.length ?? 0}</span> incidents
-        </div>
-        <div className="tally is-warning">
-          <span className="n">{heldCount}</span> held
-        </div>
+        {/* The tallies follow the view, so the number in the corner is always
+            about the thing on the screen. */}
+        {showComms ? (
+          <>
+            <div className={`tally ${comms.incidents.some((i) => i.severity === 'critical') ? 'is-critical' : ''}`}>
+              <span className="n">{comms.incidents.length}</span> incidents
+            </div>
+            <div className="tally is-warning">
+              <span className="n">{comms.heldBack.length}</span> held
+            </div>
+          </>
+        ) : (
+          <>
+            <div className={`tally ${criticalCount > 0 ? 'is-critical' : ''}`}>
+              <span className="n">{board?.incidents.length ?? 0}</span> incidents
+            </div>
+            <div className="tally is-warning">
+              <span className="n">{heldCount}</span> held
+            </div>
+          </>
+        )}
 
         {/* The clock follows the replay, so what the board shows and what time
             it claims to be cannot disagree. */}
@@ -231,7 +271,7 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
         <button className="signout" onClick={onSignOut}>Sign out</button>
       </header>
 
-      <div className={`body ${selectedDevice ? 'has-panel' : ''}`}>
+      {showComms ? <CommsBoard snapshot={comms} /> : <div className={`body ${selectedDevice ? 'has-panel' : ''}`}>
         <aside className="roster">
           <div className="pane-head">
             <span>Estate</span>
@@ -344,7 +384,7 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
             onClose={() => setSelected(undefined)}
           />
         )}
-      </div>
+      </div>}
     </div>
   );
 }

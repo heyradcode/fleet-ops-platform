@@ -84,7 +84,7 @@ test('the trigger reads through the registry, so a table change reaches the toke
 });
 
 test('the seed rows Terraform writes match the built-in table', () => {
-  // Two hand-maintained copies of the same four customers WILL drift - a tenant
+  // Two hand-maintained copies of the same five customers WILL drift - a tenant
   // rename has caught this repository out once already.
   //
   // THIS TEST USED TO BE GREEN FOR THE WRONG REASON. It re-asserted the
@@ -136,7 +136,7 @@ test('the seed rows Terraform writes match the built-in table', () => {
   }
 
   // A parse that matched nothing would make every assertion below vacuous.
-  assert.equal(seeded.size, 4, 'the for_each block did not parse - fix this test, not the .tf');
+  assert.equal(seeded.size, 5, 'the for_each block did not parse - fix this test, not the .tf');
   assert.deepEqual([...seeded.keys()].sort(), Object.keys(DEMO_MEMBERSHIPS).sort());
 
   for (const [domain, built] of Object.entries(DEMO_MEMBERSHIPS)) {

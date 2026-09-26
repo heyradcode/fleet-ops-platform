@@ -13,12 +13,14 @@ pnpm web         # the operations board, at localhost:5180
 ```
 
 The board opens on a sign-in page. Offline there are no passwords — type any
-address at one of four registered customer domains (`acme-networks.com`,
-`eng.acme-networks.com`, `netpulse.io`, `northwind-utilities.com`) and the same
-Cognito logic the Lambdas run mints and verifies a token locally. What you see
-afterwards is decided by that token, not by anything on the page: an operator
-gets one site, an admin the whole estate, and an unregistered domain gets
-nothing at all.
+address at one of five registered customer domains (`acme-networks.com`,
+`eng.acme-networks.com`, `netpulse.io`, `northwind-utilities.com`,
+`hhs.texas.example`) and the same Cognito logic the Lambdas run mints and
+verifies a token locally. What you see afterwards is decided by that token, not
+by anything on the page: an operator gets one site, an admin the whole estate,
+and an unregistered domain gets nothing at all. `hhs.texas.example` is the
+voice and contact-centre customer, and its board has a second view - Teams,
+Genesys and Webex, polled from offline mocks of those APIs.
 
 <sub>Node 22+ for the backend — it is TypeScript and Node runs it directly via
 type-stripping, so there is no build step. The board is a separate workspace

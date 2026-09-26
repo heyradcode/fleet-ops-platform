@@ -25,6 +25,8 @@ import type {
   Alarm, DeviceState, DeviceStatus, Incident, Principal, Site,
 } from '../../../src/platform/types.ts';
 import type { AgentResult } from '../../../src/ai/agent-core.ts';
+import type { CommsAlarm, CommsIncident } from '../../../src/integrations/comms/incidents.ts';
+import type { WorkforceSummary } from '../../../src/integrations/comms/store.ts';
 
 export type BoardSnapshot = {
   devices: DeviceState[];
@@ -52,6 +54,20 @@ export type HealthTick = {
   status: Map<string, DeviceStatus>;
   /** The device the cascade starts at, for the board to label. */
   rootCauseDeviceId: string;
+};
+
+/**
+ * The voice and contact-centre view: Teams, Genesys, Webex.
+ *
+ * Counts, never a roster - the same boundary the store keeps. A board that
+ * listed named people by building would be a directory of where everyone
+ * sits, which is not something an operations screen needs to be.
+ */
+export type CommsSnapshot = {
+  workforce: WorkforceSummary;
+  incidents: CommsIncident[];
+  /** Raised but not corroborated, with the reason. Shown dimmed, as on the network side. */
+  heldBack: CommsAlarm[];
 };
 
 export type Transport = {
@@ -110,9 +126,17 @@ export type Transport = {
    * should be.
    */
   askAgent(question: string): Promise<AgentResult>;
+
+  /**
+   * The comms view, or null when this caller has none - their tenant runs no
+   * comms sources, or their scope is narrower than tenant-wide. Null rather
+   * than an empty snapshot, so the board can tell "nothing wrong" from
+   * "not yours to see" and not offer a view it would have to leave blank.
+   */
+  loadComms(): Promise<CommsSnapshot | null>;
 };
 
-export type { AgentResult };
+export type { AgentResult, CommsAlarm, CommsIncident, WorkforceSummary };
 export type { AgentTrace } from '../../../src/ai/agent-core.ts';
 
 export type { Alarm, DeviceState, DeviceStatus, Incident, Principal, Site };
