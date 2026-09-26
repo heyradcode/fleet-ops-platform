@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 157 tests, no network. Picks up web/ tests too.
+pnpm test                       # 163 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180
 pnpm web:build                  # typechecks web/ AND builds it
@@ -153,6 +153,11 @@ one, change the test deliberately rather than making it pass.
   region). A trunk's failure rate and a queue's backlog are the system of
   record counting itself, and are exempt. A source that measured the same
   subject and saw nothing wrong DISPUTES the alarm rather than being outvoted.
+- **The workforce roster is never persisted.** The join links named people
+  to agencies and buildings; the store keeps counts only, and the roster is
+  rebuilt each poll. Comms reads need TENANT scope until an agency/facility
+  scope exists - a site is not a facility. The comms agent tools are offered
+  per tenant via `toolSpecsFor`; `TOOL_SPECS` stays the network set.
 - **Scope comes from the token, not the request.** Repository and resolver
   functions take a `Principal` and derive keys from it. An operator with no site
   claim gets *device* scope, not the whole estate — widening access is a

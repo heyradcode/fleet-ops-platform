@@ -43,7 +43,7 @@ import { devicesToFeatureCollection } from '../geo/geojson.ts';
 import { nowIso } from '../platform/clock.ts';
 import { askWithRag } from '../ai/bedrock-rag.ts';
 import { runAgent } from '../ai/agent-core.ts';
-import { TOOL_SPECS, READ_ONLY_TOOL_SPECS } from '../ai/tools.ts';
+import { toolSpecsFor } from '../ai/tools.ts';
 import { requireRole } from '../platform/tenancy.ts';
 import { incidentId as newIncidentId } from '../platform/ids.ts';
 import { bus } from '../aws/eventbridge.ts';
@@ -310,7 +310,7 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
       const result = await runAgent({
         question: String(args.question),
         principal,
-        tools: isOperator ? TOOL_SPECS : READ_ONLY_TOOL_SPECS,
+        tools: toolSpecsFor(principal, { readOnly: !isOperator }),
       });
 
       return {

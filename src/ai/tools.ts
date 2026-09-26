@@ -32,6 +32,7 @@ import { now, nowIso } from '../platform/clock.ts';
 import { canUseTool } from './guardrails.ts';
 import { isEvent, isMetric } from '../platform/types.ts';
 import { runSearch, splunkConfigured, type SearchName } from '../integrations/splunk/search.ts';
+import { COMMS_TOOLS, commsToolsFor } from './comms-tools.ts';
 
 export type ToolExecutor = (
   input: Record<string, unknown>,
@@ -365,10 +366,22 @@ export const TOOLS: Tool[] = [
 export const TOOL_SPECS: ToolSpec[] = TOOLS.map((t) => t.spec);
 
 export function toolByName(name: string): Tool | undefined {
-  return TOOLS.find((t) => t.spec.name === name);
+  return TOOLS.find((t) => t.spec.name === name) ?? COMMS_TOOLS.find((t) => t.spec.name === name);
 }
 
 /** Read-only subset, for an "explain but do not act" agent profile. */
 export const READ_ONLY_TOOL_SPECS: ToolSpec[] = TOOLS
   .filter((t) => t.spec.name !== 'openIncident' && t.spec.name !== 'suppressAlarm')
   .map((t) => t.spec);
+
+/**
+ * The tools THIS caller is offered: the network set, plus the comms set when
+ * their tenant runs comms sources and their scope admits it.
+ *
+ * TOOL_SPECS stays the network set on purpose. A model calls what it is
+ * offered, and a network operator's agent reaching for a comms tool its tenant
+ * does not have would spend a turn learning nothing.
+ */
+export function toolSpecsFor(principal: Principal, opts: { readOnly: boolean }): ToolSpec[] {
+  return [...(opts.readOnly ? READ_ONLY_TOOL_SPECS : TOOL_SPECS), ...commsToolsFor(principal)];
+}

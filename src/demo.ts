@@ -67,11 +67,11 @@ import { setClock, fixedClock, now, nowIso } from './platform/clock.ts';
 import { setRandom, seededRandom } from './platform/random.ts';
 import { mockFetch, directory as commsDirectory, DEMO_CLIENT, DEMO_WEBEX_TOKEN } from './integrations/comms/mock/index.ts';
 import { createCommsClient } from './integrations/comms/client.ts';
-import { buildWorkforce } from './integrations/comms/workforce.ts';
+import { runCommsPoll } from './integrations/comms/poll.ts';
+import { commsToolsFor } from './ai/comms-tools.ts';
 import { commsConfigFor, HHS_DEMO_TENANT } from './integrations/comms/config.ts';
 import { COMMS_SOURCES } from './integrations/comms/types.ts';
-import { collectSignals } from './integrations/comms/signals.ts';
-import { evaluateSignals, correlateAlarms } from './integrations/comms/incidents.ts';
+import { evaluateSignals } from './integrations/comms/incidents.ts';
 import { loadRunbooksFromDisk } from './platform/runbook-loader.node.ts';
 
 // ---------------------------------------------------------------------------
@@ -785,7 +785,14 @@ async function sectionComms() {
       webex: { token: DEMO_WEBEX_TOKEN },
     },
   });
-  const report = await buildWorkforce(client, config);
+  // An HHS operations lead, verified like every other principal. Tenant-wide,
+  // because comms data has no site to scope to yet - see comms/store.ts.
+  const hhsAdmin = verifyToken(signDemoToken({
+    sub: 'cognito_hhs_ops', email: 'ops-lead@hhs.texas.example',
+    'custom:tenantId': HHS_DEMO_TENANT, 'cognito:groups': ['admin'],
+  }));
+  const poll = await runCommsPoll(hhsAdmin, client, config, now());
+  const report = poll.report;
 
   note('Three platforms, three auth schemes, three paging dialects:');
   const how: Record<string, string> = {
@@ -836,7 +843,7 @@ async function sectionComms() {
 
   note('');
   note('Signals: one number per subject per window, never one per call:');
-  const signals = await collectSignals(client, config, report, now());
+  const signals = poll.signals;
   const colour = (sev: string) => sev === 'critical' ? '\x1b[31m' : sev === 'warning' ? '\x1b[33m' : '\x1b[90m';
   for (const sig of signals.filter((x) => x.severity !== 'ok')) {
     write('   ' + colour(sig.severity) + sig.severity.padEnd(9) + '\x1b[0m' + sig.source.padEnd(9) + sig.detail + '\n');
@@ -846,8 +853,7 @@ async function sectionComms() {
 
   note('');
   note('Alarms -> incidents. A facility needs two services to agree; a counter is its own witness:');
-  const alarms = evaluateSignals(signals);
-  for (const incident of correlateAlarms(alarms)) {
+  for (const incident of poll.incidents) {
     write('   ' + colour(incident.severity) + 'INCIDENT' + '\x1b[0m  ' + incident.title +
       '  ' + dim('[' + incident.sources.join(' + ') + ']') + '\n');
   }
@@ -858,6 +864,20 @@ async function sectionComms() {
   for (const held of teamsOnly.filter((a) => !a.corroborated)) {
     write('   ' + held.subject.name.padEnd(12) + dim(held.heldBack ?? '') + '\n');
   }
+
+  note('');
+  note('The assistant, offered the comms tools because THIS tenant runs comms sources:');
+  const answer = await runAgent({
+    question: 'Why is call quality bad in Houston, and did anything page?',
+    principal: hhsAdmin,
+    tools: commsToolsFor(hhsAdmin),
+  });
+  for (const step of answer.trace.filter((t) => t.kind === 'tool')) {
+    write('   ' + dim('tool     ' + step.detail) + '\n');
+  }
+  write('   ' + answer.answer.split('\n').slice(0, 2).join(' ').replace(/\s+/g, ' ').slice(0, 220) + '...\n');
+  write('   ' + dim('stored: counts per agency and facility, never the roster - ' +
+    'nothing person-level is persisted') + '\n');
 }
 
 // ===========================================================================

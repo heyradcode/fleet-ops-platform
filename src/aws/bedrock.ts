@@ -284,13 +284,20 @@ function synthesise(messages: Message[]): string {
     }
   }
 
+  // The runbook advice only when a runbook was actually retrieved. Offered
+  // unconditionally, it told a contact-centre lead to "confirm the device is
+  // safe" about a Genesys queue - an ungrounded recommendation, the one thing
+  // the output guardrail exists to catch in a real model.
+  const hadRunbook = results.some((r) => r.startsWith('SOURCE '));
   return [
     'Root-cause summary, grounded in ' + results.length + ' tool call(s):',
     ...results.map((r) => '  - ' + oneLine(r)),
-    '',
-    'Recommended action: follow the retrieved runbook - work its triage steps',
-    'in order, and confirm the device is safe before deciding anything about',
-    'the load.',
+    ...(hadRunbook ? [
+      '',
+      'Recommended action: follow the retrieved runbook - work its triage steps',
+      'in order, and confirm the device is safe before deciding anything about',
+      'the load.',
+    ] : []),
   ].join('\n');
 }
 
