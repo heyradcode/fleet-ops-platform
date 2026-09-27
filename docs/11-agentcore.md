@@ -5,9 +5,9 @@ and guardrails — can run on **Amazon Bedrock AgentCore Runtime** instead of in
 the browser tab. This document explains what AgentCore is, how it works, how
 this repository uses it and why, how to deploy it, and what it costs.
 
-Status at the time of writing: **built, tested and planned; not yet applied.**
-Everything below `infra/terraform/agentcore/` validates against AWS provider
-6.66 and plans cleanly (7 resources, nothing in `../auth` touched). One thing
+Status: **deployed** - runtime `netpulse_demo_agent`, `READY`, running the
+offline model. The authorizer is verified from outside: no token and a
+forged token are both refused with 401 before any microVM starts. One thing
 outside the code blocks real Claude: the AWS account is not yet enabled for
 Anthropic models (see [Claude model access](#claude-model-access)). Until it
 is, the agent runs on AgentCore with the repository's offline model, which
@@ -250,6 +250,16 @@ runtime update and a new runtime version.
   request after a deploy that reported success.
 - **Zip permissions.** AgentCore needs files readable (644). A zip made on
   Windows carries no Unix modes; `output_file_mode = "0644"` sets them.
+- **Creating a runtime also creates its `DEFAULT` endpoint** - a separate
+  action, `bedrock-agentcore:CreateAgentRuntimeEndpoint`. The first deploy
+  failed on exactly that: the runtime call was allowed, the endpoint behind
+  it was not, and the error names only the second.
+- **IAM needs a moment.** An apply seconds after publishing a new policy
+  version failed with the same AccessDenied as before the fix. The policy
+  simulator (`aws iam simulate-principal-policy`) tells a propagation delay
+  from a real denial - test `CreateAgentRuntime` against resource `*`, since
+  it takes no runtime ARN and a runtime-ARN simulation reports a misleading
+  implicit deny.
 - **Session ids and the seeded demo world.** The board seeds `uuid()` for
   deterministic output. Session ids come from `crypto.getRandomValues`
   directly, or every tab would have asked for the same microVM.

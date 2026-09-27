@@ -24,7 +24,7 @@ import { errorLine, type SignalSource } from './types.ts';
 import { reconcileIncidents } from './lifecycle.ts';
 import { pullPhoneInventory, type PhoneInventory } from './kurmi.ts';
 import { putPhoneInventory } from './store.ts';
-import { backfillBaselines, detectAndLearn, metricsFromSignals, putAnomalies, type CommsAnomaly } from './anomalies.ts';
+import { backfillBaselines, detectAndLearn, metricsFromSignals, putAnomalies, type BackfillProgress, type CommsAnomaly } from './anomalies.ts';
 
 export type CommsPollResult = {
   /** The full roster, for the caller's use in memory. Never persisted; see store.ts. */
@@ -60,12 +60,13 @@ export type CommsPollResult = {
 export async function backfillCommsBaselines(
   principal: Principal, client: CommsClient, config: CommsTenantConfig, at: number, weeks: number,
   history: (read: (at: number) => Promise<CommsSignal[]>) => (at: number) => Promise<CommsSignal[]> = (r) => r,
+  progress: BackfillProgress = {},
 ): Promise<number> {
   assertSameTenant(principal, config.tenantId);
   if (config.sources.includes('teams')) await syncEntraDirectory(principal, client);
   const report = await buildWorkforce(client, config, await loadEntraDirectory(principal));
   const read = async (past: number) => (await collectSignals(client, config, report, past)).signals;
-  return backfillBaselines(principal, at, config.timeZone ?? 'UTC', weeks, history(read));
+  return backfillBaselines(principal, at, config.timeZone ?? 'UTC', weeks, history(read), progress);
 }
 
 export async function runCommsPoll(

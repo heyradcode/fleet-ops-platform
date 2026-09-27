@@ -38,6 +38,7 @@
  */
 import { sha256 } from '../../platform/crypto.ts';
 import { mainTable } from '../../aws/dynamodb.ts';
+import { forEachByKey } from '../../platform/concurrency.ts';
 import { pk } from '../../platform/tenancy.ts';
 import { drainPages, type HttpPage, type PageCursor } from '../http.ts';
 import type { Principal } from '../../platform/types.ts';
@@ -126,16 +127,17 @@ function statusOf(state: SyncState): DirectoryStatus {
 async function applyRows(principal: Principal, gen: number, rows: Row[]): Promise<{ applied: number; removed: number }> {
   let applied = 0;
   let removed = 0;
-  // One row at a time, in order: a delta can carry the same user twice, and
-  // the second change must merge into the first. Against a real table this is
-  // a read and a write per user - fine for deltas, slow for a first sync of
-  // 75,000; if that matters, batch the FULL-sync case, which has no merge.
-  for (const row of rows) {
+  // Per USER in order - a delta can carry the same user twice, and the second
+  // change must merge into the first, not race it from the old row - and
+  // different users in parallel. Against a real table that is a read and a
+  // write per user either way; in parallel, a first sync of thousands is a
+  // few hundred round trips rather than several thousand.
+  await forEachByKey(rows, (row) => row.id, async (row) => {
     const sk = userSk(gen, row.id);
     if (row['@removed']) {
       await mainTable.delete(dirPk(principal), sk);
       removed++;
-      continue;
+      return;
     }
     const prev = await mainTable.get(dirPk(principal), sk) as (StoredUser & { PK: string; SK: string }) | undefined;
     const next: StoredUser = { objectId: row.id, emailHash: prev?.emailHash, placement: prev?.placement };
@@ -143,14 +145,15 @@ async function applyRows(principal: Principal, gen: number, rows: Row[]): Promis
     if (row.streetAddress !== undefined) next.placement = facilityFromAddress(row.streetAddress);
     await mainTable.put({ PK: dirPk(principal), SK: sk, entity: 'EntraUser', ...next });
     applied++;
-  }
+  });
   return { applied, removed };
 }
 
 async function dropGeneration(principal: Principal, gen: number): Promise<void> {
-  for (const item of await mainTable.query({ pk: dirPk(principal), skBeginsWith: 'G' + gen + '#' })) {
-    await mainTable.delete(item.PK, item.SK);
-  }
+  // Every key distinct, so all in parallel (bounded) - one round trip per
+  // user in sequence was the slowest part of a resync against a real table.
+  const items = await mainTable.query({ pk: dirPk(principal), skBeginsWith: 'G' + gen + '#' });
+  await forEachByKey(items, (item) => item.SK, (item) => mainTable.delete(item.PK, item.SK));
 }
 
 /** Drain from a link, returning the rows, the deltaLink if the drain finished, and where it stopped. */

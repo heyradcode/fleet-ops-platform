@@ -39,6 +39,7 @@
  * zero, and without a floor one caller would be infinitely unusual.
  */
 import { mainTable } from '../../aws/dynamodb.ts';
+import { forEachByKey } from '../../platform/concurrency.ts';
 import { pk } from '../../platform/tenancy.ts';
 import type { Principal } from '../../platform/types.ts';
 import type { CommsSignal, CommsSignalKind, CommsSubject } from './signals.ts';
@@ -193,11 +194,18 @@ export async function detectAndLearn(
 ): Promise<{ anomalies: CommsAnomaly[]; learned: number; insufficient: number }> {
   const how = hourOfWeek(at, timeZone);
   const when = describeHour(how);
-  const anomalies: CommsAnomaly[] = [];
+  // Found in completion order, reported in POINT order: `at` remembers where
+  // each came from, so ties in the final sort break exactly as the old
+  // one-at-a-time loop broke them.
+  const found: Array<{ at: number; anomaly: CommsAnomaly }> = [];
   let learned = 0;
   let insufficient = 0;
 
-  for (const p of points) {
+  // In parallel across baselines, in order within one - see forEachByKey.
+  // Against a real table this is the difference between one round trip per
+  // point and a handful for the whole poll.
+  const indexed = points.map((p, at) => ({ p, at }));
+  await forEachByKey(indexed, ({ p }) => key(p, how), async ({ p, at }) => {
     const k = key(p, how);
     const b = await readBaseline(principal, k);
     let anomalous = false;
@@ -211,10 +219,10 @@ export async function detectAndLearn(
       if (Math.abs(z) >= Z_THRESHOLD && Math.abs(p.value - b.mean) >= g.minDelta(b.mean) && g.directions.includes(direction)) {
         anomalous = true;
         const normal = { mean: b.mean, std, samples: b.n };
-        anomalies.push({
+        found.push({ at, anomaly: {
           subject: p.subject, metric: p.metric, source: p.source, value: p.value, unit: p.unit,
           normal, z: Math.round(z * 10) / 10, direction, when, explanation: explain(p, normal, direction, when),
-        });
+        } });
       }
     }
     const subjectKey = p.subject.kind + ':' + p.subject.id;
@@ -222,20 +230,23 @@ export async function detectAndLearn(
       await mainTable.put({ PK: basePk(principal), SK: k, entity: 'Baseline', ...fold(b, p.value) });
       learned++;
     }
-  }
-  anomalies.sort((a, b) => Math.abs(b.z) - Math.abs(a.z));
+  });
+  const anomalies = found
+    .sort((a, b) => Math.abs(b.anomaly.z) - Math.abs(a.anomaly.z) || a.at - b.at)
+    .map((f) => f.anomaly);
   return { anomalies, learned, insufficient };
 }
 
 /** Learn without judging - for backfill, where the history is assumed normal. */
 export async function learnOnly(principal: Principal, at: number, timeZone: string, points: MetricPoint[]): Promise<number> {
   const how = hourOfWeek(at, timeZone);
-  // Read-fold-write, one point at a time: two points can share a key, and the
-  // second must fold into the first's result, not race it from the old one.
-  for (const p of points) {
+  // Read-fold-write. Two points can share a key, and the second must fold
+  // into the first's result, not race it from the old one - so points on
+  // one key go in order, and different keys go in parallel.
+  await forEachByKey(points, (p) => key(p, how), async (p) => {
     const k = key(p, how);
     await mainTable.put({ PK: basePk(principal), SK: k, entity: 'Baseline', ...fold(await readBaseline(principal, k), p.value) });
-  }
+  });
   return points.length;
 }
 
@@ -251,14 +262,31 @@ export async function learnOnly(principal: Principal, at: number, timeZone: stri
  * History is ASSUMED NORMAL. A backfill across a past outage would teach it
  * as normal - so in production, skip any week that had an incident on file.
  */
+export type BackfillProgress = {
+  /** Weeks already folded in - skipped, so a resumed backfill never counts one twice. */
+  done?: ReadonlySet<number>;
+  /** Called AFTER a week's writes land - the only point it is safe to record it. */
+  afterWeek?: (weeksAgo: number, points: number) => Promise<void>;
+};
+
 export async function backfillBaselines(
   principal: Principal, at: number, timeZone: string, weeks: number,
   signalsAt: (at: number) => Promise<CommsSignal[]>,
+  progress: BackfillProgress = {},
 ): Promise<number> {
   let points = 0;
   for (let w = weeks; w >= 1; w--) {
+    // Resumable, because it is NOT idempotent: baselines are running
+    // statistics, and folding a week in twice narrows the spread and makes
+    // ordinary values look anomalous. A week is recorded done only after its
+    // writes - a crash mid-week re-does that week's missing keys... and
+    // re-folds the ones that landed, which is why the week boundary is the
+    // unit and the window of doubt is one week, not eight.
+    if (progress.done?.has(w)) continue;
     const past = at - w * 7 * 24 * 60 * 60 * 1000;
-    points += await learnOnly(principal, past, timeZone, metricsFromSignals(await signalsAt(past)));
+    const n = await learnOnly(principal, past, timeZone, metricsFromSignals(await signalsAt(past)));
+    points += n;
+    await progress.afterWeek?.(w, n);
   }
   return points;
 }

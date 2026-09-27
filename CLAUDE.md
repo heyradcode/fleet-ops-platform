@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 288 tests, no network. Picks up web/ tests too.
+pnpm test                       # 292 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180 - real Cognito sign-in
 pnpm web:env                    # write web/.env.cognito.local from the Terraform outputs
@@ -415,6 +415,16 @@ network. Nothing real belongs in this repo.
   vacuously once the store went async. `memoryTable` is for what only the
   fake has (size, stats, Scan); production code never touches it. Write first, delete last:
   a crash between a delete and its replacement put loses the record.
+- **Loops of awaits are slow; parallel read-modify-writes lose updates.**
+  At ~300 ms a round trip, a thousand sequential awaits is five minutes.
+  Use `forEachByKey` (`platform/concurrency.ts`): different keys run in
+  parallel (bounded), the SAME key strictly in order - two folds of one
+  baseline in parallel both read the old value and one update vanishes,
+  with no error. Anything reported from such a loop is sorted afterwards,
+  with the original position as the tie-break, so output stays
+  byte-identical. The baseline backfill is resumable per WEEK
+  (`BACKFILL#PROGRESS`, written after the week's writes) because it is not
+  idempotent: a week folded twice narrows the spread.
 - **AgentCore forwards NO header it was not told to.** Without
   `request_header_allowlist = ["Authorization"]` the agent never sees the
   token AgentCore just accepted, and answers 401. The agent logs "is

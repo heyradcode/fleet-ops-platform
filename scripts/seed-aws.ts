@@ -17,12 +17,17 @@
  * and need Query, GetItem, PutItem, DeleteItem and BatchWriteItem on the
  * table (infra/terraform/auth/seed-policy.json).
  *
- * RE-RUNNABLE, with one guard. Another run is another poll, which is what a
+ * RE-RUNNABLE, and RESUMABLE. Another run is another poll, which is what a
  * scheduler would do every five minutes. The eight-week baseline BACKFILL is
- * not: the anomaly baselines are running statistics, and backfilling twice
- * counts every past week twice - sixteen "weeks" of the same eight, a spread
- * that is too narrow, and anomalies that are not. So it runs only when the
- * tenant has no baselines yet.
+ * not re-runnable: the baselines are running statistics, and folding a week
+ * in twice narrows the spread and makes ordinary values look anomalous. So
+ * each week is recorded in `BACKFILL#PROGRESS` AFTER its writes land - the
+ * watermark rule - and a run stopped half-way resumes at the next week
+ * instead of starting again or, worse, being mistaken for finished.
+ *
+ * FAST ENOUGH. At ~300 ms a round trip to us-east-1, the first version made
+ * ~1,240 calls one after another: six silent minutes. Writes to different
+ * keys now run in parallel (platform/concurrency.ts) and every phase prints.
  */
 import { DynamoTable, mainTable, setTableStore, type Item, type QueryOptions, type TableStore } from '../src/aws/dynamodb.ts';
 import { createSdkTableStore } from '../src/aws/dynamodb.sdk.ts';
@@ -30,6 +35,7 @@ import { setClock, fixedClock, now } from '../src/platform/clock.ts';
 import { setRandom, seededRandom } from '../src/platform/random.ts';
 import { setUuid, seededUuid } from '../src/platform/crypto.ts';
 import { pk } from '../src/platform/tenancy.ts';
+import { now as clockNow } from '../src/platform/clock.ts';
 import type { Principal } from '../src/platform/types.ts';
 import { loadEstate, getInventory, allDeviceStates } from '../src/geo/device-repository.ts';
 import { buildScenarios } from '../src/data/scenarios.ts';
@@ -101,15 +107,38 @@ const client = createCommsClient({
   },
 });
 
+const WEEKS = 8;
+const elapsed = () => ((performance.now() - started) / 1000).toFixed(1) + 's';
+const progressKey = { PK: pk(hhs, 'COMMS'), SK: 'BACKFILL#PROGRESS' };
+const record = await mainTable.get(progressKey.PK, progressKey.SK);
+const done = new Set<number>((record?.weeksDone as number[] | undefined) ?? []);
 const hasBaselines = (await mainTable.query({ pk: pk(hhs, 'BASELINE'), limit: 1 })).length > 0;
-if (hasBaselines) {
-  console.log('  baselines already present - backfill skipped (it would count every past week twice)');
+
+if (!record && hasBaselines) {
+  // Seeded by a version that kept no record. It may have finished or been
+  // stopped half-way; there is no way to tell, and backfilling again would
+  // double-count whatever did land. Say so rather than guess.
+  console.log('  baselines exist from an earlier seed with no progress record - backfill skipped.\n' +
+    '  If that seed was interrupted, delete the TENANT#' + HHS_DEMO_TENANT + '#BASELINE partition and re-run.');
+} else if (done.size >= WEEKS) {
+  console.log('  baselines complete (' + WEEKS + ' weeks) - backfill skipped');
 } else {
-  const points = await backfillCommsBaselines(hhs, client, config, now(), 8, mockHistory);
-  console.log('  backfilled ' + points + ' baseline points over 8 weeks');
+  console.log('  backfilling ' + (WEEKS - done.size) + ' of ' + WEEKS + ' weeks' + (done.size ? ' (resuming)' : '') + '...');
+  const points = await backfillCommsBaselines(hhs, client, config, now(), WEEKS, mockHistory, {
+    done,
+    afterWeek: async (weeksAgo, n) => {
+      done.add(weeksAgo);
+      // AFTER the week's writes - recording it first would let a crash
+      // leave a week marked done that never landed.
+      await mainTable.put({ ...progressKey, entity: 'BackfillProgress', weeksDone: [...done].sort((a, b) => a - b), at: clockNow() });
+      console.log('    week -' + weeksAgo + ': ' + n + ' points  [' + elapsed() + ']');
+    },
+  });
+  console.log('  backfilled ' + points + ' baseline points');
 }
+console.log('  polling the comms sources...');
 const poll = await runCommsPoll(hhs, client, config, now());
-console.log('  comms poll: ' + poll.incidents.length + ' open incident(s), ' + poll.resolved.length + ' resolved, ' +
+console.log('  comms poll [' + elapsed() + ']: ' + poll.incidents.length + ' open incident(s), ' + poll.resolved.length + ' resolved, ' +
   poll.anomalies.length + ' anomal' + (poll.anomalies.length === 1 ? 'y' : 'ies'));
 
 // --- The network tenant ------------------------------------------------------
@@ -122,6 +151,7 @@ const acme: Principal = {
 };
 const estate = loadEstate(acme.tenantId);
 const inventory = getInventory(acme);
+console.log('  writing the network estate...');
 await putDeviceStates(acme, allDeviceStates(acme));
 let observations = 0;
 for (const scenario of buildScenarios(estate)) {

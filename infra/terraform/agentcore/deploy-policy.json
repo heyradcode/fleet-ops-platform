@@ -11,6 +11,9 @@
         "bedrock-agentcore:GetAgentRuntime",
         "bedrock-agentcore:ListAgentRuntimes",
         "bedrock-agentcore:ListAgentRuntimeVersions",
+        "bedrock-agentcore:CreateAgentRuntimeEndpoint",
+        "bedrock-agentcore:UpdateAgentRuntimeEndpoint",
+        "bedrock-agentcore:DeleteAgentRuntimeEndpoint",
         "bedrock-agentcore:ListAgentRuntimeEndpoints",
         "bedrock-agentcore:GetAgentRuntimeEndpoint",
         "bedrock-agentcore:CreateWorkloadIdentity",
@@ -28,14 +31,22 @@
       "Effect": "Allow",
       "Action": "iam:CreateServiceLinkedRole",
       "Resource": "arn:aws:iam::*:role/aws-service-role/runtime-identity.bedrock-agentcore.amazonaws.com/AWSServiceRoleForBedrockAgentCoreRuntimeIdentity",
-      "Condition": { "StringEquals": { "iam:AWSServiceName": "runtime-identity.bedrock-agentcore.amazonaws.com" } }
+      "Condition": {
+        "StringEquals": {
+          "iam:AWSServiceName": "runtime-identity.bedrock-agentcore.amazonaws.com"
+        }
+      }
     },
     {
       "Sid": "PassTheRuntimeRole",
       "Effect": "Allow",
       "Action": "iam:PassRole",
       "Resource": "arn:aws:iam::588651260734:role/netpulse-*-agent-runtime",
-      "Condition": { "StringEquals": { "iam:PassedToService": "bedrock-agentcore.amazonaws.com" } }
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "bedrock-agentcore.amazonaws.com"
+        }
+      }
     },
     {
       "Sid": "TheCodeBucket",
