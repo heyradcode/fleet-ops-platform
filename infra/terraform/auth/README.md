@@ -3,17 +3,20 @@
 The one directory in `infra/` meant to be applied. It creates a Cognito user
 pool and the PreTokenGeneration trigger that stamps tenant and site into
 the token — so the board's scope stops being a demonstration and becomes a
-fact about a signed credential.
+fact about a signed credential — and the platform's DynamoDB table, which
+`pnpm seed:aws` fills from the same code the offline board runs.
 
-Everything else keeps running in the browser tab. That is the architecture
-working, not a shortcut: the transport boundary means identity can be real
-while the rest stays in-process.
+The board itself still runs in the browser tab until the API lands. That is
+the architecture working, not a shortcut: the transport boundary means
+identity can be real while the rest stays in-process.
 
 ## What it costs
 
 Cognito is free to 10,000 monthly active users, the trigger sits inside the
 Lambda free tier at any volume this will see, and the log group is capped at
-14 days. Call it **pennies a month**, and the budget alarm here fires at $2.50
+14 days. The main table is on-demand: a full `pnpm seed:aws` is about 700
+writes and 600 reads, a tenth of a cent, and storage is inside the 25 GB free
+tier. Call it **pennies a month**, and the budget alarm here fires at $2.50
 so you find out early rather than accurately.
 
 The expensive parts of the platform are deliberately absent — Aurora (~$87/mo
@@ -199,6 +202,33 @@ terraform apply \
 
 The social providers are created only when credentials exist — an identity
 provider with an empty client id is an apply-time error, not a disabled one.
+
+### Filling the main table
+
+`main-table.tf` creates `netpulse-<env>-main`, empty. The platform's own data -
+comms incidents, health, the workforce counts, baselines, device state - is
+written by the same code the offline board runs, pointed at the table:
+
+```bash
+pnpm seed:aws --dry-run     # the whole run through an in-memory table: what it would write, no AWS
+TABLE_NAME="$(terraform -chdir=infra/terraform/auth output -raw main_table_name)" pnpm seed:aws
+```
+
+The vendors are still the mocks - real storage does not make a Teams tenant
+real - so what lands is the demo's synthetic data. The credentials running it
+need `seed-policy.json` on the table (the deploy identity does not have Query
+or BatchWriteItem; it only ever needed to create tables).
+
+Run it again and it is one more poll, as a scheduler would run every five
+minutes. The eight-week baseline backfill runs only on the first: backfilling
+twice would count every past week twice and make ordinary values look
+anomalous.
+
+To look at what it wrote: the console's *Explore table items*, or
+
+```bash
+aws dynamodb query --table-name netpulse-demo-main   --key-condition-expression 'PK = :p' --expression-attribute-values '{":p":{"S":"TENANT#hhs-demo#COMMSINC"}}'
+```
 
 ## Tearing it down
 

@@ -108,6 +108,19 @@ jobs:
           fi
           echo "No bare process.* outside platform/env.ts, platform/logger.ts and demo.ts."
 
+          # The AWS SDK is not a node: builtin, so the first check cannot see it -
+          # and it resolves from the root node_modules, so the web build may
+          # quietly bundle megabytes of it rather than fail. The SDK lives in
+          # the two adapters, and the adapters are imported only by Node entry
+          # points outside src/ (scripts/, infra/) and by tests.
+          SDK="^[[:space:]]*import .*from '(@aws-sdk/|.*\.sdk\.ts|.*/membership\.dynamodb\.ts)"
+          if grep -rnE "$SDK" src/ --include="*.ts" | grep -v '.test.ts' | grep -v 'aws/dynamodb.sdk.ts:' | grep -v 'platform/membership.dynamodb.ts:' | grep -q .; then
+            echo "The AWS SDK, or an adapter that loads it, is imported by shared code:"
+            grep -rnE "$SDK" src/ --include="*.ts" | grep -v '.test.ts' | grep -v 'aws/dynamodb.sdk.ts:' | grep -v 'platform/membership.dynamodb.ts:'
+            exit 1
+          fi
+          echo "The AWS SDK stays in its two adapters."
+
   # ---------------------------------------------------------------------------
   web:
     name: operations board

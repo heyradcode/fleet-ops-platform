@@ -24,12 +24,13 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 254 tests, no network. Picks up web/ tests too.
+pnpm test                       # 262 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180
 pnpm web:build                  # typechecks web/ AND builds it
 pnpm mock                       # mock Teams/Genesys/Webex APIs, http://127.0.0.1:5190
 pnpm check:promises             # no un-awaited or misused promise, backend and web/
+pnpm seed:aws --dry-run         # fill the REAL table (needs TABLE_NAME); --dry-run needs no AWS
 pnpm verify                     # all five checks, in order
 ```
 
@@ -85,9 +86,12 @@ Use union types, as the existing code does.
 **Imports carry `.ts` extensions.** Required by type-stripping. `web/` handles
 this via `allowImportingTsExtensions`.
 
-**Only `infra/terraform/auth/` is ever applied.** It creates a Cognito pool and
-the token trigger, and costs pennies. Every other root is read-only
-demonstration material: applying `envs/` brings up Aurora (~$87/month idle at
+**Only `infra/terraform/auth/` is ever applied.** It creates a Cognito pool,
+the token trigger, the membership table and the main on-demand DynamoDB
+table, and costs pennies. The main table is filled by `pnpm seed:aws`
+through `aws/dynamodb.sdk.ts` - the SDK adapter, imported only by Node entry
+points outside `src/` and by tests; CI greps for that too. Every other root
+is read-only demonstration material: applying `envs/` brings up Aurora (~$87/month idle at
 a 0.5 ACU floor × 2 instances) and Kinesis (~$29/month, no free tier), and
 anything wanting a Bedrock Knowledge Base drags in OpenSearch Serverless at
 ~$700/month. Nothing in this repo *needs* an AWS account.
@@ -442,7 +446,8 @@ src/pipeline/    collect → normalise → stream → enrich → evaluate → co
 src/geo/         spatial maths, PostGIS queries, GeoJSON/TopoJSON, topology
 src/ai/          RAG, agent loop, guardrails
 src/reporting/   the executive daily brief - every source, one page
-src/aws/         local stand-ins for 6 AWS services
+src/aws/         local stand-ins for 6 AWS services; dynamodb.sdk.ts is the
+                 REAL table adapter (Node only - paging, batch retries)
 src/data/        estate generator, scenarios, health trace, runbooks, schema.sql
 web/src/transport/  the boundary that lets the backend run in the browser
 web/src/auth/    sign-in: the same Cognito logic the Lambdas run, local issuer

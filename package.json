@@ -26,6 +26,7 @@
     "web:cognito": "pnpm --filter @netpulse/web dev:cognito",
     "web:build": "pnpm --filter @netpulse/web build",
     "mock": "node scripts/mock-vendors.ts",
+    "seed:aws": "node scripts/seed-aws.ts",
     "check:promises": "node scripts/check-floating-promises.mjs",
     "verify": "pnpm typecheck && pnpm check:promises && pnpm test && pnpm start && pnpm web:build",
     "build:lambda": "node scripts/build-lambda.mjs"
