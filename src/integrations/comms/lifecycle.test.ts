@@ -129,7 +129,7 @@ test('too few samples to measure is not health: no signal, no resolution', () =>
   const incident: CommsIncident = {
     tenantId: 'l-samples', incidentId: 'x', title: 'SBC quiet at 3am', severity: 'critical',
     subject: { kind: 'trunk', id: 'sbc9', name: 'sbc9' }, alarmIds: [], kinds: ['trunk-call-failure'],
-    sources: ['teams'], localisation: [], openedAt: new Date(at).toISOString(), evidence: [],
+    sources: ['teams'], localisation: [], openedAt: new Date(at).toISOString(), evidence: [], figures: [],
     status: 'open', lastSeenAt: new Date(at).toISOString(), clearPolls: 0, reopenCount: 0, peakSeverity: 'critical',
   };
   reconcileIncidents(principal, at, [incident], [], []);

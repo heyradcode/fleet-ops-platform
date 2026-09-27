@@ -69,6 +69,21 @@ export type CommsAlarm = {
   corroborated: boolean;
   heldBack?: string;
   evidence: string[];
+  /** The measurements behind the evidence strings - for anything that needs a NUMBER, not a sentence. */
+  figures: Figure[];
+};
+
+/**
+ * One measurement, structured. Evidence strings are for people; a consumer
+ * that needs "how many calls failed" reads this, never a regex over a
+ * sentence someone may reword.
+ */
+export type Figure = {
+  source: SignalSource;
+  kind: CommsSignalKind;
+  value: number;
+  unit: 'ratio' | 'count';
+  sampleSize: number;
 };
 
 export type CommsIncident = {
@@ -86,6 +101,7 @@ export type CommsIncident = {
   context?: IncidentContext;
   openedAt: string;
   evidence: string[];
+  figures: Figure[];
 
   // --- Lifecycle - see lifecycle.ts. correlateAlarms sets the defaults; the
   // --- reconciliation is what carries them across polls.
@@ -168,6 +184,7 @@ export function evaluateSignals(
       heldBack,
       localisation: localise(first.kind, first.subject, sources, dissent),
       evidence: firing.map((s) => s.detail),
+      figures: firing.map((s) => ({ source: s.source, kind: s.kind, value: s.value, unit: s.unit, sampleSize: s.sampleSize })),
     });
   }
   return alarms.sort((a, b) =>
@@ -203,6 +220,7 @@ export function correlateAlarms(alarms: CommsAlarm[]): CommsIncident[] {
       reopenCount: 0,
       peakSeverity: worst(group.map((a) => a.severity)),
       evidence: group.flatMap((a) => a.evidence),
+      figures: group.flatMap((a) => a.figures),
     };
   }).sort((a, b) => RANK[b.severity] - RANK[a.severity] || a.title.localeCompare(b.title));
 }

@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 236 tests, no network. Picks up web/ tests too.
+pnpm test                       # 242 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180
 pnpm web:build                  # typechecks web/ AND builds it
@@ -32,7 +32,7 @@ pnpm mock                       # mock Teams/Genesys/Webex APIs, http://127.0.0.
 pnpm verify                     # all four checks, in order
 ```
 
-`--only=` takes: `auth ingest scenarios data events graphql rest geo ai comms solarwinds`.
+`--only=` takes: `auth ingest scenarios data events graphql rest geo ai comms solarwinds brief`.
 Note `pnpm start --only=x` needs no `--` separator; npm did.
 
 `pnpm verify` runs typecheck, tests, the demo and the web build in that order.
@@ -213,6 +213,15 @@ one, change the test deliberately rather than making it pass.
   counting them would make inventory drift measure the CMDB. The Helix client
   comes from a registry (`setHelixClientFactory`), like the Splunk transport;
   unset means "not configured", said as such.
+- **The daily brief's numbers never come from a model.** `reporting/daily-brief.ts`
+  builds a structured `Brief` from stored incidents, their structured
+  `figures`, health and counts; the prose is a template over it. Consumers
+  that need a number read `CommsIncident.figures`, never a regex over an
+  evidence sentence. People at a facility are UNIQUE (`byFacility[].people`),
+  never the sum of platform columns, which double-counts the overlap. Nothing
+  open but a feed down is AMBER with the feed named - never a calm green over
+  missing data. Delivery (scheduler + SES/Teams) is documented, not wired:
+  mailing executives is the customer's decision.
 - **The workforce roster is never persisted.** The join links named people
   to agencies and buildings; the store keeps counts only, and the roster is
   rebuilt each poll. Comms reads need TENANT scope until an agency/facility
@@ -394,6 +403,7 @@ src/integrations/comms/mock/  Teams (Graph), Genesys, Webex mocks: mockFetch on 
 src/pipeline/    collect → normalise → stream → enrich → evaluate → correlate
 src/geo/         spatial maths, PostGIS queries, GeoJSON/TopoJSON, topology
 src/ai/          RAG, agent loop, guardrails
+src/reporting/   the executive daily brief - every source, one page
 src/aws/         local stand-ins for 6 AWS services
 src/data/        estate generator, scenarios, health trace, runbooks, schema.sql
 web/src/transport/  the boundary that lets the backend run in the browser

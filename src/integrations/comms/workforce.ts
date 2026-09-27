@@ -65,7 +65,16 @@ export type WorkforceReport = {
    * keys first and in numeric order, so `1120` would come before `0412` (which
    * has a leading zero and is therefore a string key) however it was built.
    */
-  byFacility: Array<{ code: string; counts: Partial<Record<CommsSource, number>> }>;
+  byFacility: Array<{
+    code: string;
+    counts: Partial<Record<CommsSource, number>>;
+    /**
+     * UNIQUE active people at the facility, across platforms. Not the sum of
+     * `counts`: someone on Teams AND Webex is one person, and a sum would
+     * overstate every "how many people does this affect" by the overlap.
+     */
+    people: number;
+  }>;
   unplaced: Array<{ email: string; sources: CommsSource[]; reason: UnplacedReason }>;
   facilityConflicts: Array<{ email: string; entra: string; webex: string }>;
   duplicateAccounts: Array<{ email: string; source: CommsSource; count: number }>;
@@ -189,6 +198,7 @@ export function joinWorkforce(
   const members = [...byKey.values()].sort((a, b) => a.emailKey.localeCompare(b.emailKey));
   const byPlatform: WorkforceReport['byPlatform'] = {};
   const byFacility: Record<string, Partial<Record<CommsSource, number>>> = {};
+  const peopleAt: Record<string, number> = {};
   const unplaced: WorkforceReport['unplaced'] = [];
 
   for (const m of members) {
@@ -212,6 +222,7 @@ export function joinWorkforce(
       if (m.facility) bump((byFacility[m.facility.code] ??= {}), source);
       counted.push(source);
     }
+    if (m.facility && counted.length > 0) peopleAt[m.facility.code] = (peopleAt[m.facility.code] ?? 0) + 1;
     if (!m.facility && counted.length > 0) {
       unplaced.push({ email: accountEmail(m), sources: counted, reason: m.unplaced ?? 'no-facility-source' });
     }
@@ -220,7 +231,7 @@ export function joinWorkforce(
   return {
     members,
     byPlatform,
-    byFacility: Object.keys(byFacility).sort().map((code) => ({ code, counts: byFacility[code] })),
+    byFacility: Object.keys(byFacility).sort().map((code) => ({ code, counts: byFacility[code], people: peopleAt[code] ?? 0 })),
     unplaced,
     facilityConflicts,
     duplicateAccounts: [...duplicates.values()],

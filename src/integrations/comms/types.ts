@@ -135,4 +135,9 @@ export type CommsTenantConfig = {
    * LEAF of a `kurmiDepartment` path to a facility code, case-insensitively.
    */
   kurmi?: { tenantDbid: string; agencyCodes: string[]; departmentFacility: Record<string, string> };
+  /**
+   * Facility code -> the name people use. An operator reads LC=1120; an
+   * executive reading the daily brief needs "Houston Regional".
+   */
+  facilityNames?: Record<string, string>;
 };

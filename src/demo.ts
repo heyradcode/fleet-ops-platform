@@ -40,7 +40,7 @@ import { mainTable } from './aws/dynamodb.ts';
 import { bus } from './aws/eventbridge.ts';
 
 import {
-  recentObservations, openIncidents, observationsForDevice, recentAlarms,
+  recentObservations, openIncidents, observationsForDevice, recentAlarms, putIncident,
 } from './platform/repository.ts';
 import { handler as graphqlHandler, type AppSyncEvent } from './api/appsync-resolvers.ts';
 import { subscribe, subscriberCount } from './api/subscriptions.ts';
@@ -74,6 +74,7 @@ import { mutateEntraUser, injectFault, clearFaults, setPlanted } from './integra
 import { describeSource } from './integrations/comms/health.ts';
 import { setHelixClientFactory } from './integrations/comms/helix.ts';
 import { toolSpecsFor } from './ai/tools.ts';
+import { buildDailyBrief, renderBrief } from './reporting/daily-brief.ts';
 import { commsToolsFor } from './ai/comms-tools.ts';
 import { commsConfigFor, HHS_DEMO_TENANT } from './integrations/comms/config.ts';
 import { COMMS_SOURCES } from './integrations/comms/types.ts';
@@ -126,6 +127,8 @@ async function main() {
   // LAST, deliberately: it loads the HHS tenant's estate, and loading another
   // tenant's estate regenerates the shared one (see loadEstate in CLAUDE.md).
   if (wants('solarwinds')) await sectionSolarwinds();
+  // After comms and SolarWinds: it summarises what they stored.
+  if (wants('brief')) await sectionBrief();
 
   summary();
 }
@@ -1024,7 +1027,11 @@ async function sectionSolarwinds() {
   note('A dead distribution switch, seen only by the poller - and named as the cause:');
   const alarms = evaluate(hhs, observations);
   for (const a of alarms) write('   ' + a.kind.padEnd(20) + a.deviceId.padEnd(20) + dim('planes: ' + a.planes.join('+')) + '\n');
-  for (const i of detectIncidents(hhs, alarms)) {
+  const networkIncidents = detectIncidents(hhs, alarms);
+  // Stored as the ingest pipeline stores them - the daily brief reads the
+  // repository, which is what production does.
+  for (const i of networkIncidents) putIncident(hhs, i);
+  for (const i of networkIncidents) {
     write('   ' + '\x1b[31mINCIDENT\x1b[0m  ' + i.title + '  ' + dim('root cause ' + i.rootCauseDeviceId) + '\n');
   }
   write('   ' + dim('the core link-down is recorded but not promoted alone - one box, one plane, no second witness') + '\n');
@@ -1050,6 +1057,23 @@ async function sectionSolarwinds() {
   const evidence = why.evidence.find((e) => e.includes('Checked Helix')) ?? '';
   for (const line of evidence.split('\n').filter((l) => l.includes('CRQ'))) write('   ' + line.trim() + '\n');
   write('   ' + dim('the sibling dis-dal01-03 changed more recently than the core, and is not listed - a shared parent is not a shared cause') + '\n');
+}
+
+// ===========================================================================
+// 12. The daily brief
+// ===========================================================================
+
+async function sectionBrief() {
+  section('12', 'The Executive Ops Daily Brief - every source, one page, no invented numbers');
+  const lead = verifyToken(signDemoToken({
+    sub: 'cognito_hhs_ops', email: 'ops-lead@hhs.texas.example',
+    'custom:tenantId': HHS_DEMO_TENANT, 'cognito:groups': ['admin'],
+  }));
+  note('Built from the stored incidents, figures, health and counts - a model may rephrase it, never supply a figure.');
+  note('In production: EventBridge Scheduler at 07:00 Central -> this -> SES / Teams. Sending is not wired here.');
+  note('');
+  const brief = await buildDailyBrief(lead, now());
+  for (const line of renderBrief(brief, 'markdown').split('\n')) write('   ' + line + '\n');
 }
 
 // ===========================================================================
@@ -1085,7 +1109,7 @@ function summary() {
     '   Bedrock  : ' + bedrockUsage.calls + ' model calls, ' + bedrockUsage.embeddings + ' embeddings, ' +
       bedrockUsage.inputTokens + ' in / ' + bedrockUsage.outputTokens + ' out\n' +
     '\n' + dim('   docs/  for the written explanations   infra/terraform/  for the IaC\n' +
-      '   pnpm start --only=<auth|ingest|scenarios|data|events|graphql|rest|geo|ai|comms|solarwinds>') + '\n\n',
+      '   pnpm start --only=<auth|ingest|scenarios|data|events|graphql|rest|geo|ai|comms|solarwinds|brief>') + '\n\n',
   );
 }
 

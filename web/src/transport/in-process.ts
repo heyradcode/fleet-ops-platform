@@ -38,6 +38,7 @@ import {
 } from '../../../src/integrations/comms/store.ts';
 import { loadHealth } from '../../../src/integrations/comms/health.ts';
 import { setHelixClientFactory } from '../../../src/integrations/comms/helix.ts';
+import { buildDailyBrief } from '../../../src/reporting/daily-brief.ts';
 import { knowledgeBase } from '../../../src/ai/knowledge-base.ts';
 import { putObservations, putDeviceStates } from '../../../src/platform/repository.ts';
 import { loadRunbooksFromBundle } from './runbooks.browser.ts';
@@ -293,6 +294,9 @@ export const inProcessTransport: Transport = {
       health: loadHealth(principal),
       resolved: commsResolvedIncidents(principal),
       phones: commsPhones(principal),
+      // The network incidents the board's network view shows, so the brief and
+      // the board cannot disagree about what is open.
+      brief: await buildDailyBrief(principal, now(), { networkIncidents: runScenarios(analyst()).incidents }),
     } satisfies CommsSnapshot;
   },
 

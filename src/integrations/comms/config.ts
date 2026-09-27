@@ -56,6 +56,14 @@ export const COMMS_CONFIG: Record<string, CommsTenantConfig> = {
         'SBC2-TEAMS-DR': 'sbc2.voice.hhs.texas.example',
       },
     },
+    facilityNames: {
+      '0412': 'Austin Central Office',
+      '0417': 'North Austin Campus',
+      '1120': 'Houston Regional',
+      '1455': 'Dallas Regional',
+      '2031': 'El Paso Field Office',
+      '3308': 'Lubbock Field Office',
+    },
     kurmi: {
       tenantDbid: '9944001',
       agencyCodes: ['HHSC', 'DSHS', 'DFPS'],

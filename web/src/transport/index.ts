@@ -29,6 +29,7 @@ import type { CommsAlarm, CommsIncident } from '../../../src/integrations/comms/
 import type { WorkforceSummary } from '../../../src/integrations/comms/store.ts';
 import type { IntegrationHealth } from '../../../src/integrations/comms/health.ts';
 import type { PhoneInventory } from '../../../src/integrations/comms/kurmi.ts';
+import type { Brief } from '../../../src/reporting/daily-brief.ts';
 
 export type BoardSnapshot = {
   devices: DeviceState[];
@@ -76,6 +77,8 @@ export type CommsSnapshot = {
   resolved: CommsIncident[];
   /** Cisco desk phones from Kurmi - devices, shown beside the workforce, never in it. */
   phones?: PhoneInventory;
+  /** The executive daily brief, built from exactly what this snapshot shows. */
+  brief: Brief;
 };
 
 export type Transport = {
@@ -144,7 +147,7 @@ export type Transport = {
   loadComms(): Promise<CommsSnapshot | null>;
 };
 
-export type { AgentResult, CommsAlarm, CommsIncident, IntegrationHealth, PhoneInventory, WorkforceSummary };
+export type { AgentResult, Brief, CommsAlarm, CommsIncident, IntegrationHealth, PhoneInventory, WorkforceSummary };
 export type { AgentTrace } from '../../../src/ai/agent-core.ts';
 
 export type { Alarm, DeviceState, DeviceStatus, Incident, Principal, Site };

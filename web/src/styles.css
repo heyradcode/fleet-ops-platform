@@ -1457,6 +1457,44 @@ button.topo-node:hover { border-color: var(--amber); }
 .comms-quality-what { color: var(--text); }
 .comms-quality-fix { color: var(--dim); }
 
+/* The daily brief: one line until opened. Only red and amber are coloured -
+   a green status stays calm, as every healthy thing on this board does. */
+.comms-brief { margin: 14px 18px 0; max-width: 676px; border: 1px solid var(--line); background: var(--panel); }
+.comms-brief-head {
+  display: grid;
+  grid-template-columns: 64px 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+  width: 100%;
+  padding: 8px 10px;
+  text-align: left;
+}
+.comms-brief-status {
+  font-family: var(--data);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--healthy);
+}
+.comms-brief.is-red .comms-brief-status { color: var(--critical); }
+.comms-brief.is-amber .comms-brief-status { color: var(--amber); }
+.comms-brief-headline { font-size: 12px; color: var(--text); }
+.comms-brief-toggle { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--dim); }
+.comms-brief-body { padding: 0 12px 10px; font-size: 12px; color: var(--text); border-top: 1px solid var(--line); }
+.comms-brief-body h4 {
+  margin: 12px 0 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.comms-brief-body ul { margin: 0; padding-left: 16px; }
+.comms-brief-body li { margin-bottom: 6px; }
+.comms-brief-body .dim { color: var(--dim); }
+.comms-brief-body p { margin: 0; color: var(--dim); }
+
 @media (max-width: 1180px) {
   .comms-body { grid-template-columns: 360px 1fr; }
   .comms-body .panel { display: none; }

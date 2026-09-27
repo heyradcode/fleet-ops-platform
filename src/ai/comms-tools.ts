@@ -31,6 +31,8 @@ import {
 import { COMMS_SOURCES } from '../integrations/comms/types.ts';
 import { describeChange } from '../integrations/comms/helix-context.ts';
 import { describeSource, loadHealth } from '../integrations/comms/health.ts';
+import { buildDailyBrief, renderBrief } from '../reporting/daily-brief.ts';
+import { now } from '../platform/clock.ts';
 
 export const COMMS_TOOLS: Tool[] = [
   {
@@ -188,6 +190,21 @@ export const COMMS_TOOLS: Tool[] = [
         for (const q of h.dataQuality) lines.push('  ' + q.detail + ' -> ' + q.action);
       }
       return lines.join('\n');
+    },
+  },
+  {
+    spec: {
+      name: 'dailyBrief',
+      description:
+        'Produce the executive operations brief: overall red/amber/green status, every open ' +
+        'problem in plain language with its impact on people and calls, what resolved in the ' +
+        'last 24 hours, what is being watched, and how complete the underlying data is. Use ' +
+        'this for "how are we doing", "give me a summary", or anything written for leadership. ' +
+        'Quote its figures; never compute new ones.',
+      input_schema: { type: 'object', properties: {}, required: [] },
+    },
+    async execute(_input, principal) {
+      return renderBrief(await buildDailyBrief(principal, now()), 'text');
     },
   },
 ];

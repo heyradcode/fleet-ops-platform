@@ -21,7 +21,7 @@ import { useState } from 'react';
 import { inProcessTransport } from './transport/in-process.ts';
 import { TraceStep } from './DevicePanel.tsx';
 import type {
-  AgentResult, CommsAlarm, CommsIncident, IntegrationHealth, PhoneInventory, WorkforceSummary,
+  AgentResult, Brief, CommsAlarm, CommsIncident, IntegrationHealth, PhoneInventory, WorkforceSummary,
 } from './transport/index.ts';
 import type { CommsSnapshot } from './transport/index.ts';
 
@@ -62,6 +62,7 @@ export function CommsBoard({ snapshot }: { snapshot: CommsSnapshot }) {
           <span>Voice users</span>
           <span className="mono">as of {snapshot.workforce.asOf.slice(11, 19)}Z</span>
         </div>
+        <BriefPanel brief={snapshot.brief} />
         {snapshot.health && <Integrations health={snapshot.health} />}
         <Workforce workforce={snapshot.workforce} affected={affected} />
         {snapshot.phones && <Phones phones={snapshot.phones} affected={affected} />}
@@ -149,6 +150,53 @@ function ResolvedRow({ incident }: { incident: CommsIncident }) {
         <span className="verdict is-held">RESOLVED</span>
       </div>
     </div>
+  );
+}
+
+/**
+ * The executive brief, collapsed to its status line until opened. The status
+ * colour is the board's own: red and amber only when they mean it.
+ */
+function BriefPanel({ brief }: { brief: Brief }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <section className={`comms-brief is-${brief.status}`} aria-label="Daily brief">
+      <button className="comms-brief-head" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <span className="comms-brief-status">{brief.status}</span>
+        <span className="comms-brief-headline">{brief.headline}</span>
+        <span className="comms-brief-toggle">{open ? 'hide' : 'daily brief'}</span>
+      </button>
+      {open && (
+        <div className="comms-brief-body">
+          {!brief.confidence.complete && <p className="comms-warning">Built on incomplete data - see the last section.</p>}
+          <h4>Open now</h4>
+          {brief.open.length === 0 ? <p>Nothing open.</p> : (
+            <ul>
+              {brief.open.map((i) => (
+                <li key={i.id}>
+                  <b>{i.title}</b> <span className="dim">- {i.when}</span>
+                  <div>Impact: {i.impact}</div>
+                  {i.where && <div>Where: {i.where}</div>}
+                  {i.status && <div>Status: {i.status}</div>}
+                  {i.candidate && <div>{i.candidate} - a candidate, not a confirmed cause</div>}
+                  {i.ticket && <div>{i.ticket}</div>}
+                </li>
+              ))}
+            </ul>
+          )}
+          <h4>Resolved in the last 24 hours</h4>
+          {brief.resolved.length === 0 ? <p>Nothing resolved.</p>
+            : <ul>{brief.resolved.map((r) => <li key={r.id}>{r.title} <span className="dim">- {r.when}</span></li>)}</ul>}
+          {brief.watch.length > 0 && <><h4>Watching</h4><ul>{brief.watch.map((w) => <li key={w}>{w}</li>)}</ul></>}
+          <h4>How much to trust this</h4>
+          <ul>
+            {brief.confidence.complete && <li>Every feed answered on the latest poll.</li>}
+            {brief.confidence.notes.map((n) => <li key={n}>{n}</li>)}
+            {brief.confidence.fixes.map((f) => <li key={f} className="dim">{f}</li>)}
+          </ul>
+        </div>
+      )}
+    </section>
   );
 }
 
