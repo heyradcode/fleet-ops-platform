@@ -16,6 +16,16 @@
  * `Authorization` header (allowlisted in Terraform: AgentCore passes no header
  * it was not told to) is verified again here with all seven checks.
  *
+ * FOLLOW-UPS, FROM THE SESSION'S OWN MEMORY. AgentCore sends every request
+ * with the same session id to the same warm microVM and wipes it when the
+ * session ends, so a conversation kept in a module-level map lives exactly
+ * as long as the session - "and what is above it?" works, and nothing
+ * outlives the idle timeout. No database, no AgentCore Memory, no cost.
+ * Keyed by the VERIFIED user, not the session: AgentCore does not bind a
+ * session to a user, and anyone authorised who sent another person's
+ * session id would land in their microVM - where they would find their own
+ * history, and nobody else's.
+ *
  * READ-ONLY. The deployed agent is offered the read tools only, and the loop
  * refuses any tool it did not offer. Opening an incident pages a human; a
  * model in the cloud doing that is a decision, like writing Helix tickets,
@@ -28,11 +38,12 @@ import { seedDemoWorld } from '../api/board-api.ts';
 import { knowledgeBase } from './knowledge-base.ts';
 import { runAgent, type AgentResult } from './agent-core.ts';
 import { toolSpecsFor } from './tools.ts';
+import { redactPii } from './guardrails.ts';
 
 export type InvocationRequest = {
   /** The `Authorization` header, as AgentCore forwarded it. */
   authorization: string | undefined;
-  /** The raw request body. */
+  /** The raw request body: `{"question": "...", "newConversation"?: true}`. */
   body: string;
 };
 
@@ -53,6 +64,15 @@ export const MAX_QUESTION_CHARS = 2000;
  */
 const ingested = new Set<string>();
 
+/** How much of a conversation the agent carries into the next question. */
+export const HISTORY_TURNS = 4;
+/** Per stored answer. An answer can quote a page of tool output; the gist is enough context. */
+export const HISTORY_ANSWER_CHARS = 1500;
+
+type Turn = { question: string; answer: string };
+const conversations = new Map<string, Turn[]>();
+const conversationKey = (p: Principal) => p.tenantId + '|' + p.sub;
+
 export async function handleAgentInvocation(req: InvocationRequest, deps: InvocationDeps): Promise<InvocationResponse> {
   const header = req.authorization ?? '';
   if (!header.startsWith('Bearer ')) {
@@ -72,10 +92,12 @@ export async function handleAgentInvocation(req: InvocationRequest, deps: Invoca
   }
 
   let question: string;
+  let fresh = false;
   try {
-    const parsed = JSON.parse(req.body) as { question?: unknown };
+    const parsed = JSON.parse(req.body) as { question?: unknown; newConversation?: unknown };
     if (typeof parsed.question !== 'string' || !parsed.question.trim()) throw new Error('missing');
     question = parsed.question.trim();
+    fresh = parsed.newConversation === true;
   } catch {
     return { status: 400, body: { error: 'Send {"question": "..."}.' } };
   }
@@ -94,13 +116,29 @@ export async function handleAgentInvocation(req: InvocationRequest, deps: Invoca
       ingested.add(principal.tenantId);
     }
 
+    const key = conversationKey(principal);
+    if (fresh) conversations.delete(key);
+    const history = conversations.get(key) ?? [];
+
     const result = await runAgent({
       question,
       // The CALLER's principal - never a privileged one. A Dallas operator's
       // assistant sees Dallas, because the tools derive keys from this.
       principal,
       tools: toolSpecsFor(principal, { readOnly: true }),
+      history,
     });
+
+    // Only answers that passed the output guardrail become context - a
+    // withheld answer fed back in would be the model reading what it was
+    // not allowed to say. Questions are stored as the model saw them: PII
+    // redacted.
+    if (result.stoppedBecause === 'end_turn') {
+      conversations.set(key, [...history, {
+        question: redactPii(question),
+        answer: result.answer.slice(0, HISTORY_ANSWER_CHARS),
+      }].slice(-HISTORY_TURNS));
+    }
     log.info('agent: answered', {
       tenant: principal.tenantId, stoppedBecause: result.stoppedBecause,
       modelCalls: result.usage.modelCalls, inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens,

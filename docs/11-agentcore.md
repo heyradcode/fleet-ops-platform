@@ -5,8 +5,8 @@ and guardrails — can run on **Amazon Bedrock AgentCore Runtime** instead of in
 the browser tab. This document explains what AgentCore is, how it works, how
 this repository uses it and why, how to deploy it, and what it costs.
 
-Status: **deployed** - runtime `netpulse_demo_agent`, `READY`, running the
-offline model. The authorizer is verified from outside: no token and a
+Status: **deployed** - runtime `netpulse_demo_agent`, `READY` (version 2:
+follow-up conversations), running the offline model. The authorizer is verified from outside: no token and a
 forged token are both refused with 401 before any microVM starts. One thing
 outside the code blocks real Claude: the AWS account is not yet enabled for
 Anthropic models (see [Claude model access](#claude-model-access)). Until it
@@ -225,6 +225,22 @@ Anthropic's API and SigV4-signed with the runtime's execution role.
   by default). Bedrock does not offer the first-party server-side `fallbacks`
   parameter, so the fallback is client-side, in the adapter.
 
+**Follow-ups come from the session's own memory.** AgentCore sends every
+request with the same session id to the same warm microVM and wipes it when
+the session ends, so a conversation kept in a module-level map lives exactly
+as long as the session: "and what is above it?" works, and nothing outlives
+the idle timeout. No database, no AgentCore Memory, no extra cost.
+- **What's kept:** the last 4 question/answer pairs, as plain text, with each
+  answer capped at 1,500 characters. Questions are stored PII-redacted, as the
+  model saw them, and only answers that passed the output guardrail are kept.
+  Tool calls and thinking blocks are not kept: they'd grow every request and
+  tie the history to one model.
+- **Keyed by the verified user, not the session.** AgentCore does not bind a
+  session to a user. Anyone authorised who sent another person's session id
+  would reach their microVM, and there find their own history, not the other
+  person's.
+- **Starting over:** `{"newConversation": true}` in the body clears it.
+
 **A separate Terraform root.** AgentCore's Terraform resources exist only in
 AWS provider 6.x, while `infra/terraform/auth` runs on 5.x with a live
 deployment behind it. A major provider upgrade shouldn't ride in on a new
@@ -260,6 +276,15 @@ runtime update and a new runtime version.
   from a real denial - test `CreateAgentRuntime` against resource `*`, since
   it takes no runtime ARN and a runtime-ARN simulation reports a misleading
   implicit deny.
+- **A session that is starting up answers 409.** While AgentCore provisions
+  or tears down a session's microVM, a second request to it gets
+  `RetryableConflictException`. The AWS SDKs retry it; the board calls the
+  endpoint with plain `fetch`, so it retries itself (250 ms, then doubling),
+  or a quick second question during a cold start would show an error.
+- **Replace the code zip before deleting the old one.** Terraform's default
+  order deletes the old S3 object before updating the runtime, so for a few
+  seconds the runtime points at a key that no longer exists.
+  `create_before_destroy` on the object closes that window.
 - **Session ids and the seeded demo world.** The board seeds `uuid()` for
   deterministic output. Session ids come from `crypto.getRandomValues`
   directly, or every tab would have asked for the same microVM.
@@ -386,9 +411,10 @@ working, not a fault.
 
 The other AgentCore services map onto real gaps in this platform:
 
-- **Memory:** follow-up questions ("and the one above it?") currently start
-  from nothing. Short-term memory keyed on the session would give the agent
-  the conversation.
+- **Memory:** follow-ups work within a session today, from the microVM's own
+  memory, and end with it. AgentCore Memory would make a conversation survive
+  the session, and could extract long-term facts ("this operator always asks
+  about Dallas"). Worth it once conversations need to last.
 - **Gateway:** the agent's tools are code inside the bundle. Gateway could
   expose the board API's routes as MCP tools, with policy and guardrails
   outside the agent, and the runtime could be restricted to accept calls only

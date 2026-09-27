@@ -50,10 +50,19 @@ export type AgentCoreAsker = {
   readonly sessionId: string;
 };
 
+/**
+ * While AgentCore is provisioning or tearing down a session's microVM, a
+ * second request to it gets 409 RetryableConflictException. The AWS SDKs
+ * retry that on their own; a bare fetch does not, so this does - briefly,
+ * because the window is the time it takes to start a microVM.
+ */
+const CONFLICT_RETRIES_MS = [250, 500, 1000, 2000];
+
 export function createAgentCoreAsker(
   arn: string,
   fetchImpl: typeof fetch = (...a) => fetch(...a),
   makeSessionId: () => string = newSessionId,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
 ): AgentCoreAsker {
   const url = invocationUrl(arn);
   let token: string | null = null;
@@ -69,18 +78,25 @@ export function createAgentCoreAsker(
 
     async ask(question) {
       if (!token) throw new BoardApiError('No session. Sign in first.');
+      const send = () => fetchImpl(url, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer ' + token,
+          'content-type': 'application/json',
+          'x-amzn-bedrock-agentcore-runtime-session-id': sessionId,
+        },
+        body: JSON.stringify({ question }),
+        credentials: 'omit',
+      });
       let res: Response;
       try {
-        res = await fetchImpl(url, {
-          method: 'POST',
-          headers: {
-            authorization: 'Bearer ' + token,
-            'content-type': 'application/json',
-            'x-amzn-bedrock-agentcore-runtime-session-id': sessionId,
-          },
-          body: JSON.stringify({ question }),
-          credentials: 'omit',
-        });
+        res = await send();
+        for (const wait of CONFLICT_RETRIES_MS) {
+          const retryable = res.status === 409 && (res.headers.get('x-amzn-errortype') ?? '').startsWith('RetryableConflict');
+          if (!retryable) break;
+          await sleep(wait);
+          res = await send();
+        }
       } catch {
         throw new BoardApiError('The assistant did not answer - check the network.');
       }
@@ -91,6 +107,7 @@ export function createAgentCoreAsker(
       const kind = res.headers.get('x-amzn-errortype') ?? '';
       if (res.status === 401) throw new BoardApiError('Your session has expired - sign in again.', 401);
       if (res.status === 429 || kind.startsWith('Throttling')) throw new BoardApiError('The assistant is busy - try again in a moment.', 429);
+      if (res.status === 409) throw new BoardApiError('The assistant is still starting up - ask again in a moment.', 409);
       if (res.status === 424) throw new BoardApiError('The assistant failed on this question. Try rephrasing it.', 424);
       if (res.status === 403) throw new BoardApiError('The assistant refused this account (' + (kind || 'AccessDenied') + ').', 403);
       throw new BoardApiError('The assistant failed (' + res.status + (kind ? ' ' + kind : '') + ').', res.status);

@@ -78,6 +78,13 @@ export async function runAgent(opts: {
   principal: Principal;
   tools: ToolSpec[];
   maxIterations?: number;
+  /**
+   * Earlier turns of this conversation, oldest first, as plain question /
+   * answer text - never the tool calls or thinking blocks behind them, which
+   * would grow every request and tie the history to one model. Where it is
+   * kept, and for whom, is the caller's business: see agent-invocation.ts.
+   */
+  history?: Array<{ question: string; answer: string }>;
 }): Promise<AgentResult> {
   // The budget has to leave room for a FINAL ANSWER after the tools, so it is
   // one more than the number of tools the agent might reasonably chain. Set it
@@ -108,7 +115,13 @@ export async function runAgent(opts: {
     };
   }
 
-  const messages: Message[] = [{ role: 'user', content: inputCheck.redactedText ?? opts.question }];
+  const messages: Message[] = [
+    ...(opts.history ?? []).flatMap((turn): Message[] => [
+      { role: 'user', content: turn.question },
+      { role: 'assistant', content: turn.answer },
+    ]),
+    { role: 'user', content: inputCheck.redactedText ?? opts.question },
+  ];
   const usage = { modelCalls: 0, inputTokens: 0, outputTokens: 0 };
 
   // ---- The loop ----------------------------------------------------------

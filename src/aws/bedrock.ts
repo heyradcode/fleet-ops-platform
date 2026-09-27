@@ -202,7 +202,7 @@ const ACTION_INTENT = /\b(open|raise|create|file|page|escalate|acknowledge|dispa
 
 function plan(req: { system: string; messages: Message[]; tools?: ToolSpec[] }): Omit<ModelResponse, 'usage'> {
   const done = toolsAlreadyRun(req.messages);
-  const wantsAction = ACTION_INTENT.test(firstUserText(req.messages));
+  const wantsAction = ACTION_INTENT.test(currentQuestion(req.messages));
 
   const available = (req.tools ?? []).filter(
     (t) => wantsAction || !ACTION_TOOLS.has(t.name),
@@ -225,7 +225,7 @@ function plan(req: { system: string; messages: Message[]; tools?: ToolSpec[] }):
 
 /** Pull plausible arguments out of the user's question, for the demo. */
 function inferArgs(tool: ToolSpec, messages: Message[]): Record<string, unknown> {
-  const question = firstUserText(messages);
+  const question = currentQuestion(messages);
   const args: Record<string, unknown> = {};
 
   for (const key of tool.input_schema.required ?? []) {
@@ -292,14 +292,24 @@ function extractSiteId(text: string): string {
   return Object.entries(sites).find(([name]) => lower.includes(name))?.[1] ?? 'dal-01';
 }
 
-function firstUserText(messages: Message[]): string {
-  const first = messages.find((m) => m.role === 'user');
-  if (!first) return '';
-  if (typeof first.content === 'string') return first.content;
-  return first.content
-    .filter((b) => b.type === 'text')
-    .map((b) => (b as { text: string }).text)
-    .join(' ');
+/**
+ * The question being answered NOW: the latest user turn that is words, not
+ * tool results. It was the FIRST user message, which was the same thing
+ * until conversations had history - then it answered the opening question
+ * forever, whatever was asked next.
+ */
+function currentQuestion(messages: Message[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== 'user') continue;
+    if (typeof m.content === 'string') return m.content;
+    if (m.content.some((b) => b.type === 'tool_result')) continue;
+    return m.content
+      .filter((b) => b.type === 'text')
+      .map((b) => (b as { text: string }).text)
+      .join(' ');
+  }
+  return '';
 }
 
 /** Compose a final answer out of everything the tools returned. */

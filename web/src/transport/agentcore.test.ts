@@ -90,3 +90,29 @@ test('failures say what happened: expired token, agent error, no token at all', 
   asker.setToken(s.token);
   await assert.rejects(asker.ask('x'.repeat(5000)), (e: unknown) => e instanceof BoardApiError && e.status === 424);
 });
+
+test('a session still starting up (409 RetryableConflict) is retried, not shown as an error', async () => {
+  const s = await signIn('lead@netpulse.io');
+  let calls = 0;
+  const startingUp: typeof fetch = async (input, init) => {
+    calls++;
+    if (calls <= 2) return new Response('{}', { status: 409, headers: { 'x-amzn-errortype': 'RetryableConflictException' } });
+    return fakeAgentCore(input, init);
+  };
+  const waits: number[] = [];
+  const asker = createAgentCoreAsker(ARN, startingUp, undefined, async (ms) => { waits.push(ms); });
+  asker.setToken(s.token);
+  const result = await asker.ask('How do I fix a link down?');
+  assert.ok(result.answer.length > 0);
+  assert.deepEqual(waits, [250, 500], 'backed off, then got through');
+});
+
+test('a 409 that is NOT retryable is reported, not retried', async () => {
+  const s = await signIn('lead@netpulse.io');
+  let calls = 0;
+  const conflict: typeof fetch = async () => { calls++; return new Response('{}', { status: 409, headers: { 'x-amzn-errortype': 'ConflictException' } }); };
+  const asker = createAgentCoreAsker(ARN, conflict, undefined, async () => {});
+  asker.setToken(s.token);
+  await assert.rejects(asker.ask('q'), /still starting up/);
+  assert.equal(calls, 1);
+});

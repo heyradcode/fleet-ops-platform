@@ -92,3 +92,74 @@ test('a model that names a tool it was NOT offered is refused by the loop, not t
     resetModelInvoker();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Conversations: kept in the session's microVM, per verified user
+// ---------------------------------------------------------------------------
+
+import { HISTORY_TURNS } from './agent-invocation.ts';
+import type { Message } from '../aws/bedrock.ts';
+
+/** A model that answers "A<n>" and records every request it was sent. */
+async function withRecordingModel(run: (seen: Message[][]) => Promise<void>) {
+  const { setModelInvoker, resetModelInvoker } = await import('../aws/bedrock.ts');
+  const seen: Message[][] = [];
+  setModelInvoker(async (req) => {
+    seen.push([...req.messages]);   // a copy: the loop appends to the same array afterwards
+    return { stop_reason: 'end_turn', content: [{ type: 'text', text: 'A' + seen.length }], usage: { input_tokens: 1, output_tokens: 1 } };
+  });
+  try { await run(seen); } finally { resetModelInvoker(); }
+}
+
+const person = (sub: string): Principal => ({ ...OPERATOR, sub });
+const askAs = (p: Principal, question: string, extra: Record<string, unknown> = {}) => {
+  TOKENS['tok-' + p.sub] = p;
+  return handleAgentInvocation({ authorization: 'Bearer tok-' + p.sub, body: JSON.stringify({ question, ...extra }) }, { verify });
+};
+const texts = (messages: Message[]) => messages.map((m) => m.role + ':' + (typeof m.content === 'string' ? m.content : '[blocks]'));
+
+test('a follow-up carries the conversation so far', async () => {
+  await withRecordingModel(async (seen) => {
+    const p = person('conv-follow');
+    await askAs(p, 'Why is dal-01 down?');
+    await askAs(p, 'And what is above it?');
+    assert.deepEqual(texts(seen[1]), ['user:Why is dal-01 down?', 'assistant:A1', 'user:And what is above it?']);
+  });
+});
+
+test("one person's conversation is never another's, even in the same microVM", async () => {
+  await withRecordingModel(async (seen) => {
+    await askAs(person('conv-alice'), 'my secret question');
+    await askAs(person('conv-bob'), 'hello');
+    assert.deepEqual(texts(seen[1]), ['user:hello']);
+  });
+});
+
+test('newConversation starts over; history is capped', async () => {
+  await withRecordingModel(async (seen) => {
+    const p = person('conv-cap');
+    for (let i = 1; i <= HISTORY_TURNS + 2; i++) await askAs(p, 'q' + i);
+    const last = seen[seen.length - 1];
+    assert.equal(last.length, HISTORY_TURNS * 2 + 1, 'only the last ' + HISTORY_TURNS + ' turns');
+    await askAs(p, 'fresh start', { newConversation: true });
+    assert.deepEqual(texts(seen[seen.length - 1]), ['user:fresh start']);
+  });
+});
+
+test('a refused answer is not remembered as context', async () => {
+  const { setModelInvoker, resetModelInvoker } = await import('../aws/bedrock.ts');
+  const seen: Message[][] = [];
+  let n = 0;
+  setModelInvoker(async (req) => {
+    seen.push([...req.messages]);   // a copy: the loop appends to the same array afterwards
+    return n++ === 0
+      ? { stop_reason: 'refusal', content: [], usage: { input_tokens: 1, output_tokens: 0 } }
+      : { stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } };
+  });
+  try {
+    const p = person('conv-refused');
+    await askAs(p, 'something declined');
+    await askAs(p, 'next');
+    assert.deepEqual(texts(seen[1]), ['user:next']);
+  } finally { resetModelInvoker(); }
+});

@@ -120,6 +120,14 @@ resource "aws_s3_object" "agent" {
   key    = "agent/${data.archive_file.agent.output_md5}.zip"
   source = data.archive_file.agent.output_path
   etag   = data.archive_file.agent.output_md5
+
+  # New zip first, runtime moved to it, THEN the old zip removed. The default
+  # order deletes the old object before the runtime update, leaving a window
+  # where the runtime points at a key that no longer exists - and a session
+  # cold-starting in it fails for a reason no log line explains.
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # -----------------------------------------------------------------------------
