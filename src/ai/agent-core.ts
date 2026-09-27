@@ -106,8 +106,13 @@ export async function runAgent(opts: {
   //
   // This bit us once already: adding a sixth tool made a budget of 6 too small,
   // and the failure looked like the model misbehaving rather than a budget the
-  // tool count had outgrown.
-  const maxIterations = opts.maxIterations ?? 8;
+  // tool count had outgrown. It bit a second time when the comms and ITSM
+  // tools arrived: an HHS caller is offered 10-12 tools against a fixed 8, and
+  // the first question ever asked of the AgentCore agent ended "could not
+  // reach a conclusion within 8 steps". So the default GROWS with the tools
+  // offered - one step each, one for the answer, one spare - and never drops
+  // below 8. An explicit maxIterations still wins.
+  const maxIterations = opts.maxIterations ?? Math.max(8, opts.tools.length + 2);
   const trace: AgentTrace[] = [];
   const record = (entry: AgentTrace) => { trace.push(entry); opts.onStep?.(entry); };
   const evidence: string[] = [];

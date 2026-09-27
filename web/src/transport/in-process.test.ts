@@ -314,4 +314,7 @@ test('comms: the HHS lead\'s assistant is offered the comms tools', async () => 
   const result = await inProcessTransport.askAgent('Why is call quality bad in Houston?');
   const tools = result.trace.filter((t) => t.kind === 'tool').map((t) => t.detail.split('(')[0]);
   assert.ok(tools.includes('listCommsIncidents'), tools.join(', '));
+  // And it ANSWERS. With ~12 tools on offer a fixed budget of 8 ran out first,
+  // and this test - checking only what was offered - never noticed.
+  assert.equal(result.stoppedBecause, 'end_turn');
 });

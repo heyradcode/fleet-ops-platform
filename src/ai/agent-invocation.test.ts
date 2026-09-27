@@ -178,3 +178,11 @@ test('the answer says where it came from: AgentCore, the model, and the turn', a
   assert.equal(second.servedBy?.turn, 2);
   assert.equal(fresh.servedBy?.turn, 1);
 });
+
+test('an HHS caller - ten read-only tools on offer - gets an ANSWER, not "could not reach a conclusion"', async () => {
+  const hhs: Principal = { ...ADMIN, sub: 'hhs-budget', tenantId: 'hhs-demo' };
+  TOKENS['tok-hhs-budget'] = hhs;
+  const res = await handleAgentInvocation({ authorization: 'Bearer tok-hhs-budget', body: JSON.stringify({ question: 'Why is call quality bad in Houston?' }) }, { verify });
+  const result = res.body as AgentResult;
+  assert.equal(result.stoppedBecause, 'end_turn', 'the first real AgentCore question ended at max_iterations');
+});

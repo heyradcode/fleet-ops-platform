@@ -5,8 +5,11 @@ and guardrails — can run on **Amazon Bedrock AgentCore Runtime** instead of in
 the browser tab. This document explains what AgentCore is, how it works, how
 this repository uses it and why, how to deploy it, and what it costs.
 
-Status: **deployed** - runtime `netpulse_demo_agent`, `READY` (version 4),
-running the offline model. Answers **stream**: each step appears on the
+Status: **deployed and used** - runtime `netpulse_demo_agent`, `READY`
+(version 6), running the offline model. The first real question from the
+board reached it on 27 September: a cold start, the runbooks ingested, the
+tools read DynamoDB as `hhs-demo` - and it ran out of steps (see below),
+which version 6 fixes. Answers **stream**: each step appears on the
 board as the agent takes it. Every answer on the board ends with where it
 came from - *via AgentCore (offline model) · turn 2* - and the assistant
 panels offer **New conversation** when the agent is remembering one. The authorizer is verified from outside: no token and a
@@ -288,6 +291,13 @@ runtime update and a new runtime version.
   request after a deploy that reported success.
 - **Zip permissions.** AgentCore needs files readable (644). A zip made on
   Windows carries no Unix modes; `output_file_mode = "0644"` sets them.
+- **The step budget has to grow with the tools.** The first real question
+  ended "could not reach a conclusion within 8 steps": an `hhs-demo` caller is
+  offered 10 read-only tools (network, comms, Helix), and the offline model
+  calls each once before answering. The default budget is now the tool count
+  plus two, and never less than 8. The in-tab assistant had the same problem
+  for HHS, unnoticed, because its test checked which tools were offered,
+  never that it answered.
 - **Creating a runtime also creates its `DEFAULT` endpoint** - a separate
   action, `bedrock-agentcore:CreateAgentRuntimeEndpoint`. The first deploy
   failed on exactly that: the runtime call was allowed, the endpoint behind
