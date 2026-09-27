@@ -18,7 +18,7 @@
  * how many people is that?" - and the board makes it without them asking.
  */
 import { useState } from 'react';
-import { inProcessTransport } from './transport/in-process.ts';
+import { transport } from './transport/select.ts';
 import { TraceStep } from './DevicePanel.tsx';
 import type {
   AgentResult, Brief, CommsAlarm, CommsAnomaly, CommsIncident, IntegrationHealth, PhoneInventory, WorkforceSummary,
@@ -435,7 +435,7 @@ function Assistant() {
     setAsking(true);
     setError(null);
     try {
-      setResult(await inProcessTransport.askAgent(question));
+      setResult(await transport.askAgent(question));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'The assistant did not respond.');
     } finally {

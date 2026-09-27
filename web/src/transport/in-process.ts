@@ -10,22 +10,19 @@
  * shows what the RULES decided, not a hand-written list of things that look
  * like alerts. If the corroboration rule changes, this board changes with it.
  */
-import type { BoardSnapshot, CommsSnapshot, HealthTick, Transport } from './index.ts';
-import type { Alarm, DeviceStatus, Incident, Principal } from '../../../src/platform/types.ts';
+import type { Transport } from './index.ts';
+import type { DeviceStatus, Principal } from '../../../src/platform/types.ts';
 
-import { setClock, fixedClock, now } from '../../../src/platform/clock.ts';
-import { setRandom, seededRandom } from '../../../src/platform/random.ts';
-import { setUuid, seededUuid } from '../../../src/platform/crypto.ts';
+import { now } from '../../../src/platform/clock.ts';
 import { verifyToken, signDemoToken } from '../../../src/auth/cognito-jwt-verifier.ts';
 import {
-  loadEstate, getInventory, allDeviceStates, allSites,
+  loadEstate, getInventory, allDeviceStates,
 } from '../../../src/geo/device-repository.ts';
 import { withinScope } from '../../../src/platform/tenancy.ts';
 import { buildScenarios } from '../../../src/data/scenarios.ts';
 import { generateHealthTrace } from '../../../src/data/trace.ts';
-import { setProber, resetProber, probeEstate } from '../../../src/integrations/probe.ts';
 import {
-  runScenarioFeeds, collapseDuplicates, resolveLocations, evaluate, detectIncidents,
+  runScenarioFeeds, collapseDuplicates, resolveLocations,
 } from '../../../src/pipeline/steps.ts';
 import { runAgent } from '../../../src/ai/agent-core.ts';
 import { toolSpecsFor } from '../../../src/ai/tools.ts';
@@ -33,16 +30,14 @@ import { mockHistory, mockFetch, directory as commsDirectory, DEMO_CLIENT, DEMO_
 import { createCommsClient } from '../../../src/integrations/comms/client.ts';
 import { commsConfigFor } from '../../../src/integrations/comms/config.ts';
 import { backfillCommsBaselines, runCommsPoll } from '../../../src/integrations/comms/poll.ts';
-import { latestAnomalies } from '../../../src/integrations/comms/anomalies.ts';
-import {
-  commsAlarms, commsIncidents, commsPhones, commsResolvedIncidents, commsVisibleTo, commsWorkforce,
-} from '../../../src/integrations/comms/store.ts';
-import { loadHealth } from '../../../src/integrations/comms/health.ts';
+import { commsVisibleTo } from '../../../src/integrations/comms/store.ts';
 import { setHelixClientFactory } from '../../../src/integrations/comms/helix.ts';
-import { buildDailyBrief } from '../../../src/reporting/daily-brief.ts';
 import { knowledgeBase } from '../../../src/ai/knowledge-base.ts';
 import { putObservations, putDeviceStates } from '../../../src/platform/repository.ts';
 import { loadRunbooksFromBundle } from './runbooks.browser.ts';
+import {
+  boardSnapshot, commsSnapshot, seedDemoWorld, tenantScenarios, SCENARIO_AT,
+} from '../../../src/api/board-api.ts';
 
 /**
  * Seed the platform primitives before anything reads them.
@@ -52,15 +47,8 @@ import { loadRunbooksFromBundle } from './runbooks.browser.ts';
  * it impossible to tell a real change from noise while building.
  */
 function seed(): void {
-  setClock(fixedClock());
-  const rng = seededRandom();
-  setRandom(rng);
-  setUuid(seededUuid(rng));
-  loadEstate();
+  seedDemoWorld();
 }
-
-/** The instant every scenario is replayed at. Fixed, like everything else. */
-const SCENARIO_AT = '2026-09-08T14:30:05.000Z';
 
 let seeded = false;
 
@@ -105,47 +93,6 @@ function analyst(): Principal {
     'custom:tenantId': caller().tenantId,
     'cognito:groups': ['admin'],
   }));
-}
-
-/** Run every scenario through the real pipeline and collect what it decided. */
-function runScenarios(principal: Principal) {
-  const estate = loadEstate(principal.tenantId);
-  const inventory = getInventory(principal);
-
-  const alarms: Alarm[] = [];
-  const incidents: Incident[] = [];
-
-  for (const scenario of buildScenarios(estate)) {
-    // The prober is part of the scenario, because the external plane is what
-    // makes half of these corroborate at all. Reset afterwards so one
-    // scenario's outage does not leak into the next.
-    if (scenario.unreachable) {
-      const down = new Set(scenario.unreachable);
-      setProber((deviceId) => !down.has(deviceId));
-    } else {
-      resetProber();
-    }
-
-    const pushed = runScenarioFeeds(principal, inventory, scenario.feeds, SCENARIO_AT).observations;
-    const probed = scenario.unreachable
-      ? probeEstate(principal, inventory)
-        .filter((o) => scenario.unreachable!.includes(o.deviceId))
-      : [];
-
-    const enriched = resolveLocations(principal, collapseDuplicates([...pushed, ...probed]));
-    const raised = evaluate(principal, enriched);
-    alarms.push(...raised);
-    incidents.push(...detectIncidents(principal, raised));
-  }
-  resetProber();
-
-  // An alarm whose id appears in no incident fired but was not corroborated.
-  // The board shows these dimmed rather than hiding them - see the note on
-  // `.is-noise` in styles.css.
-  const paged = new Set(incidents.flatMap((i) => i.alarmIds));
-  const heldBack = alarms.filter((a) => !paged.has(a.alarmId));
-
-  return { alarms, incidents, heldBack };
 }
 
 /**
@@ -245,29 +192,10 @@ export const inProcessTransport: Transport = {
 
   async loadBoard(siteId) {
     ensureSeeded();
-
-    const principal = caller();
-    const { alarms, incidents, heldBack } = runScenarios(analyst());
-
-    // TWO STEPS, and both are needed. withinScope() is the BOUNDARY, derived
-    // from the token; siteId is the caller's chosen VIEW. Applying only the
-    // first meant a Dallas operator who asked for Phoenix got Dallas's devices
-    // rendered under a Phoenix heading - not a leak, since scope had already
-    // excluded Phoenix, but wrong in a way that would make someone distrust the
-    // board the moment they noticed.
-    //
-    // Query.devices in the GraphQL resolver does exactly this pair. Every entry
-    // point to the same data has to, which is the argument for both living
-    // behind the same two functions rather than being reimplemented.
-    const atSite = (x: { siteId: string }) => !siteId || x.siteId === siteId;
-
-    return {
-      devices: withinScope(principal, allDeviceStates(principal)).filter(atSite),
-      sites: allSites(principal),
-      alarms: alarms.filter(atSite),
-      incidents: incidents.filter(atSite),
-      heldBack: heldBack.filter(atSite),
-    } satisfies BoardSnapshot;
+    // The same function the board API serves from Lambda, so the offline
+    // board and the deployed one cannot disagree about what the rules
+    // decided or about what this caller's scope lets them see.
+    return boardSnapshot(caller(), siteId);
   },
 
   async askAgent(question) {
@@ -294,28 +222,7 @@ export const inProcessTransport: Transport = {
     // The CALLER polls - a tenant-wide principal, which is exactly who
     // commsVisibleTo admits - so there is no privileged principal involved.
     await ensureCommsPolled(principal);
-    const [workforce, incidents, alarms, health, resolved, phones, brief, anomalies] = await Promise.all([
-      commsWorkforce(principal),
-      commsIncidents(principal),
-      commsAlarms(principal),
-      loadHealth(principal),
-      commsResolvedIncidents(principal),
-      commsPhones(principal),
-      // The network incidents the board's network view shows, so the brief and
-      // the board cannot disagree about what is open.
-      buildDailyBrief(principal, now(), { networkIncidents: runScenarios(analyst()).incidents }),
-      latestAnomalies(principal),
-    ]);
-    return {
-      workforce: workforce!,
-      incidents,
-      heldBack: alarms.filter((a) => !a.corroborated),
-      health,
-      resolved,
-      phones,
-      brief,
-      anomalies: anomalies?.anomalies ?? [],
-    } satisfies CommsSnapshot;
+    return commsSnapshot(principal);
   },
 
   subscribeHealth(siteId, onTick) {
@@ -375,7 +282,7 @@ export const inProcessTransport: Transport = {
     // Dallas traffic, for cost and for confidentiality.
     let cancelled = false;
 
-    const { alarms } = runScenarios(analyst());
+    const { alarms } = tenantScenarios(caller());
     const queue = alarms.filter((a) => !siteId || a.siteId === siteId);
 
     let i = 0;

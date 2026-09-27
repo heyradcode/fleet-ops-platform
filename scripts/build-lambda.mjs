@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-/** Every Lambda we actually deploy. Today that is one. */
+/** Every Lambda we actually deploy. */
 const FUNCTIONS = [
   {
     name: 'pre-token-generation',
@@ -31,6 +31,13 @@ const FUNCTIONS = [
     // adapter and re-exports the handler, keeping the AWS SDK out of the
     // shared module graph that the browser also loads.
     entry: 'infra/terraform/auth/lambda-entry.ts',
+  },
+  {
+    name: 'board-api',
+    // The board's two data views over HTTP. Same split as above: the entry
+    // registers the DynamoDB adapter; the handler it wraps is shared with
+    // the browser and must never import the SDK itself.
+    entry: 'infra/terraform/auth/api-entry.ts',
   },
 ];
 

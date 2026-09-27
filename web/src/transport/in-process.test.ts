@@ -60,6 +60,22 @@ test('a Dallas operator asking for Phoenix gets nothing', async () => {
   assert.equal(board.devices.length, 0);
 });
 
+test('scope bounds ALARMS and INCIDENTS too, not only devices', async () => {
+  // Austin and Denver each have a held-back alarm in the scenarios; Phoenix
+  // has none, which is why the test above could not have caught this. Alarms
+  // used to be filtered by the requested SITE only - so a Dallas operator
+  // asking for Austin, or for no site at all, received Austin's. Harmless
+  // while the whole backend ran in the tab; over the API it is another
+  // site's incidents in someone's response.
+  await signInAs(OPERATOR);
+  const austin = await inProcessTransport.loadBoard('aus-01');
+  assert.deepEqual([austin.alarms.length, austin.incidents.length, austin.heldBack.length], [0, 0, 0]);
+
+  const unfiltered = await inProcessTransport.loadBoard();
+  const sites = new Set([...unfiltered.alarms, ...unfiltered.incidents, ...unfiltered.heldBack].map((x) => x.siteId));
+  assert.deepEqual([...sites], ['dal-01'], 'only the site the token grants');
+});
+
 test('the lead view is tenant-wide because of the ROLE, not a missing filter', async () => {
   await signInAs(LEAD);
   const board = await inProcessTransport.loadBoard();
@@ -132,6 +148,22 @@ test('the live channel delivers only this site, and only alarms', async () => {
   stop();
 
   assert.ok(received.every((s) => s === 'dal-01'));
+});
+
+test('a live alarm is one the board already knows - the same id, not a stranger', async () => {
+  // The board merges its snapshot with the live feed BY alarmId, and pages
+  // are looked up by it. Each replay used to continue the uuid stream, so the
+  // feed minted fresh ids for the same alarms and none of them matched.
+  await signInAs(OPERATOR);
+  const board = await inProcessTransport.loadBoard('dal-01');
+  const live: string[] = [];
+  const stop = inProcessTransport.subscribeAlarms('dal-01', (a) => live.push(a.alarmId));
+  await new Promise((r) => setTimeout(r, 2600));
+  stop();
+
+  assert.ok(live.length > 0, 'the feed delivered something to compare');
+  const known = new Set(board.alarms.map((a) => a.alarmId));
+  assert.ok(live.every((id) => known.has(id)));
 });
 
 test('a board loaded twice is identical', async () => {

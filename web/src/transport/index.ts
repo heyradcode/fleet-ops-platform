@@ -32,14 +32,13 @@ import type { PhoneInventory } from '../../../src/integrations/comms/kurmi.ts';
 import type { Brief } from '../../../src/reporting/daily-brief.ts';
 import type { CommsAnomaly } from '../../../src/integrations/comms/anomalies.ts';
 
-export type BoardSnapshot = {
-  devices: DeviceState[];
-  sites: Site[];
-  alarms: Alarm[];
-  incidents: Incident[];
-  /** Alarms that fired but were not corroborated, so nobody was paged. */
-  heldBack: Alarm[];
-};
+/**
+ * The two views that read real data. Defined beside the handler that serves
+ * them over HTTP (src/api/board-api.ts), so the API and every transport share
+ * one contract rather than two copies of it.
+ */
+export type { BoardSnapshot, CommsSnapshot } from '../../../src/api/board-api.ts';
+import type { BoardSnapshot, CommsSnapshot } from '../../../src/api/board-api.ts';
 
 /**
  * One frame of the recorded half-hour.
@@ -58,30 +57,6 @@ export type HealthTick = {
   status: Map<string, DeviceStatus>;
   /** The device the cascade starts at, for the board to label. */
   rootCauseDeviceId: string;
-};
-
-/**
- * The voice and contact-centre view: Teams, Genesys, Webex.
- *
- * Counts, never a roster - the same boundary the store keeps. A board that
- * listed named people by building would be a directory of where everyone
- * sits, which is not something an operations screen needs to be.
- */
-export type CommsSnapshot = {
-  workforce: WorkforceSummary;
-  incidents: CommsIncident[];
-  /** Raised but not corroborated, with the reason. Shown dimmed, as on the network side. */
-  heldBack: CommsAlarm[];
-  /** Is every feed answering, and is what it says usable. */
-  health?: IntegrationHealth;
-  /** Recently resolved, newest first. Shown dimmed below the open ones. */
-  resolved: CommsIncident[];
-  /** Cisco desk phones from Kurmi - devices, shown beside the workforce, never in it. */
-  phones?: PhoneInventory;
-  /** The executive daily brief, built from exactly what this snapshot shows. */
-  brief: Brief;
-  /** Unusual for the subject and hour of week. Early warnings and context - never alarms. */
-  anomalies: CommsAnomaly[];
 };
 
 export type Transport = {
@@ -108,7 +83,9 @@ export type Transport = {
    * which is what turns "a Dallas operator cannot see Phoenix" from a claim
    * into something you demonstrate by signing in as one.
    */
-  setSession(principal: Principal | null): void;
+  // The access token is for transports that send it: the in-process one
+  // ignores it, and the API one sends nothing else.
+  setSession(principal: Principal | null, accessToken?: string | null): void;
 
   /** The board's first load, scoped to the caller's site. */
   loadBoard(siteId?: string): Promise<BoardSnapshot>;

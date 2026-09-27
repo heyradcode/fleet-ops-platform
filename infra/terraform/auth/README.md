@@ -6,9 +6,12 @@ the token — so the board's scope stops being a demonstration and becomes a
 fact about a signed credential — and the platform's DynamoDB table, which
 `pnpm seed:aws` fills from the same code the offline board runs.
 
-The board itself still runs in the browser tab until the API lands. That is
-the architecture working, not a shortcut: the transport boundary means
-identity can be real while the rest stays in-process.
+It also creates the board API - an HTTP API and one read-only Lambda
+serving `GET /board` and `GET /comms` from that table. With
+`VITE_BOARD_API_URL` set the board reads those two views from it; without,
+it computes them in the tab, which is the offline default. Either way the
+answer is the same, because both call the same functions
+(`src/api/board-api.ts`).
 
 ## What it costs
 
@@ -229,6 +232,34 @@ To look at what it wrote: the console's *Explore table items*, or
 ```bash
 aws dynamodb query --table-name netpulse-demo-main   --key-condition-expression 'PK = :p' --expression-attribute-values '{":p":{"S":"TENANT#hhs-demo#COMMSINC"}}'
 ```
+
+### Pointing the board at the API
+
+`terraform output vercel_env` now prints four variables; the fourth is
+`VITE_BOARD_API_URL`. Locally, the same one-liner as above writes all four
+into `web/.env.cognito.local`; then `pnpm web:cognito`.
+
+It needs Cognito sign-in as well: the API accepts only an access token from
+the pool, and the offline issuer's tokens are signed with a demo key it has
+never seen - so with the URL set but not Cognito, the board says so in the
+console and stays in the tab.
+
+What moves to the API is what reads DATA: the network view and the comms
+view. The health replay, the live alarm feed and the assistant stay in the
+tab - the first two play back recorded scenarios, and the assistant runs on
+the offline Bedrock stand-in, so a Lambda would add a deploy without making
+it any more real.
+
+A quick check once applied - no token is a 401 from the gateway itself,
+without invoking the Lambda:
+
+```bash
+curl -i "$(terraform output -json vercel_env | node -pe 'JSON.parse(require("fs").readFileSync(0)).VITE_BOARD_API_URL')/board"
+```
+
+Cost: $1.00 per million requests, and Lambda at 512 MB inside the free tier
+at any volume a few people generate. The stage throttle (10/s, bursts of 20)
+is the ceiling.
 
 ## Tearing it down
 

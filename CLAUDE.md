@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 262 tests, no network. Picks up web/ tests too.
+pnpm test                       # 274 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180
 pnpm web:build                  # typechecks web/ AND builds it
@@ -244,6 +244,21 @@ one, change the test deliberately rather than making it pass.
   rebuilt each poll. Comms reads need TENANT scope until an agency/facility
   scope exists - a site is not a facility. The comms agent tools are offered
   per tenant via `toolSpecsFor`; `TOOL_SPECS` stays the network set.
+- **The board's data views have ONE implementation.** `boardSnapshot` and
+  `commsSnapshot` in `src/api/board-api.ts` are what the in-process
+  transport calls in the tab AND what the board API serves from Lambda;
+  `web/src/transport/select.ts` picks the transport. Scope bounds ALARMS
+  and INCIDENTS as well as devices - they used to be filtered by the
+  requested site only, so a Dallas operator asking for Austin got Austin's
+  alarm, invisible offline (Phoenix has none) and a leak over HTTP. The API
+  re-verifies the token with all seven checks: the gateway's JWT authorizer
+  does not check `token_use` or the tenant claim.
+- **What the rules decided is a pure function of the TENANT.**
+  `tenantScenarios` reseeds before replaying: alarm and incident ids come
+  from the seeded uuid stream, and each replay used to continue it, so the
+  board and its live feed - merged BY alarmId - gave one alarm two ids. A
+  warm Lambda reseeds per request for the same reason; that is safe only
+  because a container handles one request at a time.
 - **Scope comes from the token, not the request.** Repository and resolver
   functions take a `Principal` and derive keys from it. An operator with no site
   claim gets *device* scope, not the whole estate — widening access is a
@@ -449,7 +464,10 @@ src/reporting/   the executive daily brief - every source, one page
 src/aws/         local stand-ins for 6 AWS services; dynamodb.sdk.ts is the
                  REAL table adapter (Node only - paging, batch retries)
 src/data/        estate generator, scenarios, health trace, runbooks, schema.sql
-web/src/transport/  the boundary that lets the backend run in the browser
+web/src/transport/  the boundary that lets the backend run in the browser;
+                 api.ts reads the two data views over HTTP, select.ts picks
+src/api/board-api.ts  GET /board and GET /comms - the one implementation of
+                 both views, served from Lambda (infra/terraform/auth/api.tf)
 web/src/auth/    sign-in: the same Cognito logic the Lambdas run, local issuer
 src/platform/membership.ts  which customer an email domain belongs to; a
                  registry, so the browser never loads the DynamoDB client

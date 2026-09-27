@@ -17,5 +17,5 @@
   // and a file nothing typechecks is a file that breaks in CloudWatch.
   // scripts/*.ts are Node entry points (the mock-vendor server), so they are
   // typechecked here but sit outside src/ and its no-`node:` rule.
-  "include": ["src/**/*.ts", "scripts/**/*.ts", "infra/terraform/auth/lambda-entry.ts"]
+  "include": ["src/**/*.ts", "scripts/**/*.ts", "infra/terraform/auth/lambda-entry.ts", "infra/terraform/auth/api-entry.ts"]
 }

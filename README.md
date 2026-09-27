@@ -306,7 +306,7 @@ pnpm start --only=ai               # graphql | rest | geo | ai
 pnpm start --only=comms            # comms | solarwinds | brief
 pnpm dev                           # the same, restarting on every save
 
-pnpm test                          # 262 tests, no network
+pnpm test                          # 274 tests, no network
 pnpm typecheck
 pnpm mock                          # the vendor mocks on localhost, for curl
 

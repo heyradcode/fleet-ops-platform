@@ -12,6 +12,10 @@ output "vercel_env" {
     VITE_COGNITO_DOMAIN    = module.cognito.hosted_ui_domain
     VITE_COGNITO_CLIENT_ID = module.cognito.client_id
     VITE_COGNITO_ISSUER    = module.cognito.issuer
+    # Set, and the board reads its network and comms views from the API
+    # instead of computing them in the tab. Needs the three above: the API
+    # only accepts a real pool's access token.
+    VITE_BOARD_API_URL = aws_apigatewayv2_api.board.api_endpoint
   }
 }
 

@@ -16,7 +16,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { BasemapMode } from './SiteMap.tsx';
 import { DevicePanel } from './DevicePanel.tsx';
 import { CommsBoard } from './CommsBoard.tsx';
-import { inProcessTransport } from './transport/in-process.ts';
+import { transport } from './transport/select.ts';
 import { SignIn } from './SignIn.tsx';
 import { useRestoredSession } from './auth/useSession.ts';
 import { auth } from './auth/provider.ts';
@@ -71,6 +71,11 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
   const [tick, setTick] = useState<HealthTick | null>(null);
   const [basemap, setBasemap] = useState<BasemapMode | undefined>();
   const [basemapActual, setBasemapActual] = useState<BasemapMode>('canvas');
+  // In the tab a load cannot fail; over the API it can - an expired token, a
+  // network, a throttle. Say so where the estate would be, never a blank board.
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const failed = (what: string) => (err: unknown) =>
+    setLoadError(what + (err instanceof Error ? err.message : String(err)));
 
   // The comms view exists only when the token admits it; `null` from the
   // transport means "not yours", and the switch is then never rendered - the
@@ -79,7 +84,11 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
   const [view, setView] = useState<'network' | 'comms'>('network');
   useEffect(() => {
     let stale = false;
-    inProcessTransport.loadComms().then((snapshot) => { if (!stale) setComms(snapshot); });
+    // A failure is reported, not turned into `null`: null means "not yours",
+    // and a comms tab that silently vanished would say that about an outage.
+    transport.loadComms()
+      .then((snapshot) => { if (!stale) setComms(snapshot); })
+      .catch((err: unknown) => { if (!stale) failed('Comms view: ')(err); });
     return () => { stale = true; };
   }, []);
   const showComms = view === 'comms' && comms !== null;
@@ -89,21 +98,21 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
     let stale = false;
     setLive([]);
     setTick(null);
-    inProcessTransport.loadBoard(siteId).then((snapshot) => {
-      if (!stale) setBoard(snapshot);
-    });
+    transport.loadBoard(siteId)
+      .then((snapshot) => { if (!stale) { setBoard(snapshot); setLoadError(null); } })
+      .catch((err: unknown) => { if (!stale) failed('')(err); });
     return () => { stale = true; };
   }, [siteId]);
 
   // --- Health: polled cadence, replayed from the recording ------------------
   useEffect(
-    () => inProcessTransport.subscribeHealth(siteId, setTick),
+    () => transport.subscribeHealth(siteId, setTick),
     [siteId],
   );
 
   // --- Alarms: the push channel. Only these are pushed, never observations.
   useEffect(() => {
-    return inProcessTransport.subscribeAlarms(siteId, (alarm) => {
+    return transport.subscribeAlarms(siteId, (alarm) => {
       setLive((prev) => (prev.some((a) => a.alarmId === alarm.alarmId)
         ? prev
         : [alarm, ...prev].slice(0, 40)));
@@ -301,7 +310,8 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
             {devices.length === 0 && board && (
               <p className="empty">No devices in scope at this site.</p>
             )}
-            {!board && <p className="empty">Loading the estate…</p>}
+            {loadError && <p className="empty load-error" role="alert">{loadError}</p>}
+            {!board && !loadError && <p className="empty">Loading the estate…</p>}
           </div>
         </aside>
 

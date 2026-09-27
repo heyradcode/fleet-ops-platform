@@ -19,7 +19,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { auth, usingCognito } from './provider.ts';
 import { completeRedirect } from './cognito.ts';
-import { inProcessTransport } from '../transport/in-process.ts';
+import { transport } from '../transport/select.ts';
 import type { Session } from './index.ts';
 
 type Restored = [
@@ -35,7 +35,7 @@ export function useRestoredSession(): Restored {
 
   // Transport first, React second. Never the other way round - see above.
   const setSession = useCallback((s: Session | null) => {
-    inProcessTransport.setSession(s?.principal ?? null);
+    transport.setSession(s?.principal ?? null, s?.token ?? null);
     setState(s);
   }, []);
 

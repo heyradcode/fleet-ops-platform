@@ -22,7 +22,7 @@
  * a network incident goes badly.
  */
 import { useEffect, useRef, useState } from 'react';
-import { inProcessTransport } from './transport/in-process.ts';
+import { transport } from './transport/select.ts';
 import { formatPercent, loadLevel, roleLabel, witness } from './format.ts';
 import type { AgentResult, AgentTrace, Alarm, DeviceState } from './transport/index.ts';
 
@@ -66,7 +66,7 @@ export function DevicePanel({
     setAsking(true);
     setError(null);
     try {
-      setResult(await inProcessTransport.askAgent(question));
+      setResult(await transport.askAgent(question));
     } catch (e) {
       // Errors state what happened and what to do, in the interface's voice.
       setError(e instanceof Error ? e.message : 'The assistant did not respond.');

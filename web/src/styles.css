@@ -1507,3 +1507,6 @@ button.topo-node:hover { border-color: var(--amber); }
   .comms-body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
   .comms-body .roster { max-height: 45vh; }
 }
+
+/* A load that failed over the API. Amber: it needs someone's attention. */
+.load-error { color: var(--amber); }
