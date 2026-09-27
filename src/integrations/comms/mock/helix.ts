@@ -50,6 +50,12 @@ export const HELIX_PLANTED = {
   houstonChange: 'CRQ000000104521',
   sbcChange: 'CRQ000000104530',
   houstonTicket: 'INC000000231876',
+  /** On the distribution switch SolarWinds sees die. */
+  deviceChange: 'CRQ000000104555',
+  /** On the core it hangs off - one hop up, earlier. */
+  upstreamChange: 'CRQ000000104560',
+  /** On its SIBLING - shares a parent, not a cause. Must never be listed. */
+  siblingChange: 'CRQ000000104470',
 } as const;
 
 const MIN = 60_000;
@@ -93,6 +99,14 @@ function changes(anchor: number): Values[] {
       'SBC1-TEAMS-DR', anchor - 6 * HOUR, anchor - 6 * HOUR + 10 * MIN, 'Completed', 'Unified Communications'),
     c('CRQ000000104540', 'El Paso WAN circuit upgrade', 'El Paso Field Office',
       'elp-wan-edge-01', anchor + 20 * HOUR, anchor + 22 * HOUR, 'Scheduled', 'Network Operations'),
+    // Network changes, with CI names that are HOSTNAMES - the CMDB's usual
+    // convention - so they join to the estate through the device aliases.
+    c(HELIX_PLANTED.deviceChange, 'IOS-XE upgrade - dis-dal01-04', 'Dallas Regional Office',
+      'dis-dal01-04', anchor - 38 * MIN, anchor - 22 * MIN, 'Completed', 'Network Operations'),
+    c(HELIX_PLANTED.upstreamChange, 'Routing policy update - core', 'Dallas Regional Office',
+      'cor-dal01-01', anchor - 100 * MIN, anchor - 90 * MIN, 'Completed', 'Network Operations'),
+    c(HELIX_PLANTED.siblingChange, 'QoS template refresh - dis-dal01-03', 'Dallas Regional Office',
+      'dis-dal01-03', anchor - 50 * MIN, anchor - 45 * MIN, 'Completed', 'Network Operations'),
   ];
 }
 

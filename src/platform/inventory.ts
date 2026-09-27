@@ -217,6 +217,23 @@ export class Inventory {
   }
 
   /**
+   * Look an alias up WITHOUT recording a miss.
+   *
+   * For callers that are not reporting on the estate but asking a question
+   * across a much bigger namespace - a CMDB's CI names, which include every
+   * printer, server and UPS in the organisation. Through resolveDevice each of
+   * those would count as "inventory drift", and the drift number would then
+   * measure the CMDB rather than the estate. Connectors reading a feed that
+   * SHOULD resolve keep using resolveDevice / resolveDeviceAny.
+   */
+  peekDevice(alias: string): DeviceId | undefined {
+    if (!alias) return undefined;
+    const key = alias.trim().toLowerCase();
+    if (this.ambiguousAliases.includes(key)) return undefined;
+    return this.#byAlias.get(key);
+  }
+
+  /**
    * Drain the aliases that failed to resolve since the last call.
    *
    * Draining rather than reading, so a long-running Lambda reports each miss

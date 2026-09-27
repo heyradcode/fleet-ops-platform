@@ -72,6 +72,8 @@ import { syncEntraDirectory } from './integrations/comms/entra-directory.ts';
 import { describeChange } from './integrations/comms/helix-context.ts';
 import { mutateEntraUser, injectFault, clearFaults, setPlanted } from './integrations/comms/mock/index.ts';
 import { describeSource } from './integrations/comms/health.ts';
+import { setHelixClientFactory } from './integrations/comms/helix.ts';
+import { toolSpecsFor } from './ai/tools.ts';
 import { commsToolsFor } from './ai/comms-tools.ts';
 import { commsConfigFor, HHS_DEMO_TENANT } from './integrations/comms/config.ts';
 import { COMMS_SOURCES } from './integrations/comms/types.ts';
@@ -1026,6 +1028,28 @@ async function sectionSolarwinds() {
     write('   ' + '\x1b[31mINCIDENT\x1b[0m  ' + i.title + '  ' + dim('root cause ' + i.rootCauseDeviceId) + '\n');
   }
   write('   ' + dim('the core link-down is recorded but not promoted alone - one box, one plane, no second witness') + '\n');
+
+  // --- The Incident Agent: topology + Helix changes ---------------------------
+  note('');
+  note('The Incident Agent - topology from SolarWinds, changes from Helix:');
+  const helixClient = createCommsClient({
+    tenantId: 'hhs-demo', fetch: mockFetch,
+    credentials: { helix: { ...DEMO_HELIX_USER } },
+  });
+  // The registry production fills with a real client; the demo, the mock.
+  setHelixClientFactory((t) => (t === 'hhs-demo' ? helixClient : undefined));
+  const incidentTools = [
+    ...TOOL_SPECS.filter((t) => t.name === 'traceTopology'),
+    ...toolSpecsFor(hhs, { readOnly: true }).filter((t) => t.name === 'recentChanges'),
+  ];
+  const why = await runAgent({
+    question: 'Why is dev-dis-dal01-04 unreachable - did anything change?',
+    principal: hhs, tools: incidentTools,
+  });
+  for (const step of why.trace.filter((t) => t.kind === 'tool')) write('   ' + dim('tool     ' + step.detail) + '\n');
+  const evidence = why.evidence.find((e) => e.includes('Checked Helix')) ?? '';
+  for (const line of evidence.split('\n').filter((l) => l.includes('CRQ'))) write('   ' + line.trim() + '\n');
+  write('   ' + dim('the sibling dis-dal01-03 changed more recently than the core, and is not listed - a shared parent is not a shared cause') + '\n');
 }
 
 // ===========================================================================

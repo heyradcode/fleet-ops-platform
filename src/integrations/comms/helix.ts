@@ -96,6 +96,26 @@ async function fetchEntries(
   return result.records as Array<Record<string, string | null>>;
 }
 
+// ---------------------------------------------------------------------------
+// The client registry - same shape as the Splunk search transport
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a caller that is NOT the comms poll - the agent's `recentChanges`
+ * tool - gets a Helix client for a tenant. A registry, not an import, for the
+ * reason every platform boundary here is one: production wires a real client
+ * with credentials from Secrets Manager, the demo, board and tests wire the
+ * mock, and nothing in between knows which.
+ *
+ * Unset means "Helix is not configured", and callers must SAY so. An empty
+ * list of changes and "we could not ask" are different answers.
+ */
+export type HelixClientFactory = (tenantId: string) => CommsClient | undefined;
+let clientFactory: HelixClientFactory = () => undefined;
+export function setHelixClientFactory(f: HelixClientFactory): void { clientFactory = f; }
+export function resetHelixClientFactory(): void { clientFactory = () => undefined; }
+export function helixClientFor(tenantId: string): CommsClient | undefined { return clientFactory(tenantId); }
+
 /** Changes that STARTED since `since`. Scheduled-but-not-started ones have no actual start and are excluded. */
 export async function pullRecentChanges(client: CommsClient, since: number): Promise<HelixChange[]> {
   const rows = await fetchEntries(client, 'CHG:Infrastructure Change',

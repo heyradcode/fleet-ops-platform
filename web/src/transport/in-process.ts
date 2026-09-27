@@ -37,6 +37,7 @@ import {
   commsAlarms, commsIncidents, commsPhones, commsResolvedIncidents, commsVisibleTo, commsWorkforce,
 } from '../../../src/integrations/comms/store.ts';
 import { loadHealth } from '../../../src/integrations/comms/health.ts';
+import { setHelixClientFactory } from '../../../src/integrations/comms/helix.ts';
 import { knowledgeBase } from '../../../src/ai/knowledge-base.ts';
 import { putObservations, putDeviceStates } from '../../../src/platform/repository.ts';
 import { loadRunbooksFromBundle } from './runbooks.browser.ts';
@@ -190,6 +191,22 @@ function prepareAgent(): Promise<void> {
  * agent's tools read, so the board and the assistant cannot disagree.
  */
 const commsPolled = new Map<string, Promise<void>>();
+
+/**
+ * The agent's Helix lookups (recentChanges) go through a registry; the board
+ * fills it with the mock, per tenant that runs Helix. Created lazily - no
+ * client exists until a Helix tenant actually asks.
+ */
+const helixClients = new Map<string, ReturnType<typeof createCommsClient>>();
+setHelixClientFactory((tenantId) => {
+  if (!commsConfigFor(tenantId)?.helix) return undefined;
+  let c = helixClients.get(tenantId);
+  if (!c) {
+    c = createCommsClient({ tenantId, fetch: mockFetch, credentials: { helix: { ...DEMO_HELIX_USER } } });
+    helixClients.set(tenantId, c);
+  }
+  return c;
+});
 
 function ensureCommsPolled(principal: Principal): Promise<void> {
   let done = commsPolled.get(principal.tenantId);

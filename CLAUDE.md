@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 231 tests, no network. Picks up web/ tests too.
+pnpm test                       # 236 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180
 pnpm web:build                  # typechecks web/ AND builds it
@@ -204,6 +204,15 @@ one, change the test deliberately rather than making it pass.
   3am produces no signal at all, which is exactly why "no alarm" is not
   "recovered". Back within 30 minutes reopens the same incident (flap count),
   it does not open a new one.
+- **Changes are looked up UP the uplink chain, never sideways.** The agent's
+  `recentChanges` tool (`ai/itsm-tools.ts`) checks Helix for the device, then
+  each hop above it: a change on the core can kill a distribution switch; a
+  change on its SIBLING shares a parent, not a cause, and is never listed.
+  Helix CI names join through the device aliases via `inventory.peekDevice`,
+  which does NOT record a miss - a CMDB is full of printers and servers, and
+  counting them would make inventory drift measure the CMDB. The Helix client
+  comes from a registry (`setHelixClientFactory`), like the Splunk transport;
+  unset means "not configured", said as such.
 - **The workforce roster is never persisted.** The join links named people
   to agencies and buildings; the store keeps counts only, and the roster is
   rebuilt each poll. Comms reads need TENANT scope until an agency/facility
