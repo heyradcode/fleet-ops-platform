@@ -89,7 +89,7 @@ export function createApiTransport(base: string | undefined, fetchImpl: typeof f
 
     subscribeHealth: (siteId, onTick) => inProcessTransport.subscribeHealth(siteId, onTick),
     subscribeAlarms: (siteId, onAlarm) => inProcessTransport.subscribeAlarms(siteId, onAlarm),
-    askAgent: (question) => inProcessTransport.askAgent(question),
+    askAgent: (question, onStep) => inProcessTransport.askAgent(question, onStep),
   };
 }
 

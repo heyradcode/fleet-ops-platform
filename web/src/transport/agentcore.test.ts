@@ -129,3 +129,53 @@ test('newConversation sends the flag ONCE, then questions carry on as normal', a
   await asker.ask('third');
   assert.deepEqual(bodies.map((b) => JSON.parse(b).newConversation ?? false), [false, true, false]);
 });
+
+// ---------------------------------------------------------------------------
+// Streaming: the real serveInvocation, cut into awkward network chunks
+// ---------------------------------------------------------------------------
+
+import { serveInvocation } from '../../../src/ai/agent-http.ts';
+
+/** AgentCore forwarding the agent's response - in 7-byte pieces, so events split mid-way. */
+const streamingAgentCore: typeof fetch = async (_input, init) => {
+  const headers = init?.headers as Record<string, string>;
+  const token = headers.authorization?.replace(/^Bearer /, '') ?? '';
+  if (!issued.has(token)) return new Response('{}', { status: 401 });
+  let status = 0; let contentType = ''; let text = '';
+  await serveInvocation({ authorization: headers.authorization, body: String(init?.body) }, {
+    verify: async (t) => issued.get(t)!,
+  }, {
+    writeHead(s, h) { status = s; contentType = h['Content-Type']; },
+    write(chunk) { text += chunk; },
+    end() {},
+  });
+  const bytes = new TextEncoder().encode(text);
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (let i = 0; i < bytes.length; i += 7) controller.enqueue(bytes.slice(i, i + 7));
+      controller.close();
+    },
+  });
+  return new Response(body, { status, headers: { 'content-type': contentType } });
+};
+
+test('streamed: each step reaches the board as it happens, and the result matches them', async () => {
+  const s = await signIn('lead@netpulse.io');
+  const asker = createAgentCoreAsker(ARN, streamingAgentCore);
+  asker.setToken(s.token);
+  const live: number[] = [];
+  const result = await asker.ask('How do I fix a link down?', (step) => live.push(step.step));
+  assert.ok(live.length >= 3, 'several steps arrived before the answer');
+  assert.deepEqual(live, result.trace.map((t) => t.step));
+});
+
+test('a stream that ends without a result is an error, not an empty answer', async () => {
+  const s = await signIn('lead@netpulse.io');
+  const cut: typeof fetch = async () => new Response(
+    'data: {"type":"step","step":{"step":1,"kind":"guardrail","detail":"x","ms":0}}\n\n',
+    { status: 200, headers: { 'content-type': 'text/event-stream' } },
+  );
+  const asker = createAgentCoreAsker(ARN, cut);
+  asker.setToken(s.token);
+  await assert.rejects(asker.ask('q', () => {}), /stopped before it finished/);
+});

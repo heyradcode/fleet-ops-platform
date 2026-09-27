@@ -24,7 +24,7 @@ import { createSdkTableStore } from '../../../src/aws/dynamodb.sdk.ts';
 import { setModelInvoker } from '../../../src/aws/bedrock.ts';
 import { createClaudeInvoker } from '../../../src/aws/bedrock.sdk.ts';
 import { verifyTokenRs256 } from '../../../src/auth/cognito-jwt-verifier.ts';
-import { handleAgentInvocation } from '../../../src/ai/agent-invocation.ts';
+import { serveInvocation } from '../../../src/ai/agent-http.ts';
 import { env } from '../../../src/platform/env.ts';
 import { log } from '../../../src/platform/logger.ts';
 
@@ -82,15 +82,16 @@ const server = createServer((req, res) => {
   if (req.method === 'GET' && req.url === '/ping') return send(200, { status: 'Healthy' });
 
   if (req.method === 'POST' && req.url?.startsWith('/invocations')) {
+    // JSON or a stream of events - decided, and tested, in src/ai/agent-http.ts.
     readBody(req)
-      .then((body) => handleAgentInvocation({ authorization: req.headers.authorization, body }, {
+      .then((body) => serveInvocation({ authorization: req.headers.authorization, body }, {
         verify: (token) => verifyTokenRs256(token, { issuer, clientId }),
         model,
-      }))
-      .then((out) => send(out.status, out.body))
+      }, res))
       .catch((err: unknown) => {
+        // Only the body read can land here (too large, connection dropped).
         log.error('agent: request failed', { error: err instanceof Error ? err.message : String(err) });
-        send(400, { error: 'Bad request.' });
+        if (!res.headersSent) send(400, { error: 'Bad request.' }); else res.end();
       });
     return;
   }

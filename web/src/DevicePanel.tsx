@@ -46,6 +46,8 @@ export function DevicePanel({
   const [asking, setAsking] = useState(false);
   const [result, setResult] = useState<AgentResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The steps as they arrive, while the answer is still being worked out.
+  const [live, setLive] = useState<AgentTrace[]>([]);
   const traceEnd = useRef<HTMLDivElement>(null);
 
   // A new device is a new question. Carrying the previous answer over would be
@@ -66,8 +68,9 @@ export function DevicePanel({
   async function ask() {
     setAsking(true);
     setError(null);
+    setLive([]);
     try {
-      setResult(await transport.askAgent(question));
+      setResult(await transport.askAgent(question, (step) => setLive((prev) => [...prev, step])));
     } catch (e) {
       // Errors state what happened and what to do, in the interface's voice.
       setError(e instanceof Error ? e.message : 'The assistant did not respond.');
@@ -181,10 +184,15 @@ export function DevicePanel({
           )}
 
           {asking && (
-            <p className="panel-working">
-              <span className="pulse" aria-hidden="true" /> Working — retrieving runbooks,
-              querying observations.
-            </p>
+            <>
+              {live.length > 0 && (
+                <ol className="trace">{live.map((t) => <TraceStep key={t.step} step={t} />)}</ol>
+              )}
+              <p className="panel-working">
+                <span className="pulse" aria-hidden="true" /> Working — retrieving runbooks,
+                querying observations.
+              </p>
+            </>
           )}
 
           {error && (

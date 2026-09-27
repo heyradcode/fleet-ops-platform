@@ -91,6 +91,13 @@ export async function runAgent(opts: {
    * kept, and for whom, is the caller's business: see agent-invocation.ts.
    */
   history?: Array<{ question: string; answer: string }>;
+  /**
+   * Called with each step AS IT HAPPENS - the same entries that end up in
+   * `trace`. For streaming: the person watching sees the runbook lookup and
+   * the observation query while the model is still thinking, rather than a
+   * spinner and then everything at once.
+   */
+  onStep?: (step: AgentTrace) => void;
 }): Promise<AgentResult> {
   // The budget has to leave room for a FINAL ANSWER after the tools, so it is
   // one more than the number of tools the agent might reasonably chain. Set it
@@ -102,13 +109,14 @@ export async function runAgent(opts: {
   // tool count had outgrown.
   const maxIterations = opts.maxIterations ?? 8;
   const trace: AgentTrace[] = [];
+  const record = (entry: AgentTrace) => { trace.push(entry); opts.onStep?.(entry); };
   const evidence: string[] = [];
   let step = 0;
 
   // ---- Input guardrail ---------------------------------------------------
   const t0 = performance.now();
   const inputCheck = checkInput(opts.question);
-  trace.push({
+  record({
     step: ++step, kind: 'guardrail',
     detail: inputCheck.allowed ? 'input allowed (PII redacted)' : 'input BLOCKED: ' + inputCheck.reason,
     ms: Math.round(performance.now() - t0),
@@ -139,7 +147,7 @@ export async function runAgent(opts: {
     usage.inputTokens += response.usage.input_tokens;
     usage.outputTokens += response.usage.output_tokens;
 
-    trace.push({
+    record({
       step: ++step, kind: 'model',
       detail: 'stop_reason=' + response.stop_reason + ' blocks=' + response.content.length,
       ms: Math.round(performance.now() - modelStart),
@@ -173,7 +181,7 @@ export async function runAgent(opts: {
 
       // ---- Output guardrail ----
       const outCheck = checkOutput(answer, evidence);
-      trace.push({
+      record({
         step: ++step, kind: 'guardrail',
         detail: outCheck.allowed ? 'output allowed (grounded)' : 'output BLOCKED: ' + outCheck.reason,
         ms: 0,
@@ -201,7 +209,7 @@ export async function runAgent(opts: {
         const content = await executeTool(use.name, use.input, opts.principal, opts.tools);
         const isError = content.startsWith('ERROR:');
 
-        trace.push({
+        record({
           step: ++step, kind: 'tool',
           detail: use.name + '(' + JSON.stringify(use.input) + ')' + (isError ? ' -> error' : ''),
           ms: Math.round(performance.now() - toolStart),

@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 301 tests, no network. Picks up web/ tests too.
+pnpm test                       # 308 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180 - real Cognito sign-in
 pnpm web:env                    # write web/.env.cognito.local from the Terraform outputs
@@ -425,6 +425,11 @@ network. Nothing real belongs in this repo.
   byte-identical. The baseline backfill is resumable per WEEK
   (`BACKFILL#PROGRESS`, written after the week's writes) because it is not
   idempotent: a week folded twice narrows the spread.
+- **An AgentCore stream opens on the FIRST STEP, never before.**
+  `src/ai/agent-http.ts` streams trace steps as SSE when the BODY says
+  `"stream": true` (a header could be silently dropped - see below). A
+  request refused before any step keeps its real status as JSON; opening
+  the stream early would make every 401 a 200 with "401" inside it.
 - **AgentCore forwards NO header it was not told to.** Without
   `request_header_allowlist = ["Authorization"]` the agent never sees the
   token AgentCore just accepted, and answers 401. The agent logs "is

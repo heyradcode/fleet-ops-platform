@@ -34,7 +34,7 @@ export const transport: Transport = asker
         base.setSession(principal, accessToken);
         asker.setToken(accessToken ?? null);
       },
-      askAgent: (question) => asker.ask(question),
+      askAgent: (question, onStep) => asker.ask(question, onStep),
       newConversation: () => asker.newConversation(),
     }
   : base;

@@ -36,7 +36,7 @@ import { log } from '../platform/logger.ts';
 import { loadEstate } from '../geo/device-repository.ts';
 import { seedDemoWorld } from '../api/board-api.ts';
 import { knowledgeBase } from './knowledge-base.ts';
-import { runAgent, type AgentResult } from './agent-core.ts';
+import { runAgent, type AgentResult, type AgentTrace } from './agent-core.ts';
 import { toolSpecsFor } from './tools.ts';
 import { redactPii } from './guardrails.ts';
 
@@ -54,6 +54,8 @@ export type InvocationDeps = {
   verify: (token: string) => Promise<Principal>;
   /** Shown with the answer: "offline", or the Claude model id. */
   model?: string;
+  /** Each trace step as it happens - the entry point streams them as SSE. */
+  onStep?: (step: AgentTrace) => void;
 };
 
 /** A question longer than this is not a question an operator typed. */
@@ -129,6 +131,7 @@ export async function handleAgentInvocation(req: InvocationRequest, deps: Invoca
       principal,
       tools: toolSpecsFor(principal, { readOnly: true }),
       history,
+      onStep: deps.onStep,
     });
     result.servedBy = { host: 'agentcore', model: deps.model ?? 'offline', turn: history.length + 1 };
 

@@ -5,8 +5,9 @@ and guardrails — can run on **Amazon Bedrock AgentCore Runtime** instead of in
 the browser tab. This document explains what AgentCore is, how it works, how
 this repository uses it and why, how to deploy it, and what it costs.
 
-Status: **deployed** - runtime `netpulse_demo_agent`, `READY` (version 3),
-running the offline model. Every answer on the board ends with where it
+Status: **deployed** - runtime `netpulse_demo_agent`, `READY` (version 4),
+running the offline model. Answers **stream**: each step appears on the
+board as the agent takes it. Every answer on the board ends with where it
 came from - *via AgentCore (offline model) · turn 2* - and the assistant
 panels offer **New conversation** when the agent is remembering one. The authorizer is verified from outside: no token and a
 forged token are both refused with 401 before any microVM starts. One thing
@@ -245,6 +246,23 @@ the idle timeout. No database, no AgentCore Memory, no extra cost.
   board's *New conversation* button sends it on the next question, in the
   same session, so the warm microVM is kept.
 
+**Answers stream.** With `"stream": true` in the body, the agent answers
+`text/event-stream`: one event per trace step as it happens (guardrail,
+model turn, tool call), then the result. The board renders the steps live,
+so the person waiting watches the runbook lookup and the observation query
+instead of a spinner.
+- **A body flag, not an `Accept` header.** AgentCore forwards only
+  allowlisted headers, and a header that silently never arrived would turn
+  streaming off with no error.
+- **The stream opens on the first step, never before.** A request refused
+  before any step (a bad token, a malformed question) gets its real status as
+  JSON. A 200 stream whose content said "401" would hide the status from the
+  browser, from AgentCore's metrics and from anyone reading logs by status.
+- **This logic is tested.** It lives in `src/ai/agent-http.ts`, not in the
+  Node entry. The board's parser is tested against events split mid-way
+  across network chunks, and a stream that ends without a result is an error,
+  not an empty answer.
+
 **A separate Terraform root.** AgentCore's Terraform resources exist only in
 AWS provider 6.x, while `infra/terraform/auth` runs on 5.x with a live
 deployment behind it. A major provider upgrade shouldn't ride in on a new
@@ -426,8 +444,6 @@ The other AgentCore services map onto real gaps in this platform:
 - **Observability:** ADOT auto-instrumentation gives per-step traces in
   CloudWatch. The bundle is CommonJS partly to keep that option open, because
   ADOT only patches `require()`.
-- **Streaming:** `/invocations` can answer with SSE, so the board could show
-  each tool call as it happens instead of waiting for the whole trace.
 
 ## Sources
 

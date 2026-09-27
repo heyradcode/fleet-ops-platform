@@ -198,7 +198,7 @@ export const inProcessTransport: Transport = {
     return boardSnapshot(caller(), siteId);
   },
 
-  async askAgent(question) {
+  async askAgent(question, onStep) {
     ensureSeeded();
     await prepareAgent();
 
@@ -211,6 +211,7 @@ export const inProcessTransport: Transport = {
       // Per caller: a comms tenant's assistant also gets the comms tools.
       // For every network-only tenant this is exactly TOOL_SPECS, as before.
       tools: toolSpecsFor(caller(), { readOnly: false }),
+      onStep,
     });
     return { ...result, servedBy: { host: 'tab', model: 'offline', turn: 1 } };
   },

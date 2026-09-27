@@ -24,7 +24,7 @@
 import type {
   Alarm, DeviceState, DeviceStatus, Incident, Principal, Site,
 } from '../../../src/platform/types.ts';
-import type { AgentResult } from '../../../src/ai/agent-core.ts';
+import type { AgentResult, AgentTrace } from '../../../src/ai/agent-core.ts';
 import type { CommsAlarm, CommsIncident } from '../../../src/integrations/comms/incidents.ts';
 import type { WorkforceSummary } from '../../../src/integrations/comms/store.ts';
 import type { IntegrationHealth } from '../../../src/integrations/comms/health.ts';
@@ -116,7 +116,7 @@ export type Transport = {
    * An answer with no visible provenance is a thing to be sceptical of, and it
    * should be.
    */
-  askAgent(question: string): Promise<AgentResult>;
+  askAgent(question: string, onStep?: (step: AgentTrace) => void): Promise<AgentResult>;
 
   /**
    * Forget the assistant's conversation so the next question starts fresh.

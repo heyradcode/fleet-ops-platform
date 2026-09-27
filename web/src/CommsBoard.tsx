@@ -22,7 +22,7 @@ import { transport } from './transport/select.ts';
 import { agentSource } from './agentSource.ts';
 import { TraceStep } from './DevicePanel.tsx';
 import type {
-  AgentResult, Brief, CommsAlarm, CommsAnomaly, CommsIncident, IntegrationHealth, PhoneInventory, WorkforceSummary,
+  AgentResult, AgentTrace, Brief, CommsAlarm, CommsAnomaly, CommsIncident, IntegrationHealth, PhoneInventory, WorkforceSummary,
 } from './transport/index.ts';
 import type { CommsSnapshot } from './transport/index.ts';
 
@@ -431,12 +431,14 @@ function Assistant() {
   const [asking, setAsking] = useState(false);
   const [result, setResult] = useState<AgentResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [live, setLive] = useState<AgentTrace[]>([]);
 
   async function ask() {
     setAsking(true);
     setError(null);
+    setLive([]);
     try {
-      setResult(await transport.askAgent(question));
+      setResult(await transport.askAgent(question, (step) => setLive((prev) => [...prev, step])));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'The assistant did not respond.');
     } finally {
@@ -462,6 +464,9 @@ function Assistant() {
           </button>
         </form>
 
+        {asking && live.length > 0 && (
+          <ol className="trace">{live.map((t) => <TraceStep key={t.step} step={t} />)}</ol>
+        )}
         {asking && (
           <p className="panel-working">
             <span className="pulse" aria-hidden="true" /> Working — reading comms incidents and the workforce.

@@ -18,7 +18,8 @@
  * and random from the platform CSPRNG directly, not `uuid()`, which the demo
  * world deliberately seeds and would hand every tab the same session.
  */
-import type { AgentResult } from './index.ts';
+import type { AgentResult, AgentTrace } from './index.ts';
+import { parseSse } from './sse.ts';
 import { BoardApiError } from './api.ts';
 
 export function agentRuntimeArn(): string | undefined {
@@ -45,7 +46,8 @@ function newSessionId(): string {
 
 export type AgentCoreAsker = {
   setToken(token: string | null): void;
-  ask(question: string): Promise<AgentResult>;
+  /** With `onStep`, the answer STREAMS: each step arrives as the agent takes it. */
+  ask(question: string, onStep?: (step: AgentTrace) => void): Promise<AgentResult>;
   /** The next question starts a fresh conversation - same session, same warm microVM. */
   newConversation(): void;
   /** For tests and the trace: which microVM this tab is talking to. */
@@ -81,7 +83,7 @@ export function createAgentCoreAsker(
       token = next;
     },
 
-    async ask(question) {
+    async ask(question, onStep) {
       if (!token) throw new BoardApiError('No session. Sign in first.');
       const send = () => fetchImpl(url, {
         method: 'POST',
@@ -90,7 +92,7 @@ export function createAgentCoreAsker(
           'content-type': 'application/json',
           'x-amzn-bedrock-agentcore-runtime-session-id': sessionId,
         },
-        body: JSON.stringify(fresh ? { question, newConversation: true } : { question }),
+        body: JSON.stringify({ question, ...(fresh ? { newConversation: true } : {}), ...(onStep ? { stream: true } : {}) }),
         credentials: 'omit',
       });
       let res: Response;
@@ -106,8 +108,11 @@ export function createAgentCoreAsker(
         throw new BoardApiError('The assistant did not answer - check the network.');
       }
       if (res.ok) {
+        const result = (res.headers.get('content-type') ?? '').includes('text/event-stream') && res.body
+          ? await readStream(res.body, onStep)
+          : await res.json() as AgentResult;
         fresh = false;
-        return await res.json() as AgentResult;
+        return result;
       }
 
       // AgentCore names the failure in x-amzn-ErrorType; the agent's own
@@ -121,4 +126,35 @@ export function createAgentCoreAsker(
       throw new BoardApiError('The assistant failed (' + res.status + (kind ? ' ' + kind : '') + ').', res.status);
     },
   };
+}
+
+type StreamEvent =
+  | { type: 'step'; step: AgentTrace }
+  | { type: 'result'; result: AgentResult }
+  | { type: 'error'; status: number; error: string };
+
+/**
+ * Read the agent's event stream to its end: each step to `onStep` as it
+ * lands, the final result returned. A stream that ends without a result - the
+ * connection dropped, the microVM died - is an error, not an empty answer.
+ */
+async function readStream(body: ReadableStream<Uint8Array>, onStep?: (step: AgentTrace) => void): Promise<AgentResult> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let result: AgentResult | undefined;
+  for (;;) {
+    const { done, value } = await reader.read();
+    buffer += done ? decoder.decode() + '\n\n' : decoder.decode(value, { stream: true });
+    const parsed = parseSse(buffer);
+    buffer = parsed.rest;
+    for (const ev of parsed.events as StreamEvent[]) {
+      if (ev.type === 'step') onStep?.(ev.step);
+      else if (ev.type === 'result') result = ev.result;
+      else if (ev.type === 'error') throw new BoardApiError(ev.error || 'The assistant failed.', ev.status);
+    }
+    if (done) break;
+  }
+  if (!result) throw new BoardApiError('The assistant stopped before it finished answering. Try again.');
+  return result;
 }
