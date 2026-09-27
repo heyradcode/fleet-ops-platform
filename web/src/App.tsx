@@ -272,7 +272,9 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
         </div>
 
         <div className="whoami">
-          <span className="whoami-email mono">{session.principal.email}</span>
+          {/* A Cognito ACCESS token carries no email claim, and the trigger
+              deliberately adds none - so against a real pool this is the sub. */}
+          <span className="whoami-email mono">{session.principal.email ?? session.principal.sub}</span>
           <span className="whoami-scope">{describeScope(scope)}</span>
         </div>
         <button className="signout" onClick={onSignOut}>Sign out</button>

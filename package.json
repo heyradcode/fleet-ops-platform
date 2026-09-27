@@ -23,6 +23,7 @@
     "test:watch": "node --test --watch",
     "typecheck": "tsc --noEmit",
     "web": "pnpm --filter @netpulse/web dev",
+    "web:cognito": "pnpm --filter @netpulse/web dev:cognito",
     "web:build": "pnpm --filter @netpulse/web build",
     "mock": "node scripts/mock-vendors.ts",
     "verify": "pnpm typecheck && pnpm test && pnpm start && pnpm web:build",

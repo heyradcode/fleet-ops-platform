@@ -96,7 +96,7 @@ as `redirect_mismatch` at the hosted UI rather than as anything more helpful.
 **1. Check the pool answers.** `terraform output hosted_ui_url`, open it. You
 should get a Cognito login page. Nobody can sign in yet — there are no users.
 
-**2. Make a user.** Self-signup is off (`admin_create_user_config`): a operator does not sign
+**2. Make a user.** Self-signup is off (`admin_create_user_config`): an operator does not sign
 themselves up for a customer's estate.
 
 ```bash
@@ -130,6 +130,32 @@ VITE_COGNITO_ISSUER     https://cognito-idp.<region>.amazonaws.com/<poolId>
 With any of them missing the board keeps using the offline provider. That is
 the intended default, not a failure — the local issuer still mints and
 verifies tokens for the registered customer domains, with no password.
+
+**Locally,** put the same three in `web/.env.cognito.local` and run
+`pnpm web:cognito` (Vite's `--mode cognito`). The pool already allows
+`http://localhost:5180/callback`, which is why the dev port is pinned. The
+file NAME is load-bearing: Vite reads `.env.[mode].local`, and a
+`.env.local.cognito` is silently ignored — the board comes up on the offline
+issuer and nothing says why.
+
+```bash
+terraform output -json vercel_env   | node -e 'const o=JSON.parse(require("fs").readFileSync(0));for(const k in o)console.log(k+"="+o[k])'   > ../../../web/.env.cognito.local
+```
+
+For the voice and contact-centre view, the user must be at
+`hhs.texas.example` and that domain must be in the membership table. It is in
+`demo_customers`, so with `seed_demo_customers = true` a plain
+`terraform apply` writes it. `.example` is a reserved domain that can receive
+no mail, so create the user with a password rather than an invitation:
+
+```bash
+POOL="$(terraform output -raw user_pool_id)"
+aws cognito-idp admin-create-user --user-pool-id "$POOL"   --username ops-lead@hhs.texas.example --message-action SUPPRESS   --user-attributes Name=email,Value=ops-lead@hhs.texas.example Name=email_verified,Value=true
+aws cognito-idp admin-set-user-password --user-pool-id "$POOL"   --username ops-lead@hhs.texas.example --permanent --password '<choose one>'
+```
+
+The header then shows the user's `sub`, not an address: a Cognito ACCESS
+token has no `email` claim, and the trigger deliberately adds none.
 
 ### Onboarding a customer
 
