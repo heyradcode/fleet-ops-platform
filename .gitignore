@@ -39,3 +39,12 @@ accessKeys.csv
 # real belongs in this repository (CLAUDE.md, "Data"); the code uses these
 # files' STRUCTURE only. Kept on disk, never tracked.
 docs/nwn/
+
+# The AgentCore agent bundle and its zip, produced by `pnpm build:agent` and
+# zipped by Terraform.
+infra/terraform/agentcore/.build/
+
+# Local membership rows written by hand for `aws dynamodb put-item`. They name
+# a real email domain; they are per-account setup, not source.
+infra/terraform/auth/membership.json
+infra/terraform/auth/membership/

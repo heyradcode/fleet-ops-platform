@@ -113,13 +113,13 @@ jobs:
           # quietly bundle megabytes of it rather than fail. The SDK lives in
           # the two adapters, and the adapters are imported only by Node entry
           # points outside src/ (scripts/, infra/) and by tests.
-          SDK="^[[:space:]]*import .*from '(@aws-sdk/|.*\.sdk\.ts|.*/membership\.dynamodb\.ts)"
-          if grep -rnE "$SDK" src/ --include="*.ts" | grep -v '.test.ts' | grep -v 'aws/dynamodb.sdk.ts:' | grep -v 'platform/membership.dynamodb.ts:' | grep -q .; then
+          SDK="^[[:space:]]*import .*from '(@aws-sdk/|@anthropic-ai/|.*\.sdk\.ts|.*/membership\.dynamodb\.ts)"
+          if grep -rnE "$SDK" src/ --include="*.ts" | grep -v '.test.ts' | grep -v 'aws/dynamodb.sdk.ts:' | grep -v 'aws/bedrock.sdk.ts:' | grep -v 'platform/membership.dynamodb.ts:' | grep -q .; then
             echo "The AWS SDK, or an adapter that loads it, is imported by shared code:"
-            grep -rnE "$SDK" src/ --include="*.ts" | grep -v '.test.ts' | grep -v 'aws/dynamodb.sdk.ts:' | grep -v 'platform/membership.dynamodb.ts:'
+            grep -rnE "$SDK" src/ --include="*.ts" | grep -v '.test.ts' | grep -v 'aws/dynamodb.sdk.ts:' | grep -v 'aws/bedrock.sdk.ts:' | grep -v 'platform/membership.dynamodb.ts:'
             exit 1
           fi
-          echo "The AWS SDK stays in its two adapters."
+          echo "The AWS and Anthropic SDKs stay in their three adapters."
 
   # ---------------------------------------------------------------------------
   web:

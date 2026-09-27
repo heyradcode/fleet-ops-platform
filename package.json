@@ -29,9 +29,11 @@
     "seed:aws": "node scripts/seed-aws.ts",
     "check:promises": "node scripts/check-floating-promises.mjs",
     "verify": "pnpm typecheck && pnpm check:promises && pnpm test && pnpm start && pnpm web:build",
-    "build:lambda": "node scripts/build-lambda.mjs"
+    "build:lambda": "node scripts/build-lambda.mjs",
+    "build:agent": "node scripts/build-agent.mjs"
   },
   "devDependencies": {
+    "@anthropic-ai/bedrock-sdk": "^0.33.8",
     "@aws-sdk/client-dynamodb": "^3.1127.0",
     "@types/node": "^26.4.1",
     "esbuild": "0.25.12",

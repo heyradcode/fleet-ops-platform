@@ -51,7 +51,7 @@ export type AgentResult = {
   trace: AgentTrace[];
   /** Everything the tools returned, so the caller can render citations. */
   evidence: string[];
-  stoppedBecause: 'end_turn' | 'max_iterations' | 'guardrail';
+  stoppedBecause: 'end_turn' | 'max_iterations' | 'guardrail' | 'refusal' | 'max_tokens';
   usage: { modelCalls: number; inputTokens: number; outputTokens: number };
 };
 
@@ -130,6 +130,22 @@ export async function runAgent(opts: {
     // Dropping them breaks the tool_use_id linkage on the next request.
     messages.push({ role: 'assistant', content: response.content });
 
+    // A REAL model can stop for reasons the scripted one never does. A
+    // refusal may come back with no text at all, and returning that as the
+    // answer would show the engineer a blank panel - say what happened.
+    if (response.stop_reason === 'refusal') {
+      return {
+        answer: 'The model declined to answer this request. Rephrase it, or ask about a specific device or incident.',
+        trace, evidence, stoppedBecause: 'refusal', usage,
+      };
+    }
+    if (response.stop_reason === 'max_tokens') {
+      return {
+        answer: 'The answer was cut off at the output limit. Here is what the tools returned:\n' + evidence.join('\n---\n'),
+        trace, evidence, stoppedBecause: 'max_tokens', usage,
+      };
+    }
+
     if (response.stop_reason !== 'tool_use') {
       const answer = response.content
         .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
@@ -163,7 +179,7 @@ export async function runAgent(opts: {
     const results: ContentBlock[] = await Promise.all(
       toolUses.map(async (use) => {
         const toolStart = performance.now();
-        const content = await executeTool(use.name, use.input, opts.principal);
+        const content = await executeTool(use.name, use.input, opts.principal, opts.tools);
         const isError = content.startsWith('ERROR:');
 
         trace.push({
@@ -193,7 +209,12 @@ async function executeTool(
   name: string,
   input: Record<string, unknown>,
   principal: Principal,
+  offered: ToolSpec[],
 ): Promise<string> {
+  // Only what this run OFFERED. A model can name a tool it was never shown -
+  // a real one more readily than the scripted one - and a read-only run whose
+  // loop still dispatched openIncident would be read-only in the prompt only.
+  if (!offered.some((t) => t.name === name)) return 'ERROR: tool "' + name + '" is not available in this session.';
   const tool = toolByName(name);
   if (!tool) return 'ERROR: no such tool "' + name + '".';
 

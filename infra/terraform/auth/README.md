@@ -57,15 +57,27 @@ cd infra/terraform/auth   # deploy-policy.json is referenced relatively
 # Cognito. Grants cognito-idp:*, so it covers destroy as well as apply.
 aws iam attach-user-policy --user-name YOUR_USER --policy-arn arn:aws:iam::aws:policy/AmazonCognitoPowerUser
 
-# Budgets is account-scoped and no managed policy grants creating one.
-aws iam put-user-policy --user-name YOUR_USER --policy-name NetpulseBudgets --policy-document file://deploy-policy.json
+# Budgets, the two tables and the board API. A CUSTOMER-MANAGED policy, not
+# an inline one: a user's inline policies share 2,048 characters IN TOTAL, and
+# with anything else already inline this one fails with LimitExceeded.
+# Managed policies hold 6,144 each and do not count toward that.
+aws iam create-policy --policy-name NetpulseDeploy --policy-document file://deploy-policy.json
+aws iam attach-user-policy --user-name YOUR_USER --policy-arn arn:aws:iam::ACCOUNT_ID:policy/NetpulseDeploy
 ```
 
 `deploy-policy.json` also grants the two DynamoDB tables and the board API's
 HTTP API (`apigateway:*` verbs on `/apis`), which a developer group usually
-lacks. Re-running the same `put-user-policy` after pulling a newer copy
-replaces the old one - it is how the API permission arrives for an identity
-that applied an earlier version.
+lacks. After pulling a newer copy, publish it as a new version of the same
+policy - `create-policy` refuses a name that exists:
+
+```bash
+aws iam create-policy-version --policy-arn arn:aws:iam::ACCOUNT_ID:policy/NetpulseDeploy --policy-document file://deploy-policy.json --set-as-default
+```
+
+An identity set up by an older copy of this README has the same permissions
+as an INLINE policy called `NetpulseBudgets`; once `NetpulseDeploy` is
+attached it is redundant (`aws iam delete-user-policy`). `seed-policy.json`
+goes on the same way, as `NetpulseSeed`.
 
 `deploy-policy.json` sits beside this file; change the account id in it if you
 are deploying elsewhere. Attach both to the **user**, not to a shared group -

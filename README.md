@@ -181,6 +181,7 @@ You have limited time, so:
 | `src/integrations/comms/poll.ts` | The comms poll, stage by stage — each stage one file |
 | `src/integrations/comms/lifecycle.ts` | Why "no alarm" is not "recovered" |
 | `src/reporting/daily-brief.ts` | An executive summary with no number from a model |
+| `docs/11-agentcore.md` | The assistant on Amazon Bedrock AgentCore - Runtime, Identity, and why the browser calls it directly |
 
 One vertical slice, end to end:
 `integrations/controller/meraki.ts` → `pipeline/steps.ts` →
@@ -309,7 +310,7 @@ pnpm start --only=ai               # graphql | rest | geo | ai
 pnpm start --only=comms            # comms | solarwinds | brief
 pnpm dev                           # the same, restarting on every save
 
-pnpm test                          # 272 tests, no network
+pnpm test                          # 288 tests, no network
 pnpm typecheck
 pnpm mock                          # the vendor mocks on localhost, for curl
 

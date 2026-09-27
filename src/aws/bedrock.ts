@@ -52,15 +52,47 @@ export type ToolSpec = {
 export type ContentBlock =
   | { type: 'text'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
-  | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean };
+  | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean }
+  // A real Claude model thinks before it answers (adaptive thinking is on by
+  // default on current models). These blocks must go back to the model
+  // UNCHANGED on the next turn - agent-core appends the assistant turn
+  // verbatim for exactly that reason. The scripted model never emits them.
+  | { type: 'thinking'; thinking: string; signature: string }
+  | { type: 'redacted_thinking'; data: string };
 
 export type Message = { role: 'user' | 'assistant'; content: string | ContentBlock[] };
 
 export type ModelResponse = {
-  stop_reason: 'end_turn' | 'tool_use' | 'max_tokens';
+  // `refusal`: a safety classifier declined - the content may be empty, and
+  // the loop must say so rather than return a blank answer.
+  stop_reason: 'end_turn' | 'tool_use' | 'max_tokens' | 'refusal' | 'stop_sequence' | 'pause_turn';
   content: ContentBlock[];
   usage: { input_tokens: number; output_tokens: number };
 };
+
+export type ModelRequest = {
+  system: string;
+  messages: Message[];
+  tools?: ToolSpec[];
+  maxTokens?: number;
+};
+
+/**
+ * Which model answers. A REGISTRY, like the table store and the runbooks: the
+ * scripted model below by default - offline, deterministic, what the tests,
+ * the demo and the board run - and a real Claude model when a Node entry
+ * point registers one (`aws/bedrock.sdk.ts`, in the AgentCore runtime). The
+ * agent loop calls `invokeModel` and never learns which it got, which is the
+ * claim this file has always made; now it is a demonstrated one.
+ */
+export type ModelInvoker = (req: ModelRequest) => Promise<ModelResponse>;
+
+let invoker: ModelInvoker | undefined;
+
+export function setModelInvoker(next: ModelInvoker): void { invoker = next; }
+
+/** Back to the scripted model. For tests. */
+export function resetModelInvoker(): void { invoker = undefined; }
 
 /** Track spend the way you would in production: from `response.usage`. */
 export const usage = { calls: 0, inputTokens: 0, outputTokens: 0, embeddings: 0 };
@@ -125,12 +157,8 @@ const STOPWORDS = new Set([
  * `stop_reason` / `content` / `usage` outputs. That means ai/agent-core.ts is
  * written against the real contract and would run unchanged against Bedrock.
  */
-export async function invokeModel(req: {
-  system: string;
-  messages: Message[];
-  tools?: ToolSpec[];
-  maxTokens?: number;
-}): Promise<ModelResponse> {
+export async function invokeModel(req: ModelRequest): Promise<ModelResponse> {
+  if (invoker) return invoker(req);
   usage.calls++;
   const inputTokens = estimateTokens(req.system + JSON.stringify(req.messages));
   usage.inputTokens += inputTokens;

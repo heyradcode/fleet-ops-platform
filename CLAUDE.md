@@ -24,10 +24,11 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 272 tests, no network. Picks up web/ tests too.
+pnpm test                       # 288 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180 - real Cognito sign-in
 pnpm web:env                    # write web/.env.cognito.local from the Terraform outputs
+pnpm build:agent                # bundle the AgentCore agent (docs/11-agentcore.md)
 pnpm web:build                  # typechecks web/ AND builds it
 pnpm mock                       # mock Teams/Genesys/Webex APIs, http://127.0.0.1:5190
 pnpm check:promises             # no un-awaited or misused promise, backend and web/
@@ -87,7 +88,11 @@ Use union types, as the existing code does.
 **Imports carry `.ts` extensions.** Required by type-stripping. `web/` handles
 this via `allowImportingTsExtensions`.
 
-**Only `infra/terraform/auth/` is ever applied.** It creates a Cognito pool,
+**Only `infra/terraform/auth/` and `infra/terraform/agentcore/` are ever
+applied.** `agentcore/` is the assistant on Bedrock AgentCore Runtime - a
+SEPARATE root because it needs AWS provider 6.x and `auth/` is on 5.x with a
+live deployment; it reads `auth/`'s state and changes nothing there. `auth/`
+creates a Cognito pool,
 the token trigger, the membership table and the main on-demand DynamoDB
 table, and costs pennies. The main table is filled by `pnpm seed:aws`
 through `aws/dynamodb.sdk.ts` - the SDK adapter, imported only by Node entry
@@ -260,6 +265,17 @@ one, change the test deliberately rather than making it pass.
   board and its live feed - merged BY alarmId - gave one alarm two ids. A
   warm Lambda reseeds per request for the same reason; that is safe only
   because a container handles one request at a time.
+- **The model is a REGISTRY, and the deployed agent is READ-ONLY.**
+  `invokeModel` (`aws/bedrock.ts`) runs the scripted offline model unless a
+  Node entry registers Claude (`aws/bedrock.sdk.ts`, AnthropicBedrockMantle);
+  `agent_model = "offline"` is a valid deployment. The AgentCore agent is
+  offered `READ_ONLY_TOOL_SPECS` and the loop now REFUSES any tool it did
+  not offer - a real model can name one it was never shown. Its IAM role
+  can only GetItem/Query. The token is verified TWICE: AgentCore Identity
+  checks issuer, signature, expiry and client_id; `agent-invocation.ts`
+  re-runs all seven checks, because neither `token_use` nor the tenant claim
+  is AgentCore's to check. `allowedClients`, never `allowedAudience`: a
+  Cognito access token has no `aud`.
 - **Scope comes from the token, not the request.** Repository and resolver
   functions take a `Principal` and derive keys from it. An operator with no site
   claim gets *device* scope, not the whole estate — widening access is a
@@ -399,6 +415,18 @@ network. Nothing real belongs in this repo.
   vacuously once the store went async. `memoryTable` is for what only the
   fake has (size, stats, Scan); production code never touches it. Write first, delete last:
   a crash between a delete and its replacement put loses the record.
+- **AgentCore forwards NO header it was not told to.** Without
+  `request_header_allowlist = ["Authorization"]` the agent never sees the
+  token AgentCore just accepted, and answers 401. The agent logs "is
+  Authorization in request_header_allowlist?" when that happens.
+- **The agent bundle is CommonJS, SDKs INCLUDED, and says so.** AgentCore's
+  NODE_22 runtime ships no AWS SDK (Lambda's does), so `build-agent.mjs`
+  bundles them. Node picks a `.js` file's module type from the NEAREST
+  package.json: locally the repo root's `"type": "module"` made the bundle
+  die on its first `require()`, while in the zip it would have worked - so
+  the build writes `{"type":"commonjs"}` beside `agent.js` and ships it.
+  AgentCore session ids come from `crypto.getRandomValues`, never `uuid()`,
+  which the demo world seeds - every tab would ask for the same microVM.
 - **Cognito custom attributes are a one-way door.** They cannot be renamed or
   removed once the pool exists, and there is a cap of 50.
 - **Shared thresholds live in one place.** `UTILISATION_THRESHOLDS` in
@@ -468,6 +496,8 @@ src/aws/         local stand-ins for 6 AWS services; dynamodb.sdk.ts is the
 src/data/        estate generator, scenarios, health trace, runbooks, schema.sql
 web/src/transport/  the boundary that lets the backend run in the browser;
                  api.ts reads the two data views over HTTP, select.ts picks
+src/ai/agent-invocation.ts  one AgentCore invocation: token -> answer
+infra/terraform/agentcore/  the assistant on Bedrock AgentCore Runtime
 src/api/board-api.ts  GET /board and GET /comms - the one implementation of
                  both views, served from Lambda (infra/terraform/auth/api.tf)
 web/src/auth/    sign-in: the real pool only (provider.ts); local.ts is the

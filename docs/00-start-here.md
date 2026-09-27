@@ -73,3 +73,4 @@ you can trust what it claims.
 - `docs/08-terraform-cicd.md` — modules, environments, state, OIDC deploys
 - `docs/09-code-tour.md` — a walk through the code itself, file by file
 - `docs/10-voice-and-contact-centre.md` — the comms estate: seven sources, one set of rules
+- `docs/11-agentcore.md` — the assistant on Amazon Bedrock AgentCore: how it works and why
