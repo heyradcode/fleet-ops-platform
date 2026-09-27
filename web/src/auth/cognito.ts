@@ -20,6 +20,7 @@
  * whole mechanism.
  */
 import type { AuthProvider, Realm, Session, SignUpRequest } from './index.ts';
+import { onceBy } from './once.ts';
 import { AuthError } from './index.ts';
 import {
   verifyTokenRs256, TokenVerificationError, type PoolConfig,
@@ -179,7 +180,20 @@ export const cognitoAuth: AuthProvider = {
  * the pool's published JWKS before it becomes a session - the same seven
  * checks the board API's Lambda runs on every request.
  */
-export async function completeRedirect(searchParams: URLSearchParams): Promise<Session> {
+const exchanges = new Map<string, Promise<Session>>();
+
+/**
+ * The callback, exchanged ONCE per code however many times it is called - see
+ * auth/once.ts. The checks inside are unchanged and still single-use: a
+ * genuinely replayed code arrives in a new page load, with no cached
+ * exchange, and fails the state check as it should.
+ */
+export function completeRedirect(searchParams: URLSearchParams): Promise<Session> {
+  const key = (searchParams.get('code') ?? searchParams.get('error') ?? '') + '|' + (searchParams.get('state') ?? '');
+  return onceBy(exchanges, key, () => exchangeCode(searchParams));
+}
+
+async function exchangeCode(searchParams: URLSearchParams): Promise<Session> {
   const code = searchParams.get('code');
   const state = searchParams.get('state');
 

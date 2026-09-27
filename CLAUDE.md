@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 311 tests, no network. Picks up web/ tests too.
+pnpm test                       # 313 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180 - real Cognito sign-in
 pnpm web:env                    # write web/.env.cognito.local from the Terraform outputs
@@ -468,6 +468,13 @@ network. Nothing real belongs in this repo.
   which only esbuild reads - same shape as `runbook-loader.node.ts` and
   `aws/dynamodb.sdk.ts`. CI's portability step greps for `@aws-sdk` imports
   and the two adapters in shared code; it did not always.
+- **The sign-in callback runs TWICE in development.** `main.tsx` renders
+  under React `StrictMode`, which mounts effects twice on purpose. The first
+  run consumed the single-use PKCE state and signed the person in; the second
+  found it gone and flashed "Sign-in could not be verified" over a success.
+  `completeRedirect` exchanges each code ONCE (`auth/once.ts`) and hands any
+  later caller the same promise. Any effect that consumes something
+  single-use needs the same treatment.
 - **`crypto.randomUUID()` is secure-context only.** Undefined over plain http
   on a LAN address, which is how the board is reached behind a VPN that
   intercepts loopback. `platform/crypto.ts` falls back to `getRandomValues`.
