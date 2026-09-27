@@ -12,7 +12,7 @@ import { setClock, fixedClock, type ControllableClock } from '../../platform/clo
 import type { Principal } from '../../platform/types.ts';
 import { mainTable } from '../../aws/dynamodb.ts';
 import {
-  DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER, DEMO_KURMI_USER, DELTA_TOKEN_TTL_MS, directory, injectFault, mockFetch,
+  DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS, DELTA_TOKEN_TTL_MS, directory, injectFault, mockFetch,
   mutateEntraUser, removeEntraUser, resetMockState,
 } from './mock/index.ts';
 import { createCommsClient } from './client.ts';
@@ -42,6 +42,7 @@ const client = (tenantId: string) => createCommsClient({
     bandwidth: { ...DEMO_BANDWIDTH_USER },
     helix: { ...DEMO_HELIX_USER },
     kurmi: { ...DEMO_KURMI_USER },
+    starlink: { ...DEMO_STARLINK_ACCOUNTS.prod },
   },
   sleep: async () => {},
 });

@@ -57,6 +57,14 @@ export const COMMS_CONFIG: Record<string, CommsTenantConfig> = {
       },
     },
     timeZone: 'America/Chicago',
+    starlink: {
+      terminalFacility: {
+        'ut01000000-00000000-00a1b2c3': '2031',   // El Paso Field Office
+        'ut01000000-00000000-00d4e5f6': '3308',   // Lubbock Field Office
+        // ut01000000-00000000-00ffee11, the mobile command van, is deliberately
+        // absent: it has no fixed facility, and must be reported, not dropped.
+      },
+    },
     facilityNames: {
       '0412': 'Austin Central Office',
       '0417': 'North Austin Campus',

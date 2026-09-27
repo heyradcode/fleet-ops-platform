@@ -39,7 +39,7 @@ export const COMMS_SOURCES: readonly CommsSource[] = ['teams', 'genesys', 'webex
  * per-platform table in the workforce iterates CommsSource, and a Bandwidth
  * column of dashes in each of them would be noise.
  */
-export type CarrierSource = 'bandwidth';
+export type CarrierSource = 'bandwidth' | 'starlink';
 
 /** Anything that can witness a signal: a platform or a carrier. */
 export type SignalSource = CommsSource | CarrierSource;
@@ -146,4 +146,11 @@ export type CommsTenantConfig = {
    * every bucket by an hour at each daylight-saving change.
    */
   timeZone?: string;
+  /**
+   * Starlink: the satellite WAN at remote sites. `terminalFacility` maps a
+   * user terminal's DeviceId to the facility it serves - by id, because a
+   * nickname is edited in a portal. An unmapped terminal still produces
+   * signals under its own id, and is reported so someone maps it.
+   */
+  starlink?: { terminalFacility: Record<string, string> };
 };

@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 248 tests, no network. Picks up web/ tests too.
+pnpm test                       # 254 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180
 pnpm web:build                  # typechecks web/ AND builds it
@@ -290,6 +290,19 @@ network. Nothing real belongs in this repo.
   `fields=values(...)`: without it a ticket returns the submitter's name and
   email. Auth is `AR-JWT <token>`, not Bearer, and the login returns a bare
   text token with no expiry. Timestamps are `+0000` with no colon.
+- **Starlink telemetry is a STREAM whose position the SERVER advances on
+  send.** The watermark rule is inverted and we cannot change it, so every
+  response body is archived raw to S3 BEFORE it is parsed - the archive is
+  then the only copy. Positions are per SERVICE ACCOUNT: one per environment,
+  or dev and prod each silently get a share. Retention is 8 hours. Columns are
+  found by NAME per device type and alert codes mapped through the response's
+  own enums (the mock's alert names are placeholders). `UtcTimestampNs`
+  exceeds 2^53 - fine for ms maths, never an identity. The published client
+  caches its token in a STATIC field, shared across tenants; ours is per
+  client. A dish's sample count is a clock, not traffic - no volume baseline.
+- **911Inform is NOT built: there is no public API documentation.** Do not
+  invent one; it needs the vendor's or HHS's reference first, as Kurmi's
+  schema did.
 - **Kurmi is SOAP: HTTP 200 is not success, and paging is not guessed.**
   `<status>` in the body decides; a 200 with FAILURE is a failure. Credentials
   travel IN the envelope - `client.soap()` hands them to the builder so the
@@ -407,7 +420,7 @@ src/integrations/connector.ts  the one contract: poll() and onWebhook()
 src/integrations/controller/  Meraki, Mist, Aruba Central
 src/integrations/probe.ts  the external plane — the only thing that sees silence
 src/integrations/splunk/   outbound HEC (a bus consumer) + catalogued SPL search
-src/integrations/comms/  Teams, Genesys, Webex, Bandwidth, Helix, Kurmi: client (tokens, retries, paging),
+src/integrations/comms/  Teams, Genesys, Webex, Bandwidth, Helix, Kurmi, Starlink: client (tokens, retries, paging),
                  connectors, the workforce join (agency + facility split), and
                  signals -> alarms -> incidents
 src/integrations/comms/mock/  Teams (Graph), Genesys, Webex mocks: mockFetch on the

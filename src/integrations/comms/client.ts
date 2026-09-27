@@ -62,6 +62,10 @@ export type CommsEndpoints = {
   helixApi: string;
   /** Kurmi's SOAP endpoint. PLACEHOLDER path - see comms/kurmi.ts. */
   kurmiApi: string;
+  /** Starlink's token endpoint - on www., unlike the API. */
+  starlinkAuth: string;
+  /** Starlink Enterprise API base. */
+  starlinkApi: string;
 };
 
 export const REAL_ENDPOINTS: CommsEndpoints = {
@@ -75,6 +79,8 @@ export const REAL_ENDPOINTS: CommsEndpoints = {
   bandwidthInsights: 'https://insights.bandwidth.com/api/v1',
   helixApi: 'https://hhs-restapi.onbmc.example',
   kurmiApi: 'https://kurmi.hhs.example/Kurmi/services/API',
+  starlinkAuth: 'https://www.starlink.com/api/auth/connect/token',
+  starlinkApi: 'https://starlink.com/api/public',
 };
 
 /** In production these come from Secrets Manager, per tenant, cached across warm starts. */
@@ -88,6 +94,12 @@ export type CommsCredentials = {
   helix?: { username: string; password: string };
   /** Kurmi: a read-only API login. Sent INSIDE every SOAP envelope - see comms/kurmi.ts. */
   kurmi?: { login: string; password: string };
+  /**
+   * A Starlink SERVICE ACCOUNT. One per environment, never shared: each
+   * service account has its own position in the telemetry stream, so dev and
+   * prod on one account would each receive only PART of the data, silently.
+   */
+  starlink?: { clientId: string; clientSecret: string };
 };
 
 export class CommsHttpError extends Error {
@@ -129,7 +141,7 @@ export type CommsClient = {
    */
   soap(source: 'kurmi', url: string, build: (auth: { login: string; password: string }) => string): Promise<Response>;
   /** How many token requests have been made, per source. For the tests and the demo. */
-  tokenRequests: Record<CommsSource | 'helix', number>;
+  tokenRequests: Record<CommsSource | 'helix' | 'starlink', number>;
 };
 
 export function createCommsClient(opts: {
@@ -142,12 +154,27 @@ export function createCommsClient(opts: {
 }): CommsClient {
   const endpoints = opts.endpoints ?? REAL_ENDPOINTS;
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-  const cache = new Map<CommsSource | 'helix', CachedToken>();
-  const tokenRequests: Record<CommsSource | 'helix', number> = { teams: 0, genesys: 0, webex: 0, helix: 0 };
+  // Keyed by source WITHIN this client, and a client is per tenant. The
+  // published Starlink client keeps its token in a STATIC field - shared by
+  // every instance - which would hand one tenant's token to another's poll.
+  const cache = new Map<CommsSource | 'helix' | 'starlink', CachedToken>();
+  const tokenRequests: Record<CommsSource | 'helix' | 'starlink', number> = { teams: 0, genesys: 0, webex: 0, helix: 0, starlink: 0 };
 
-  async function fetchToken(source: CommsSource | 'helix'): Promise<CachedToken> {
+  async function fetchToken(source: CommsSource | 'helix' | 'starlink'): Promise<CachedToken> {
     tokenRequests[source]++;
     let res: Response;
+    if (source === 'starlink') {
+      const c = opts.credentials.starlink;
+      if (!c) throw new CommsHttpError(source, 0, 'no Starlink service account configured');
+      res = await opts.fetch(endpoints.starlinkAuth, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ client_id: c.clientId, client_secret: c.clientSecret, grant_type: 'client_credentials' }).toString(),
+      });
+      if (!res.ok) throw new CommsHttpError(source, res.status, 'Starlink token request failed: ' + await res.text());
+      const body = await res.json() as { access_token: string; expires_in: number };
+      return { token: body.access_token, expiresAt: now() + body.expires_in * 1000 };
+    }
     if (source === 'helix') {
       const c = opts.credentials.helix;
       if (!c) throw new CommsHttpError(source, 0, 'no Helix credentials configured');
@@ -197,7 +224,7 @@ export function createCommsClient(opts: {
     return { token: body.access_token, expiresAt: now() + body.expires_in * 1000 };
   }
 
-  async function tokenFor(source: CommsSource | 'helix'): Promise<string> {
+  async function tokenFor(source: CommsSource | 'helix' | 'starlink'): Promise<string> {
     const cached = cache.get(source);
     if (cached && now() < cached.expiresAt - TOKEN_HEADROOM_MS) return cached.token;
     const fresh = await fetchToken(source);

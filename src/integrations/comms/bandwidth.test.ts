@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 
 import { setClock, fixedClock, now } from '../../platform/clock.ts';
 import {
-  BANDWIDTH_ACCOUNT, BANDWIDTH_PEERS, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_CLIENT, DEMO_WEBEX_TOKEN,
+  BANDWIDTH_ACCOUNT, BANDWIDTH_PEERS, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS, DEMO_CLIENT, DEMO_WEBEX_TOKEN,
   directory, mockFetch, resetMockState, TEAMS_PLANTED,
 } from './mock/index.ts';
 import { CommsHttpError, createCommsClient, type CommsCredentials } from './client.ts';
@@ -33,6 +33,7 @@ function client(creds: Partial<CommsCredentials> = {}) {
       bandwidth: { ...DEMO_BANDWIDTH_USER },
       helix: { ...DEMO_HELIX_USER },
       kurmi: { ...DEMO_KURMI_USER },
+      starlink: { ...DEMO_STARLINK_ACCOUNTS.prod },
       ...creds,
     },
     sleep: async () => {},

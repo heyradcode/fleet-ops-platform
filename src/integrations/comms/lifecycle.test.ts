@@ -11,8 +11,8 @@ import assert from 'node:assert/strict';
 import { setClock, fixedClock, now, type ControllableClock } from '../../platform/clock.ts';
 import type { Principal } from '../../platform/types.ts';
 import {
-  clearFaults, DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_WEBEX_TOKEN, directory,
-  injectFault, mockFetch, resetMockState, setPlanted,
+  clearFaults, DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS, DEMO_WEBEX_TOKEN, directory,
+  injectFault, mockFetch, resetMockState, setPlanted, TEAMS_PLANTED,
 } from './mock/index.ts';
 import { createCommsClient } from './client.ts';
 import { COMMS_CONFIG, HHS_DEMO_TENANT } from './config.ts';
@@ -45,6 +45,7 @@ function setup(tenantId: string) {
       bandwidth: { ...DEMO_BANDWIDTH_USER },
       helix: { ...DEMO_HELIX_USER },
       kurmi: { ...DEMO_KURMI_USER },
+      starlink: { ...DEMO_STARLINK_ACCOUNTS.prod },
     },
     sleep: async () => {},
   });
@@ -57,12 +58,14 @@ function setup(tenantId: string) {
 }
 
 const byKind = (incidents: CommsIncident[], kind: string) => incidents.find((i) => i.subject.kind === kind);
+/** Houston's facility incident, by id: Lubbock's satellite link is a facility subject too. */
+const houstonOf = (incidents: CommsIncident[]) => incidents.find((i) => i.subject.id === TEAMS_PLANTED.degradedFacility)!;
 
 test('one problem is one incident across polls: same id, same opening, advancing lastSeen', async () => {
   const { poll } = setup('l-continuity');
   const first = await poll(false);
   const second = await poll();
-  assert.equal(second.incidents.length, 3);
+  assert.equal(second.incidents.length, 4);
   for (const i of second.incidents) {
     const was = first.incidents.find((f) => f.subject.id === i.subject.id)!;
     assert.equal(i.incidentId, was.incidentId);
@@ -75,14 +78,14 @@ test('recovery resolves after three MEASURED-healthy polls, and not before', asy
   const { poll, principal } = setup('l-recovery');
   await poll(false);
   setPlanted(false);
-  assert.equal((await poll()).incidents.length, 3, 'one good poll is not a recovery');
+  assert.equal((await poll()).incidents.length, 4, 'one good poll is not a recovery');
   const second = await poll();
-  assert.equal(second.incidents.length, 3);
+  assert.equal(second.incidents.length, 4);
   assert.ok(second.incidents.every((i) => i.clearPolls === 2));
   const third = await poll();
   assert.equal(third.incidents.length, 0);
-  assert.equal(third.resolved.length, 3);
-  assert.equal(commsResolvedIncidents(principal).length, 3);
+  assert.equal(third.resolved.length, 4);
+  assert.equal(commsResolvedIncidents(principal).length, 4);
 });
 
 test('a source that is DOWN cannot vouch for recovery: unknown neither counts nor resets', async () => {
@@ -111,12 +114,12 @@ test('still firing but held back RESETS the count - Houston bad while Webex is d
   setPlanted(false);
   await poll();
   const two = await poll();
-  assert.equal(byKind(two.incidents, 'facility')!.clearPolls, 2);
+  assert.equal(houstonOf(two.incidents).clearPolls, 2);
 
   setPlanted(true);
   injectFault('webex', 503, 10_000);
   const r = await poll();
-  const houston = byKind(r.incidents, 'facility')!;
+  const houston = houstonOf(r.incidents);
   assert.equal(houston.clearPolls, 0);
   assert.match(houston.lifecycleNote!, /still firing/);
 });

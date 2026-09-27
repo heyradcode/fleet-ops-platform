@@ -11,7 +11,7 @@ import { setClock, fixedClock, now } from '../../platform/clock.ts';
 import type { Principal } from '../../platform/types.ts';
 import { mainTable } from '../../aws/dynamodb.ts';
 import {
-  DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_WEBEX_TOKEN, directory,
+  DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS, DEMO_WEBEX_TOKEN, directory,
   GENESYS_PLANTED_QUEUE, GENESYS_SUBTLE_QUEUE, genesysQueues, mockFetch, mockHistory, resetMockState, TEAMS_PLANTED,
 } from './mock/index.ts';
 import { createCommsClient } from './client.ts';
@@ -38,7 +38,7 @@ function setup(tenantId: string) {
     credentials: {
       entra: { tenantId: directory().entraTenantId, ...DEMO_CLIENT }, genesys: { ...DEMO_CLIENT },
       webex: { token: DEMO_WEBEX_TOKEN }, bandwidth: { ...DEMO_BANDWIDTH_USER },
-      helix: { ...DEMO_HELIX_USER }, kurmi: { ...DEMO_KURMI_USER },
+      helix: { ...DEMO_HELIX_USER }, kurmi: { ...DEMO_KURMI_USER }, starlink: { ...DEMO_STARLINK_ACCOUNTS.prod },
     },
     sleep: async () => {},
   });
@@ -86,6 +86,7 @@ test('with eight weeks of history: exactly the unusual things, and nothing healt
   const allowed = new Set([
     'queue:' + GENESYS_SUBTLE_QUEUE, 'queue:' + GENESYS_PLANTED_QUEUE,
     'trunk:' + TEAMS_PLANTED.failingTrunk, 'facility:LC=' + TEAMS_PLANTED.degradedFacility,
+    'facility:LC=3308',   // Lubbock's obstructed dish
   ]);
   for (const f of flagged) assert.ok(allowed.has(f), 'unexpected anomaly on ' + f);
 });

@@ -38,6 +38,8 @@ import type { IncidentContext } from './helix-context.ts';
 
 export const SELF_EVIDENT: ReadonlySet<CommsSignalKind> = new Set<CommsSignalKind>([
   'trunk-call-failure', 'queue-backlog', 'queue-abandonment',
+  // The dish measuring its own link: the system of record, like a trunk.
+  'wan-latency', 'wan-drop-rate',
 ]);
 
 /** Which sources can witness each kind - so a missing witness can be named. */
@@ -46,6 +48,8 @@ export const WITNESSES: Record<CommsSignalKind, SignalSource[]> = {
   'facility-media-degradation': ['teams', 'webex'],
   'queue-backlog': ['genesys'],
   'queue-abandonment': ['genesys'],
+  'wan-latency': ['starlink'],
+  'wan-drop-rate': ['starlink'],
 };
 
 export type CommsAlarm = {
@@ -82,7 +86,7 @@ export type Figure = {
   source: SignalSource;
   kind: CommsSignalKind;
   value: number;
-  unit: 'ratio' | 'count';
+  unit: 'ratio' | 'count' | 'ms';
   sampleSize: number;
 };
 
@@ -206,7 +210,7 @@ export function correlateAlarms(alarms: CommsAlarm[]): CommsIncident[] {
     return {
       tenantId: group[0].tenantId,
       incidentId: 'cinc-' + sha256([group[0].tenantId, subjectKey(subject), openedAt].join('|')).slice(0, 20),
-      title: titleFor(subject),
+      title: titleFor(subject, group.map((a) => a.kind)),
       severity: worst(group.map((a) => a.severity)),
       subject,
       alarmIds: group.map((a) => a.alarmId),
@@ -255,10 +259,17 @@ export function localise(
   return undefined;
 }
 
-function titleFor(subject: CommsSubject): string {
+function titleFor(subject: CommsSubject, kinds: CommsSignalKind[]): string {
+  const wan = kinds.some((k) => k === 'wan-latency' || k === 'wan-drop-rate');
+  const media = kinds.includes('facility-media-degradation');
   switch (subject.kind) {
     case 'trunk': return 'SBC ' + subject.name + ' is failing calls';
-    case 'facility': return 'Call quality degraded at ' + subject.name;
+    case 'facility':
+      // One incident when both happen at one facility - the WAN evidence is
+      // then very likely the explanation for the call quality.
+      return wan && media ? 'Call quality and satellite WAN degraded at ' + subject.name
+        : wan ? 'Satellite WAN degraded at ' + subject.name
+          : 'Call quality degraded at ' + subject.name;
     case 'queue': return 'Queue "' + subject.name + '" is overwhelmed';
   }
 }

@@ -52,7 +52,7 @@ export type MetricPoint = {
   metric: MetricName;
   source: SignalSource;
   value: number;
-  unit: 'ratio' | 'count';
+  unit: 'ratio' | 'count' | 'ms';
 };
 
 export type Baseline = { n: number; mean: number; m2: number };
@@ -62,7 +62,7 @@ export type CommsAnomaly = {
   metric: MetricName;
   source: SignalSource;
   value: number;
-  unit: 'ratio' | 'count';
+  unit: 'ratio' | 'count' | 'ms';
   normal: { mean: number; std: number; samples: number };
   /** Standard deviations from normal, using the floored spread. */
   z: number;
@@ -90,17 +90,28 @@ const RATE: Guard = { stdFloor: () => 0.01, minDelta: () => 0.03, directions: ['
 const BACKLOG: Guard = { stdFloor: poissonFloor, minDelta: () => 3, directions: ['above'] };
 const VOLUME: Guard = { stdFloor: poissonFloor, minDelta: (m) => Math.max(5, 0.3 * m), directions: ['above', 'below'] };
 
+/** Latency: a floor of 5 ms of spread and 30 ms of change - jitter in a dish is not news. */
+const LATENCY: Guard = { stdFloor: () => 5, minDelta: () => 30, directions: ['above'] };
+
 function guardFor(metric: MetricName): Guard {
   if (metric.endsWith(':volume')) return VOLUME;
+  if (metric === 'wan-latency') return LATENCY;
   return metric === 'queue-backlog' ? BACKLOG : RATE;
 }
+
+/**
+ * The rates whose sample size is a number of CALLS, and so a volume worth a
+ * baseline. A dish reports once a minute whatever happens; its sample count
+ * is a clock, not traffic.
+ */
+const CALL_VOLUME_KINDS = new Set<CommsSignalKind>(['trunk-call-failure', 'queue-abandonment', 'facility-media-degradation']);
 
 /** Signals -> the points worth a baseline: each value, and each rate's volume. */
 export function metricsFromSignals(signals: CommsSignal[]): MetricPoint[] {
   const out: MetricPoint[] = [];
   for (const s of signals) {
     out.push({ subject: s.subject, metric: s.kind, source: s.source, value: s.value, unit: s.unit });
-    if (s.unit === 'ratio') {
+    if (s.unit === 'ratio' && CALL_VOLUME_KINDS.has(s.kind)) {
       out.push({ subject: s.subject, metric: (s.kind + ':volume') as MetricName, source: s.source, value: s.sampleSize, unit: 'count' });
     }
   }
@@ -162,7 +173,8 @@ const VOLUME_LABEL: Partial<Record<MetricName, string>> = {
 };
 
 function explain(p: MetricPoint, normal: CommsAnomaly['normal'], direction: 'above' | 'below', when: string): string {
-  const fmt = (v: number) => (p.unit === 'ratio' ? Math.round(v * 1000) / 10 + '%' : String(Math.round(v * 10) / 10));
+  const fmt = (v: number) => (p.unit === 'ratio' ? Math.round(v * 1000) / 10 + '%'
+    : String(Math.round(v * 10) / 10) + (p.unit === 'ms' ? ' ms' : ''));
   const what = VOLUME_LABEL[p.metric] ?? p.metric.replace(/-/g, ' ');
   const factor = normal.mean > 0 ? ' - ' + (Math.round((p.value / normal.mean) * 10) / 10) + 'x normal' : '';
   const subject = VOLUME_LABEL[p.metric] ? what + ' ' + p.subject.name : what + ' on ' + p.subject.name;

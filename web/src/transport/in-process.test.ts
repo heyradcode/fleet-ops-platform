@@ -259,7 +259,7 @@ test('comms: an HHS lead gets the comms view, with the planted incidents', async
   await signInAs(HHS_LEAD);
   const comms = await inProcessTransport.loadComms();
   assert.ok(comms, 'a comms tenant, tenant-wide, must get the view');
-  assert.deepEqual(comms.incidents.map((i) => i.subject.kind).sort(), ['facility', 'queue', 'trunk']);
+  assert.deepEqual(comms.incidents.map((i) => i.subject.kind).sort(), ['facility', 'facility', 'queue', 'trunk']);
   assert.ok(comms.workforce.byFacility.length > 0);
 });
 

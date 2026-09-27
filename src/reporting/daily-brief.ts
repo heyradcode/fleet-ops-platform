@@ -123,8 +123,16 @@ function commsItem(i: CommsIncident, at: number, peopleAt: (code: string) => str
     // honest ceiling, with both shown.
     impact = 'up to ' + pct(worst) + ' of recent calls failing' + (parts.length ? ' (' + parts.join('; ') + ')' : '');
   } else if (i.subject.kind === 'facility') {
-    title = 'Poor call quality at ' + facilityName(i.subject.id);
-    impact = peopleAt(i.subject.id);
+    const wan = i.kinds.some((k) => k === 'wan-latency' || k === 'wan-drop-rate');
+    const media = i.kinds.includes('facility-media-degradation');
+    const place = i.subject.id.startsWith('starlink-terminal:') ? i.subject.name : facilityName(i.subject.id);
+    title = wan && media ? 'Poor call quality and a degraded satellite link at ' + place
+      : wan ? 'Satellite internet link degraded at ' + place
+        : 'Poor call quality at ' + place;
+    const drop = i.figures.find((f) => f.kind === 'wan-drop-rate');
+    const latency = i.figures.find((f) => f.kind === 'wan-latency');
+    const link = [drop ? pct(drop.value) + ' of packets lost' : '', latency ? latency.value + ' ms delay' : ''].filter(Boolean).join(', ');
+    impact = (link ? link + '; ' : '') + peopleAt(i.subject.id);
   } else {
     area = 'contact centre';
     title = 'Callers waiting too long in the "' + i.subject.name + '" queue';
@@ -168,7 +176,8 @@ function plainLifecycle(note: string): string {
 }
 
 function normalText(a: CommsAnomaly): string {
-  const fmt = (v: number) => (a.unit === 'ratio' ? Math.round(v * 1000) / 10 + '%' : String(Math.round(v * 10) / 10));
+  const fmt = (v: number) => (a.unit === 'ratio' ? Math.round(v * 1000) / 10 + '%'
+    : String(Math.round(v * 10) / 10) + (a.unit === 'ms' ? ' ms' : ''));
   return fmt(a.normal.mean) + ' (±' + fmt(a.normal.std) + ')';
 }
 

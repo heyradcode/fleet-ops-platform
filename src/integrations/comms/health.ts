@@ -43,7 +43,7 @@ import type { PhoneInventory } from './kurmi.ts';
 export type HealthSource = ApiSource | 'entra-directory';
 
 export const HEALTH_SOURCES: readonly HealthSource[] = [
-  'entra-directory', 'teams', 'genesys', 'webex', 'bandwidth', 'helix', 'kurmi',
+  'entra-directory', 'teams', 'genesys', 'webex', 'bandwidth', 'helix', 'kurmi', 'starlink',
 ];
 
 export type SourceStatus = 'healthy' | 'degraded' | 'down' | 'not-configured';
@@ -65,7 +65,8 @@ export type SourceHealth = {
 
 export type DataQualityIssue = {
   kind: 'unknown-domain' | 'unmapped-webex-location' | 'unmapped-bandwidth-peer' | 'facility-conflict' | 'unplaced'
-    | 'unknown-agency-code' | 'blank-agency' | 'unmapped-kurmi-department' | 'kurmi-no-facility';
+    | 'unknown-agency-code' | 'blank-agency' | 'unmapped-kurmi-department' | 'kurmi-no-facility'
+    | 'unmapped-starlink-terminal';
   count: number;
   detail: string;
   /** The fix, in words someone can act on. */
@@ -84,6 +85,7 @@ const CAVEATS: Partial<Record<HealthSource, string[]>> = {
   bandwidth: ['call-outcomes API shape is a PLACEHOLDER until the Insights reference is verified'],
   helix: ['field names are unverified against the customer\'s (customised) Helix forms'],
   kurmi: ['modelled from ONE sample - no schema yet; paging unknown, so searches are partitioned by MAC prefix'],
+  starlink: ['the stream advances on SEND - raw bodies are archived before parsing; one service account per environment'],
 };
 
 /** What this poll saw, per source, from the pieces the poll already has. Pure. */
@@ -117,6 +119,7 @@ export function observeRun(args: {
     run('webex', config.sources.includes('webex'), joinErrors(report.errors.webex, args.signalErrors.webex), truncated('webex')),
     run('bandwidth', !!config.bandwidth, args.signalErrors.bandwidth, []),
     run('helix', !!config.helix, args.helixError, []),
+    run('starlink', !!config.starlink, args.signalErrors.starlink, []),
     run('kurmi', !!config.kurmi, args.kurmiError,
       args.phones?.truncated ? ['a MAC-prefix slice was still truncated at the depth limit - phone counts are LOW'] : []),
   ];
@@ -125,8 +128,16 @@ export function observeRun(args: {
 /** Data-quality issues with their fixes. Pure. */
 export function dataQuality(
   report: WorkforceReport, unmappedBandwidthPeers: string[], phones?: PhoneInventory,
+  unmappedStarlinkTerminals: string[] = [],
 ): DataQualityIssue[] {
   const issues: DataQualityIssue[] = [];
+  for (const t of unmappedStarlinkTerminals) {
+    issues.push({
+      kind: 'unmapped-starlink-terminal', count: 1, detail: 'Starlink terminal ' + t,
+      action: 'If it serves a fixed site, add ' + t + ' to starlink.terminalFacility with its LC code; ' +
+        'a mobile unit can stay unmapped - its signals arrive under its own id.',
+    });
+  }
 
   const unknown = new Map<string, number>();
   for (const split of Object.values(report.byPlatform)) {

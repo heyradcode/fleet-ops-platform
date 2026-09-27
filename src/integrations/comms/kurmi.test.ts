@@ -9,7 +9,7 @@ import { setClock, fixedClock, now, nowIso } from '../../platform/clock.ts';
 import type { Principal } from '../../platform/types.ts';
 import { childText, descendants, parseXml } from '../../platform/xml.ts';
 import {
-  DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_WEBEX_TOKEN, directory,
+  DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS, DEMO_WEBEX_TOKEN, directory,
   injectFault, KURMI_TENANT_DBID, kurmiPhones, mockFetch, resetMockState, setKurmiMaxResults,
 } from './mock/index.ts';
 import { CommsHttpError, createCommsClient, type CommsCredentials } from './client.ts';
@@ -33,6 +33,7 @@ function client(kurmi: CommsCredentials['kurmi'] = { ...DEMO_KURMI_USER }, tenan
       bandwidth: { ...DEMO_BANDWIDTH_USER },
       helix: { ...DEMO_HELIX_USER },
       kurmi,
+      starlink: { ...DEMO_STARLINK_ACCOUNTS.prod },
     },
     sleep: async () => {},
   });
@@ -114,5 +115,5 @@ test('Kurmi down costs Kurmi only; its gaps are data-quality items with fixes; n
   const down = await runCommsPoll(principal, client(undefined, tenantId), config, now());
   const kurmi = down.health.sources.find((s) => s.source === 'kurmi')!;
   assert.equal(kurmi.status, 'down');
-  assert.equal(down.incidents.length, 3, 'the comms incidents are untouched');
+  assert.equal(down.incidents.length, 4, 'the comms incidents are untouched');
 });

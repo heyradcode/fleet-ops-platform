@@ -12,7 +12,7 @@ import { setClock, fixedClock, now } from '../../platform/clock.ts';
 import type { Principal } from '../../platform/types.ts';
 import { CrossTenantAccessError, OutOfScopeError } from '../../platform/tenancy.ts';
 import { mainTable } from '../../aws/dynamodb.ts';
-import { DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER, DEMO_KURMI_USER, directory, mockFetch, resetMockState } from './mock/index.ts';
+import { DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS, directory, mockFetch, resetMockState } from './mock/index.ts';
 import { createCommsClient } from './client.ts';
 import { COMMS_CONFIG, HHS_DEMO_TENANT } from './config.ts';
 import { runCommsPoll } from './poll.ts';
@@ -36,6 +36,7 @@ const client = (tenantId = HHS_DEMO_TENANT) => createCommsClient({
     bandwidth: { ...DEMO_BANDWIDTH_USER },
     helix: { ...DEMO_HELIX_USER },
     kurmi: { ...DEMO_KURMI_USER },
+    starlink: { ...DEMO_STARLINK_ACCOUNTS.prod },
   },
   sleep: async () => {},
 });
@@ -51,7 +52,7 @@ test('poll: incidents, held-back alarms and the workforce split land in the stor
   const result = await poll();
   const admin = principal();
   assert.equal(commsIncidents(admin).length, result.incidents.length);
-  assert.equal(result.incidents.length, 3);
+  assert.equal(result.incidents.length, 4);
   assert.equal(commsAlarms(admin).length, result.alarms.length);
   assert.ok(commsWorkforce(admin)!.byFacility.length > 0);
 });
@@ -59,7 +60,7 @@ test('poll: incidents, held-back alarms and the workforce split land in the stor
 test('poll: a re-poll of the same window overwrites, it does not duplicate', async () => {
   await poll();
   await poll();
-  assert.equal(commsIncidents(principal()).length, 3);
+  assert.equal(commsIncidents(principal()).length, 4);
 });
 
 test('store: no person-level data is persisted - counts, not names', async () => {

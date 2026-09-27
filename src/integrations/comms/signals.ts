@@ -33,13 +33,16 @@ import type { CommsClient } from './client.ts';
 import { drainGenesys, drainGraph, drainWebex } from './client.ts';
 import { errorLine, type CommsTenantConfig, type SignalSource } from './types.ts';
 import { pullBandwidthTrunks } from './bandwidth.ts';
+import { drainTelemetry, siteWan } from './starlink.ts';
 import type { WorkforceMember, WorkforceReport } from './workforce.ts';
 
 export type CommsSignalKind =
   | 'trunk-call-failure'          // Teams Direct Routing: failed / attempted, per SBC
   | 'facility-media-degradation'  // Teams or Webex: degraded share of media, per facility
   | 'queue-backlog'               // Genesys: callers waiting right now
-  | 'queue-abandonment';          // Genesys: abandoned / offered, per queue
+  | 'queue-abandonment'           // Genesys: abandoned / offered, per queue
+  | 'wan-latency'                 // Starlink: the dish's own ping latency, per facility
+  | 'wan-drop-rate';              // Starlink: the dish's own packet drop, per facility
 
 export type CommsSubject = { kind: 'trunk' | 'facility' | 'queue'; id: string; name: string };
 
@@ -51,8 +54,8 @@ export type CommsSignal = {
   subject: CommsSubject;
   kind: CommsSignalKind;
   value: number;
-  unit: 'ratio' | 'count';
-  /** What the value was computed over: calls, participant-minutes, offers. */
+  unit: 'ratio' | 'count' | 'ms';
+  /** What the value was computed over: calls, participant-minutes, offers, dish-minutes. */
   sampleSize: number;
   window: { from: string; to: string };
   severity: Severity;
@@ -85,6 +88,12 @@ export const COMMS_THRESHOLDS = {
    * callers - the first run of this against the mock warned on exactly that.
    */
   queueAbandonment: { warning: 0.15, critical: 0.25, minSamples: 20 },
+  /**
+   * Starlink, per dish-minute averages. A healthy dish runs 25-60 ms and well
+   * under 1% drop; voice degrades audibly past ~150 ms and ~2%.
+   */
+  wanLatency: { warning: 150, critical: 300, minSamples: 5 },
+  wanDropRate: { warning: 0.02, critical: 0.08, minSamples: 5 },
 } as const;
 
 /** How far back a signal looks. Long enough to reach a sample, short enough to be "now". */
@@ -390,6 +399,10 @@ export type CollectedSignals = {
   errors: Partial<Record<SignalSource, string>>;
   /** Bandwidth peers the tenant table does not map. Data quality, not a failure. */
   unmappedBandwidthPeers: string[];
+  /** Starlink terminals the tenant table does not map. */
+  unmappedStarlinkTerminals: string[];
+  /** Raw Starlink stream bodies archived this poll - the replay path if anything downstream fails. */
+  starlinkArchived: string[];
 };
 
 /** Every signal for the window ending at `at`, from every source the tenant runs. One source failing is that source's problem. */
@@ -401,6 +414,8 @@ export async function collectSignals(
   const signals: CommsSignal[] = [];
   const errors: CollectedSignals['errors'] = {};
   let unmappedBandwidthPeers: string[] = [];
+  let unmappedStarlinkTerminals: string[] = [];
+  let starlinkArchived: string[] = [];
 
   const attempt = async (source: SignalSource, run: () => Promise<void>) => {
     try {
@@ -427,5 +442,41 @@ export async function collectSignals(
       unmappedBandwidthPeers = b.unmappedPeers;
     });
   }
-  return { signals, errors, unmappedBandwidthPeers };
+  if (config.starlink) {
+    await attempt('starlink', async () => {
+      const drained = await drainTelemetry(client);
+      starlinkArchived = drained.archived;
+      const { sites, unmappedTerminals } = siteWan(drained.samples, config, w.from, w.to);
+      unmappedStarlinkTerminals = unmappedTerminals;
+      signals.push(...starlinkSignals(client.tenantId, sites, isoWindow(w)));
+    });
+  }
+  return { signals, errors, unmappedBandwidthPeers, unmappedStarlinkTerminals, starlinkArchived };
+}
+
+/** Per-facility WAN signals from the dishes. Obstruction and alerts are the evidence. */
+function starlinkSignals(
+  tenantId: TenantId, sites: ReturnType<typeof siteWan>['sites'], window: { from: string; to: string },
+): CommsSignal[] {
+  const out: CommsSignal[] = [];
+  for (const s of sites) {
+    const subject: CommsSubject = { kind: 'facility', id: s.subjectId, name: s.subjectName };
+    const why = (s.obstruction > 0.01 ? ', obstructed ' + pct(s.obstruction) + ' of the time' : '') +
+      (s.alerts.length ? ', dish alerts: ' + s.alerts.join(', ') : '');
+    if (s.samples >= COMMS_THRESHOLDS.wanLatency.minSamples) {
+      out.push(signal({
+        tenantId, source: 'starlink', subject, kind: 'wan-latency', value: s.latencyMs, unit: 'ms',
+        sampleSize: s.samples, window, severity: severityFor(s.latencyMs, COMMS_THRESHOLDS.wanLatency),
+        detail: 'satellite WAN latency ' + s.latencyMs + ' ms at ' + s.subjectName + why,
+      }));
+    }
+    if (s.samples >= COMMS_THRESHOLDS.wanDropRate.minSamples) {
+      out.push(signal({
+        tenantId, source: 'starlink', subject, kind: 'wan-drop-rate', value: s.dropRate, unit: 'ratio',
+        sampleSize: s.samples, window, severity: severityFor(s.dropRate, COMMS_THRESHOLDS.wanDropRate),
+        detail: 'satellite WAN dropping ' + pct(s.dropRate) + ' of packets at ' + s.subjectName + why,
+      }));
+    }
+  }
+  return out;
 }

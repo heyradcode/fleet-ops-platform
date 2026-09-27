@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 
 import { setClock, fixedClock, now } from '../../platform/clock.ts';
 import {
-  DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER, DEMO_KURMI_USER, directory, GENESYS_PLANTED_QUEUE, mockFetch, resetMockState, TEAMS_PLANTED,
+  DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS, directory, GENESYS_PLANTED_QUEUE, mockFetch, resetMockState, TEAMS_PLANTED,
 } from './mock/index.ts';
 import { createCommsClient } from './client.ts';
 import { buildWorkforce } from './workforce.ts';
@@ -39,6 +39,7 @@ async function run(sources: CommsSource[] = ['teams', 'genesys', 'webex']) {
       bandwidth: { ...DEMO_BANDWIDTH_USER },
       helix: { ...DEMO_HELIX_USER },
       kurmi: { ...DEMO_KURMI_USER },
+      starlink: { ...DEMO_STARLINK_ACCOUNTS.prod },
     },
     sleep: async () => {},
   });
@@ -76,6 +77,8 @@ test('signals: exactly the planted problems fire, and nothing else does', async 
     'webex facility-media-degradation ' + TEAMS_PLANTED.degradedFacility,
     // The carrier's end of the same SBC, on the same subject - mapped by peer id.
     'bandwidth trunk-call-failure ' + TEAMS_PLANTED.failingTrunk,
+    // Lubbock's obstructed satellite dish. Latency stays under its line.
+    'starlink wan-drop-rate 3308',
   ].sort());
 });
 
@@ -97,11 +100,12 @@ test('incidents: three, one per planted subject, the facility one from two servi
   const { incidents } = await run();
   assert.deepEqual(incidents.map((i) => i.subject.kind + ':' + i.subject.name).sort(), [
     'facility:LC=' + TEAMS_PLANTED.degradedFacility,
+    'facility:LC=3308',
     'queue:' + GENESYS_PLANTED_QUEUE,
     'trunk:' + TEAMS_PLANTED.failingTrunk,
   ].sort());
 
-  const facility = incidents.find((i) => i.subject.kind === 'facility')!;
+  const facility = incidents.find((i) => i.subject.id === TEAMS_PLANTED.degradedFacility)!;
   assert.deepEqual(facility.sources, ['teams', 'webex']);
 
   // Both ends of the SBC saw it, so the incident says where: the SBC itself.
@@ -116,10 +120,10 @@ test('incidents: three, one per planted subject, the facility one from two servi
 
 test('corroboration: take Webex away and the facility alarm is raised but held back', async () => {
   const { alarms, incidents } = await run(['teams', 'genesys']);
-  const facility = alarms.find((a) => a.subject.kind === 'facility')!;
+  const facility = alarms.find((a) => a.subject.id === TEAMS_PLANTED.degradedFacility)!;
   assert.equal(facility.corroborated, false);
   assert.match(facility.heldBack!, /single source/);
-  assert.ok(!incidents.some((i) => i.subject.kind === 'facility'));
+  assert.ok(!incidents.some((i) => i.subject.id === TEAMS_PLANTED.degradedFacility));
 
   // The self-evident kinds still page on one source.
   assert.ok(incidents.some((i) => i.subject.kind === 'trunk'));

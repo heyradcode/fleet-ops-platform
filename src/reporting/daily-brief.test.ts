@@ -10,7 +10,7 @@ import { setClock, fixedClock, now, type ControllableClock } from '../platform/c
 import type { Principal } from '../platform/types.ts';
 import { OutOfScopeError } from '../platform/tenancy.ts';
 import {
-  clearFaults, DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_WEBEX_TOKEN,
+  clearFaults, DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS, DEMO_WEBEX_TOKEN,
   directory, injectFault, mockFetch, resetMockState, setPlanted, TEAMS_PLANTED,
 } from '../integrations/comms/mock/index.ts';
 import { createCommsClient } from '../integrations/comms/client.ts';
@@ -38,7 +38,7 @@ function setup(tenantId: string) {
     credentials: {
       entra: { tenantId: directory().entraTenantId, ...DEMO_CLIENT }, genesys: { ...DEMO_CLIENT },
       webex: { token: DEMO_WEBEX_TOKEN }, bandwidth: { ...DEMO_BANDWIDTH_USER },
-      helix: { ...DEMO_HELIX_USER }, kurmi: { ...DEMO_KURMI_USER },
+      helix: { ...DEMO_HELIX_USER }, kurmi: { ...DEMO_KURMI_USER }, starlink: { ...DEMO_STARLINK_ACCOUNTS.prod },
     },
     sleep: async () => {},
   });
@@ -53,7 +53,7 @@ test('red, in plain words, with impact in people and calls', async () => {
   await poll();
   const b = await buildDailyBrief(principal, now(), noNetwork);
   assert.equal(b.status, 'red');
-  assert.equal(b.open.length, 3);
+  assert.equal(b.open.length, 4);
   const titles = b.open.map((o) => o.title).join(' | ');
   assert.match(titles, /Houston Regional/, 'a facility name an executive knows, not a bare LC code');
   assert.match(titles, /Phone calls through trunk SBC2 are failing/);
@@ -100,7 +100,7 @@ test('recovered: green, with the resolved problems and how long they lasted', as
   const b = await buildDailyBrief(principal, now(), noNetwork);
   assert.equal(b.status, 'green');
   assert.equal(b.open.length, 0);
-  assert.equal(b.resolved.length, 3);
+  assert.equal(b.resolved.length, 4);
   assert.ok(b.resolved.every((r) => /^lasted /.test(r.when)));
 });
 

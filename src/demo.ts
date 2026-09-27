@@ -65,7 +65,7 @@ import { checkInput, canUseTool } from './ai/guardrails.ts';
 import { b64urlEncode, b64urlDecodeText, setUuid, seededUuid } from './platform/crypto.ts';
 import { setClock, fixedClock, now, nowIso } from './platform/clock.ts';
 import { setRandom, seededRandom } from './platform/random.ts';
-import { mockFetch, directory as commsDirectory, DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER, DEMO_KURMI_USER } from './integrations/comms/mock/index.ts';
+import { mockFetch, directory as commsDirectory, DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS } from './integrations/comms/mock/index.ts';
 import { createCommsClient } from './integrations/comms/client.ts';
 import { backfillCommsBaselines, runCommsPoll } from './integrations/comms/poll.ts';
 import { syncEntraDirectory } from './integrations/comms/entra-directory.ts';
@@ -798,6 +798,7 @@ async function sectionComms() {
       bandwidth: { ...DEMO_BANDWIDTH_USER },
       helix: { ...DEMO_HELIX_USER },
       kurmi: { ...DEMO_KURMI_USER },
+      starlink: { ...DEMO_STARLINK_ACCOUNTS.prod },
     },
   });
   // An HHS operations lead, verified like every other principal. Tenant-wide,

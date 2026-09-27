@@ -128,7 +128,7 @@ export async function runCommsPoll(
   const health = recordHealth(principal, at, observeRun({
     config, directorySync, directoryError, report,
     signalErrors: collected.errors, helixError: helix.error, kurmiError, phones,
-  }), dataQuality(report, collected.unmappedBandwidthPeers, phones));
+  }), dataQuality(report, collected.unmappedBandwidthPeers, phones, collected.unmappedStarlinkTerminals));
 
   putCommsRun(principal, { workforce, alarms });
   return {
