@@ -24,11 +24,11 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 314 tests, no network. Picks up web/ tests too.
+pnpm test                       # 330 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180 - real Cognito sign-in
 pnpm web:env                    # write web/.env.cognito.local from the Terraform outputs
-pnpm build:agent                # bundle the AgentCore agent (docs/11-agentcore.md)
+pnpm build:agent                # bundle the AgentCore agent AND the MCP server (docs/11, docs/12)
 pnpm web:build                  # typechecks web/ AND builds it
 pnpm mock                       # mock Teams/Genesys/Webex APIs, http://127.0.0.1:5190
 pnpm check:promises             # no un-awaited or misused promise, backend and web/
@@ -287,6 +287,20 @@ one, change the test deliberately rather than making it pass.
   re-runs all seven checks, because neither `token_use` nor the tenant claim
   is AgentCore's to check. `allowedClients`, never `allowedAudience`: a
   Cognito access token has no `aud`.
+- **The deployed agent's tools are an MCP server, called with the USER's
+  token.** `src/ai/mcp/` (hand-rolled, no SDK in `src/`) on a second
+  AgentCore runtime (`agentcore/mcp.tf`, `server_protocol = "MCP"`). The
+  agent relays the caller's own token; a service credential would turn a
+  Dallas operator's question into an answer about the tenant - which is also
+  why it is NOT behind AgentCore Gateway (outbound auth is the gateway's
+  identity). `runTool` in `ai/tool-provider.ts` is the ONE implementation
+  both routes call, so they cannot disagree. The server lists read tools
+  only, re-verifies with all seven checks BEFORE parsing, and audits every
+  call (`ai/audit.ts`): argument HASHES, never arguments; `wallNow()`, never
+  the demo clock; `expiresAt` in epoch SECONDS (TTL silently ignores ms); an
+  audit failure is logged, never fails the call. Its role may PutItem only
+  into `TENANT#*#AUDIT` (`LeadingKeys`). `-32005` arrives as HTTP 200 and is
+  retried by the client - status-code retries never see it.
 - **Scope comes from the token, not the request.** Repository and resolver
   functions take a `Principal` and derive keys from it. An operator with no site
   claim gets *device* scope, not the whole estate — widening access is a
@@ -522,7 +536,9 @@ src/integrations/comms/mock/  Teams (Graph), Genesys, Webex mocks: mockFetch on 
                  real hostnames; scripts/mock-vendors.ts serves them on localhost
 src/pipeline/    collect → normalise → stream → enrich → evaluate → correlate
 src/geo/         spatial maths, PostGIS queries, GeoJSON/TopoJSON, topology
-src/ai/          RAG, agent loop, guardrails
+src/ai/          RAG, agent loop, guardrails; tool-provider.ts is the seam
+                 between the loop and where tools run
+src/ai/mcp/      the MCP tool server (server, http) and the agent's client
 src/reporting/   the executive daily brief - every source, one page
 src/aws/         local stand-ins for 6 AWS services; dynamodb.sdk.ts is the
                  REAL table adapter (Node only - paging, batch retries)

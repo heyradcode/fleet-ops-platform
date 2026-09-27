@@ -174,7 +174,7 @@ test('the answer says where it came from: AgentCore, the model, and the turn', a
   const first = (await ask2('How do I fix a link down?')).body as AgentResult;
   const second = (await ask2('And after that?')).body as AgentResult;
   const fresh = (await ask2('Start over', { newConversation: true })).body as AgentResult;
-  assert.deepEqual(first.servedBy, { host: 'agentcore', model: 'anthropic.claude-opus-5', turn: 1 });
+  assert.deepEqual(first.servedBy, { host: 'agentcore', model: 'anthropic.claude-opus-5', turn: 1, tools: 'in-process' });
   assert.equal(second.servedBy?.turn, 2);
   assert.equal(fresh.servedBy?.turn, 1);
 });

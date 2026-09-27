@@ -1,7 +1,12 @@
 /**
- * Bundle the AgentCore agent: infra/terraform/agentcore/agent-entry.ts ->
- * infra/terraform/agentcore/.build/agent/agent.js. Terraform zips that file
- * and uploads it; AgentCore runs `node agent.js` in an arm64 microVM.
+ * Bundle the two AgentCore runtimes:
+ *
+ *   infra/terraform/agentcore/agent-entry.ts -> .build/agent/agent.js  (the agent)
+ *   infra/terraform/agentcore/mcp-entry.ts   -> .build/mcp/mcp.js      (the MCP tool server)
+ *
+ * Terraform zips each directory and uploads it; AgentCore runs `node agent.js`
+ * / `node mcp.js` in arm64 microVMs. Built together so they cannot drift: the
+ * agent's MCP client and the server it talks to are always the same commit.
  *
  *   pnpm build:agent
  *
@@ -29,7 +34,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const outdir = resolve(root, 'infra/terraform/agentcore/.build/agent');
+const buildRoot = resolve(root, 'infra/terraform/agentcore/.build');
 const runbookDir = resolve(root, 'src/data/runbooks');
 
 const runbooksPlugin = {
@@ -45,30 +50,33 @@ const runbooksPlugin = {
   },
 };
 
-await rm(outdir, { recursive: true, force: true });
-await mkdir(outdir, { recursive: true });
+for (const name of ['agent', 'mcp']) {
+  const outdir = resolve(buildRoot, name);
+  await rm(outdir, { recursive: true, force: true });
+  await mkdir(outdir, { recursive: true });
 
-const result = await build({
-  entryPoints: [resolve(root, 'infra/terraform/agentcore/agent-entry.ts')],
-  outfile: resolve(outdir, 'agent.js'),
-  bundle: true,
-  platform: 'node',
-  target: 'node22',
-  format: 'cjs',
-  plugins: [runbooksPlugin],
-  // A CloudWatch stack trace should point at the TypeScript line.
-  sourcemap: 'inline',
-  minify: false,
-  logLevel: 'warning',
-  metafile: true,
-});
+  const result = await build({
+    entryPoints: [resolve(root, 'infra/terraform/agentcore/' + name + '-entry.ts')],
+    outfile: resolve(outdir, name + '.js'),
+    bundle: true,
+    platform: 'node',
+    target: 'node22',
+    format: 'cjs',
+    plugins: [runbooksPlugin],
+    // A CloudWatch stack trace should point at the TypeScript line.
+    sourcemap: 'inline',
+    minify: false,
+    logLevel: 'warning',
+    metafile: true,
+  });
 
-// SAYS it is CommonJS rather than relying on there being no package.json
-// above it. Node decides by the NEAREST package.json: in the zip there is
-// none, but run locally the repo root's "type": "module" wins and the bundle
-// dies on its first require() - a local test that fails for a reason the
-// deployed agent never meets, or the reverse. Shipped in the zip beside it.
-await writeFile(resolve(outdir, 'package.json'), JSON.stringify({ type: 'commonjs', engines: { node: '>=22' } }) + '\n');
+  // SAYS it is CommonJS rather than relying on there being no package.json
+  // above it. Node decides by the NEAREST package.json: in the zip there is
+  // none, but run locally the repo root's "type": "module" wins and the bundle
+  // dies on its first require() - a local test that fails for a reason the
+  // deployed agent never meets, or the reverse. Shipped in the zip beside it.
+  await writeFile(resolve(outdir, 'package.json'), JSON.stringify({ type: 'commonjs', engines: { node: '>=22' } }) + '\n');
 
-const bytes = Object.values(result.metafile.outputs)[0].bytes;
-console.log('built agent -> ' + resolve(outdir, 'agent.js') + ' (' + (bytes / 1024 / 1024).toFixed(1) + ' MB with sourcemap)');
+  const bytes = Object.values(result.metafile.outputs)[0].bytes;
+  console.log('built ' + name + ' -> ' + resolve(outdir, name + '.js') + ' (' + (bytes / 1024 / 1024).toFixed(1) + ' MB with sourcemap)');
+}

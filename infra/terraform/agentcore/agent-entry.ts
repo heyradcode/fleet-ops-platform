@@ -25,6 +25,9 @@ import { setModelInvoker } from '../../../src/aws/bedrock.ts';
 import { createClaudeInvoker } from '../../../src/aws/bedrock.sdk.ts';
 import { verifyTokenRs256 } from '../../../src/auth/cognito-jwt-verifier.ts';
 import { serveInvocation } from '../../../src/ai/agent-http.ts';
+import { createMcpToolProvider } from '../../../src/ai/mcp/client.ts';
+import { runtimeInvocationUrl } from '../../../src/aws/agentcore-url.ts';
+import type { Principal } from '../../../src/platform/types.ts';
 import { env } from '../../../src/platform/env.ts';
 import { log } from '../../../src/platform/logger.ts';
 
@@ -33,6 +36,10 @@ const issuer = env('COGNITO_ISSUER', '');
 const clientId = env('COGNITO_APP_CLIENT_ID', '');
 const model = env('AGENT_MODEL', 'offline');
 const fallbackModel = env('AGENT_FALLBACK_MODEL', '');
+// Set: every tool call goes to the MCP server runtime, as the caller.
+// Unset: the tools run in this process, as before - a valid deployment.
+const mcpRuntimeArn = env('MCP_RUNTIME_ARN', '');
+const mcpUrl = mcpRuntimeArn ? runtimeInvocationUrl(mcpRuntimeArn) : '';
 
 // The AWS SDKs read AWS_REGION. Terraform passes the region under its own
 // name rather than setting a variable the runtime may consider its own.
@@ -51,7 +58,25 @@ setTableStore(createSdkTableStore(table));
 if (model !== 'offline') {
   setModelInvoker(createClaudeInvoker({ model, fallbackModel: fallbackModel || undefined }));
 }
-log.info('agent: wired', { model, fallbackModel: fallbackModel || '(none)', runbooks: runbooks.length });
+log.info('agent: wired', { model, fallbackModel: fallbackModel || '(none)', runbooks: runbooks.length, tools: mcpUrl ? 'mcp' : 'in-process' });
+
+/**
+ * The MCP session per verified USER, so a person's follow-ups reach the MCP
+ * server's already-warm microVM instead of cold-starting one per question.
+ * Per user, not shared: an AgentCore session is a microVM, and two people's
+ * calls in one would be - harmlessly, since the server is stateless - but
+ * pointlessly serialised, each one's call answered -32005 while the other's runs.
+ */
+const mcpSessions = new Map<string, string>();
+const mcpTools = (principal: Principal, token: string) => {
+  const key = principal.tenantId + '|' + principal.sub;
+  return createMcpToolProvider({
+    url: mcpUrl,
+    token,
+    sessionId: mcpSessions.get(key),
+    onSession: (id) => mcpSessions.set(key, id),
+  });
+};
 
 /** Bounded, because an unauthenticated body is read before the handler runs. */
 const MAX_BODY_BYTES = 64 * 1024;
@@ -87,6 +112,7 @@ const server = createServer((req, res) => {
       .then((body) => serveInvocation({ authorization: req.headers.authorization, body }, {
         verify: (token) => verifyTokenRs256(token, { issuer, clientId }),
         model,
+        tools: mcpUrl ? mcpTools : undefined,
       }, res))
       .catch((err: unknown) => {
         // Only the body read can land here (too large, connection dropped).

@@ -214,4 +214,13 @@ export const keys = {
   incident: (p: Principal, openedAt: string, id: string) => ({
     PK: `TENANT#${p.tenantId}#INCIDENT`, SK: `${openedAt}#${id}`,
   }),
+  /**
+   * One tool call made through the MCP server. The partition is also the
+   * IAM boundary: the MCP runtime may PutItem only where PK matches
+   * `TENANT#*#AUDIT` (dynamodb:LeadingKeys), so it can append to the audit
+   * trail and overwrite nothing else.
+   */
+  audit: (p: Principal, at: string, id: string) => ({
+    PK: `TENANT#${p.tenantId}#AUDIT`, SK: `${at}#${id}`,
+  }),
 };

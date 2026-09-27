@@ -161,8 +161,9 @@ resource "aws_iam_role" "agent" {
   assume_role_policy = data.aws_iam_policy_document.trust.json
 }
 
-data "aws_iam_policy_document" "agent" {
-  # Logs and traces, where AgentCore sends the runtime's output.
+# Logs, traces and metrics - where AgentCore sends a runtime's output. Shared
+# by the agent and the MCP server (mcp.tf): the same service writes both.
+data "aws_iam_policy_document" "observability" {
   statement {
     sid = "Logs"
     actions = [
@@ -193,6 +194,10 @@ data "aws_iam_policy_document" "agent" {
       values   = ["bedrock-agentcore"]
     }
   }
+}
+
+data "aws_iam_policy_document" "agent" {
+  source_policy_documents = [data.aws_iam_policy_document.observability.json]
 
   # The tools READ the operational store, and that is all. No PutItem: the
   # agent is offered no write tool, and if a future change offered one, the
@@ -278,6 +283,8 @@ resource "aws_bedrockagentcore_agent_runtime" "agent" {
     NETPULSE_REGION       = var.region
     AGENT_MODEL           = var.agent_model
     AGENT_FALLBACK_MODEL  = var.agent_fallback_model
+    # Empty: tools in-process. The agent treats "" as unset.
+    MCP_RUNTIME_ARN = var.use_mcp_tools ? aws_bedrockagentcore_agent_runtime.mcp.agent_runtime_arn : ""
   }
 
   # A session's microVM stays up (memory billed) until it has been idle this

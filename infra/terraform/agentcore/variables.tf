@@ -31,3 +31,13 @@ variable "idle_session_timeout_seconds" {
   type        = number
   default     = 300
 }
+
+variable "use_mcp_tools" {
+  description = <<-EOT
+    true: the agent's tools run on the MCP runtime (mcp.tf), called with the
+    user's own token, and every call is audited. false: they run inside the
+    agent, as before - the MCP runtime still exists, but nothing calls it.
+  EOT
+  type        = bool
+  default     = true
+}

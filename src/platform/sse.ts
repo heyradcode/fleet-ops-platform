@@ -1,5 +1,6 @@
 /**
- * Server-sent events, parsed from a growing buffer.
+ * Server-sent events, parsed from a growing buffer. Shared by the board (the
+ * agent's streamed steps) and the agent (an MCP server may answer as a stream).
  *
  * A stream arrives in network chunks that do not respect event boundaries:
  * one chunk can hold two events, or half of one. So this takes everything

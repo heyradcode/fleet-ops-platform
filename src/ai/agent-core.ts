@@ -35,8 +35,8 @@
  */
 import { invokeModel, type ContentBlock, type Message, type ToolSpec } from '../aws/bedrock.ts';
 import type { Principal } from '../platform/types.ts';
-import { toolByName } from './tools.ts';
-import { canUseTool, checkInput, checkOutput } from './guardrails.ts';
+import { runTool } from './tool-provider.ts';
+import { checkInput, checkOutput } from './guardrails.ts';
 import { log } from '../platform/logger.ts';
 
 export type AgentTrace = {
@@ -58,7 +58,7 @@ export type AgentResult = {
    * on AgentCore, by which model, and which turn of the conversation. Set by
    * the CALLER of runAgent - the loop does not know where it is running.
    */
-  servedBy?: { host: 'tab' | 'agentcore'; model: string; turn: number };
+  servedBy?: { host: 'tab' | 'agentcore'; model: string; turn: number; tools?: 'in-process' | 'mcp' };
 };
 
 const SYSTEM_PROMPT = [
@@ -98,6 +98,12 @@ export async function runAgent(opts: {
    * spinner and then everything at once.
    */
   onStep?: (step: AgentTrace) => void;
+  /**
+   * How to run a tool. Omitted: in this process (tool-provider.ts). The
+   * deployed agent passes its MCP client's `call`, so every tool call
+   * crosses to the MCP server with the user's token.
+   */
+  callTool?: (name: string, input: Record<string, unknown>) => Promise<string>;
 }): Promise<AgentResult> {
   // The budget has to leave room for a FINAL ANSWER after the tools, so it is
   // one more than the number of tools the agent might reasonably chain. Set it
@@ -211,7 +217,7 @@ export async function runAgent(opts: {
     const results: ContentBlock[] = await Promise.all(
       toolUses.map(async (use) => {
         const toolStart = performance.now();
-        const content = await executeTool(use.name, use.input, opts.principal, opts.tools);
+        const content = await executeTool(use.name, use.input, opts.principal, opts.tools, opts.callTool);
         const isError = content.startsWith('ERROR:');
 
         record({
@@ -236,27 +242,28 @@ export async function runAgent(opts: {
   };
 }
 
-/** Tool dispatch with authorisation and error containment. */
+/**
+ * Tool dispatch. The OFFERED check is the loop's own; everything after it -
+ * the role check, the tool, error containment - is the provider's
+ * (tool-provider.ts `runTool`, which the MCP server also calls).
+ */
 async function executeTool(
   name: string,
   input: Record<string, unknown>,
   principal: Principal,
   offered: ToolSpec[],
+  callTool?: (name: string, input: Record<string, unknown>) => Promise<string>,
 ): Promise<string> {
   // Only what this run OFFERED. A model can name a tool it was never shown -
   // a real one more readily than the scripted one - and a read-only run whose
   // loop still dispatched openIncident would be read-only in the prompt only.
+  // Kept here even when the tools are behind MCP: defence in depth.
   if (!offered.some((t) => t.name === name)) return 'ERROR: tool "' + name + '" is not available in this session.';
-  const tool = toolByName(name);
-  if (!tool) return 'ERROR: no such tool "' + name + '".';
-
-  const verdict = canUseTool(principal, name);
-  if (!verdict.allowed) return 'ERROR: ' + verdict.reason;
-
   try {
-    return await tool.execute(input, principal);
+    return callTool ? await callTool(name, input) : await runTool(name, input, principal);
   } catch (err) {
-    // Never let a tool exception kill the turn - hand the model the problem.
+    // A provider that throws (an MCP server unreachable) is still a tool
+    // result to the model, never the end of the turn.
     return 'ERROR: ' + (err instanceof Error ? err.message : String(err));
   }
 }

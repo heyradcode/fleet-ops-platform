@@ -62,6 +62,16 @@ resource "aws_dynamodb_table" "main" {
     enabled = true
   }
 
+  # The MCP server's audit trail (src/ai/audit.ts) is the one thing in here
+  # that should AGE OUT: every tool call the agent made, kept 90 days and
+  # then deleted by DynamoDB for free. Items without `expiresAt` - everything
+  # else - are never touched. TTL deletion is lazy (typically within days),
+  # so readers filter on it too rather than trusting that expired rows are gone.
+  ttl {
+    attribute_name = "expiresAt"
+    enabled        = true
+  }
+
   deletion_protection_enabled = var.env == "prod"
 }
 

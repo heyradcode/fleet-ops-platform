@@ -4,7 +4,8 @@ Three parts:
 
 1. **How AI orchestration works now**: what the code does, file by file.
    This part describes shipped code.
-2. **How MCP would be added.** A design; none of it is built.
+2. **MCP.** Phase 1 (an MCP tool server on AgentCore Runtime, with an
+   audit trail) is built. Phase 2 (AgentCore Gateway) is a design.
 3. **How the knowledge graph would be built.** A design; none of it is built.
 
 The designs follow the proposal deck's AI architecture (slides 3, 5, 6, 11
@@ -228,7 +229,7 @@ so each rule stays visible and testable.
 
 ---
 
-## Part 2 — MCP integration (design)
+## Part 2 — MCP integration (phase 1 built)
 
 ### What the deck asks of MCP
 
@@ -303,17 +304,37 @@ So the order is:
 
    Until then, Gateway is an option, not a dependency.
 
-### What changes in the code
+### What was built (phase 1)
 
-| Piece | Change |
+Phase 1 is in the code. It is hand-rolled, with no MCP SDK. A tools-only
+server needs five methods (`initialize`, `ping`, `tools/list`, `tools/call`,
+and notifications), and the SDK would have been the first runtime dependency
+in `src/`, which the board also bundles.
+
+| Piece | What it does |
 |---|---|
-| `src/ai/tool-provider.ts` (new) | A `ToolProvider` interface: `list(principal)` and `call(name, input, principal)`. Two implementations: **in-process** (today's registry, used by the tab and the tests) and **MCP client** (used by the AgentCore agent). The loop depends on the interface, not on `toolByName`. |
-| `src/ai/agent-core.ts` | `executeTool` calls the provider. The "offered only" and role gates stay in the loop too: defence in depth, since the server enforces them as well. |
-| `src/ai/mcp-server.ts` (new, portable) | The MCP request handling: `tools/list` from `toolSpecsFor(principal, { readOnly })` and `tools/call` to the same `execute` functions, with tool errors returned as MCP `isError` results (error-as-data, as now). Built on `@modelcontextprotocol/sdk`'s low-level `Server` (JSON-schema tools, which the existing specs already are) in **stateless** mode: a fresh server per request, bound to that request's principal. |
-| `infra/terraform/agentcore/mcp-entry.ts` (new) | The Node socket on `:8000/mcp`: verify the token, build the principal, hand off to `mcp-server.ts`. The same split as `agent-entry.ts`. |
-| `src/ai/audit.ts` (new) | One record per tool call, written **after** the call: tenant, user `sub`, tool, a **hash** of the arguments (not the arguments, which can carry names), duration, outcome. Stored in the main table under `TENANT#t#AUDIT` with a TTL-bounded retention, which is a decision to make (90 days?). Read back through a tenant-scoped repository function and a board view. This closes the Milestone 1 "Audit Trail" gap. |
-| `infra/terraform/agentcore/mcp.tf` (new) | A second runtime (`server_protocol = "MCP"`), its own zip and role (GetItem/Query plus a PutItem on the audit partition only), the same JWT authorizer and header allowlist. |
-| Agent → MCP URL | `https://bedrock-agentcore.{region}.amazonaws.com/runtimes/{escaped MCP-runtime ARN}/invocations?qualifier=DEFAULT`, with `Authorization: Bearer <user token>`. The agent captures and reuses the returned `Mcp-Session-Id` for microVM stickiness. |
+| `src/ai/tool-provider.ts` | The seam. `ToolProvider { via, list(), call() }` has two implementations: `inProcessTools` (the tab and the tests) and the MCP client. `runTool` is the one place that does the role check, runs the tool and turns a throw into `ERROR:` text. The in-process provider and the MCP server both call it, so the two routes cannot disagree about what a tool does. |
+| `src/ai/agent-core.ts` | `runAgent` takes an optional `callTool`. The loop's own "only what was offered" gate stays, as defence in depth. A provider that throws (MCP server unreachable) becomes a tool result, not the end of the turn. |
+| `src/ai/mcp/server.ts` | `handleMcpMessage(msg, principal)`. `initialize` negotiates `2025-06-18` or `2025-03-26`. `tools/list` is `toolSpecsFor(principal, { readOnly: true })`: read tools only, whoever asks. For `tools/call`, a tool that was not listed is JSON-RPC `-32602` (and audited as `refused`), and a failing tool is `isError: true`. Stateless: the principal comes from each request's token. |
+| `src/ai/mcp/http.ts` | Streamable HTTP over the same `ResponseSink` as the agent. Order: authenticate, then check `Accept` (406), then `MCP-Protocol-Version` (400), and only then parse. Batches get 400, notifications get 202, requests get 200 JSON, and GET/DELETE get 405. |
+| `src/ai/mcp/client.ts` | `createMcpToolProvider({ url, token })`. It does the handshake once and lazily, reuses `Mcp-Session-Id`, and sends `MCP-Protocol-Version`. It reads JSON or SSE responses and retries `-32005` (which arrives as a 200). An `isError` result becomes `ERROR:` text. |
+| `src/ai/audit.ts` | One row per call under `TENANT#t#AUDIT`. The row holds `sub`, tool, a **sha256 of the canonical arguments** (never the arguments), outcome, ms and real time (`wallNow`), with `expiresAt` 90 days out (TTL in `auth/main-table.tf`). `recentAudit` is admin-only and tenant-scoped. An audit write failure is logged loudly and never fails the call. |
+| `src/ai/agent-invocation.ts` | `deps.tools(principal, token)` picks the provider. `servedBy.tools` says `mcp` or `in-process`, and the board shows "tools over MCP". |
+| `infra/terraform/agentcore/mcp-entry.ts` | Node, `:8000`, `/mcp` and `/ping`. |
+| `infra/terraform/agentcore/agent-entry.ts` | With `MCP_RUNTIME_ARN` set, the tools go over MCP with the caller's token. It keeps one MCP session per user, so follow-ups reuse a warm microVM. |
+| `infra/terraform/agentcore/mcp.tf` | The second runtime has `server_protocol = "MCP"` and the same authorizer and header allowlist. Its role can GetItem/Query, and PutItem **only** where `dynamodb:LeadingKeys` matches `TENANT#*#AUDIT`. `use_mcp_tools` (default true) switches the agent over. |
+| `scripts/build-agent.mjs` | Builds `agent.js` and `mcp.js` together, so the client and the server are always the same commit. |
+
+The test in `src/ai/mcp/mcp.test.ts` runs the whole route: agent, then MCP
+client, then HTTP, then server, then tool. A fake fetch serves `serveMcp`
+in-process. The test asserts three things:
+- the answer is identical to the in-process run;
+- every tool call is audited exactly once;
+- each call is audited **as the person who asked**.
+
+To deploy, run `pnpm build:agent`, then `terraform apply` in `auth/` (for the
+TTL) and in `agentcore/`. After that, an answer on the board reads
+"via AgentCore (…) · tools over MCP".
 
 ### Rules to carry into it
 

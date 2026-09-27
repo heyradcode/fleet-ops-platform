@@ -33,11 +33,8 @@
  */
 import type { Principal } from '../platform/types.ts';
 import { log } from '../platform/logger.ts';
-import { loadEstate } from '../geo/device-repository.ts';
-import { seedDemoWorld } from '../api/board-api.ts';
-import { knowledgeBase } from './knowledge-base.ts';
 import { runAgent, type AgentResult, type AgentTrace } from './agent-core.ts';
-import { toolSpecsFor } from './tools.ts';
+import { inProcessTools, type ToolProvider } from './tool-provider.ts';
 import { redactPii } from './guardrails.ts';
 
 export type InvocationRequest = {
@@ -56,17 +53,17 @@ export type InvocationDeps = {
   model?: string;
   /** Each trace step as it happens - the entry point streams them as SSE. */
   onStep?: (step: AgentTrace) => void;
+  /**
+   * Where the tools are, for THIS caller. Omitted: in this process. Deployed
+   * with MCP_RUNTIME_ARN set: an MCP client that presents `token` - the
+   * caller's own, already verified - so the MCP server scopes every tool
+   * to the same person, and never to the agent.
+   */
+  tools?: (principal: Principal, token: string) => ToolProvider;
 };
 
 /** A question longer than this is not a question an operator typed. */
 export const MAX_QUESTION_CHARS = 2000;
-
-/**
- * The knowledge base is per microVM and filled once per tenant. A session's
- * microVM serves many invocations; re-ingesting every time would duplicate
- * every chunk and double every retrieval score.
- */
-const ingested = new Set<string>();
 
 /** How much of a conversation the agent carries into the next question. */
 export const HISTORY_TURNS = 4;
@@ -87,9 +84,10 @@ export async function handleAgentInvocation(req: InvocationRequest, deps: Invoca
     return { status: 401, body: { error: 'Unauthorized' } };
   }
 
+  const token = header.slice('Bearer '.length);
   let principal: Principal;
   try {
-    principal = await deps.verify(header.slice('Bearer '.length));
+    principal = await deps.verify(token);
   } catch (err) {
     log.warn('agent: token rejected', { reason: err instanceof Error ? err.message : String(err) });
     return { status: 401, body: { error: 'Unauthorized' } };
@@ -110,15 +108,9 @@ export async function handleAgentInvocation(req: InvocationRequest, deps: Invoca
   }
 
   try {
-    // The world the tools compute in - device ids, scenario ids - seeded as
-    // the board and the seed script do, so the agent and the board describe
-    // the same estate. Per invocation, for the reason board-api.ts gives.
-    seedDemoWorld();
-    loadEstate(principal.tenantId);
-    if (!ingested.has(principal.tenantId)) {
-      await knowledgeBase.ingestRunbooks(principal.tenantId);
-      ingested.add(principal.tenantId);
-    }
+    // Read-only whichever side the tools run on: the in-process provider is
+    // asked for read tools, and the MCP server only HAS read tools.
+    const provider = deps.tools ? deps.tools(principal, token) : inProcessTools(principal, { readOnly: true });
 
     const key = conversationKey(principal);
     if (fresh) conversations.delete(key);
@@ -129,11 +121,12 @@ export async function handleAgentInvocation(req: InvocationRequest, deps: Invoca
       // The CALLER's principal - never a privileged one. A Dallas operator's
       // assistant sees Dallas, because the tools derive keys from this.
       principal,
-      tools: toolSpecsFor(principal, { readOnly: true }),
+      tools: await provider.list(),
+      callTool: provider.call,
       history,
       onStep: deps.onStep,
     });
-    result.servedBy = { host: 'agentcore', model: deps.model ?? 'offline', turn: history.length + 1 };
+    result.servedBy = { host: 'agentcore', model: deps.model ?? 'offline', turn: history.length + 1, tools: provider.via };
 
     // Only answers that passed the output guardrail become context - a
     // withheld answer fed back in would be the model reading what it was
@@ -146,7 +139,7 @@ export async function handleAgentInvocation(req: InvocationRequest, deps: Invoca
       }].slice(-HISTORY_TURNS));
     }
     log.info('agent: answered', {
-      tenant: principal.tenantId, stoppedBecause: result.stoppedBecause,
+      tenant: principal.tenantId, stoppedBecause: result.stoppedBecause, tools: provider.via,
       modelCalls: result.usage.modelCalls, inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens,
     });
     return { status: 200, body: result };

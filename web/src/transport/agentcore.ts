@@ -19,7 +19,8 @@
  * world deliberately seeds and would hand every tab the same session.
  */
 import type { AgentResult, AgentTrace } from './index.ts';
-import { parseSse } from './sse.ts';
+import { parseSse } from '../../../src/platform/sse.ts';
+import { runtimeInvocationUrl } from '../../../src/aws/agentcore-url.ts';
 import { BoardApiError } from './api.ts';
 
 export function agentRuntimeArn(): string | undefined {
@@ -27,15 +28,8 @@ export function agentRuntimeArn(): string | undefined {
   return arn || undefined;
 }
 
-/** The runtime's invocation URL. The region is the ARN's fourth field. */
-export function invocationUrl(arn: string): string {
-  const region = arn.split(':')[3];
-  if (!arn.startsWith('arn:aws:bedrock-agentcore:') || !region) {
-    throw new Error('VITE_AGENT_RUNTIME_ARN is not an AgentCore runtime ARN: ' + arn);
-  }
-  return 'https://bedrock-agentcore.' + region + '.amazonaws.com/runtimes/' +
-    encodeURIComponent(arn) + '/invocations?qualifier=DEFAULT';
-}
+/** The runtime's invocation URL - see src/aws/agentcore-url.ts. */
+export const invocationUrl = runtimeInvocationUrl;
 
 /** 48 hex characters: AgentCore wants a session id of at least 33. */
 function newSessionId(): string {

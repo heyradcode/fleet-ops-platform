@@ -78,7 +78,9 @@ Two artefact types:
 
 This repository uses **direct code deployment**, so no Docker is involved.
 `pnpm build:agent` produces one bundled `agent.js`, and Terraform zips it and
-uploads it.
+uploads it. It also builds `mcp.js`, the second runtime: the agent's tools
+served over MCP, called with the user's own token and audited. That runtime
+is described in `docs/12-ai-orchestration-mcp-knowledge-graph.md`, Part 2.
 
 ### Sessions and microVMs
 
