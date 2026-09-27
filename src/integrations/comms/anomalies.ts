@@ -145,8 +145,8 @@ const basePk = (p: Principal) => pk(p, 'BASELINE');
 const key = (pt: { subject: CommsSubject; metric: MetricName; source: SignalSource }, how: number) =>
   pt.subject.kind + ':' + pt.subject.id + '|' + pt.metric + '|' + pt.source + '|' + how;
 
-function readBaseline(principal: Principal, k: string): Baseline | undefined {
-  const item = mainTable.get(basePk(principal), k);
+async function readBaseline(principal: Principal, k: string): Promise<Baseline | undefined> {
+  const item = await mainTable.get(basePk(principal), k);
   return item ? { n: Number(item.n), mean: Number(item.mean), m2: Number(item.m2) } : undefined;
 }
 
@@ -188,9 +188,9 @@ function explain(p: MetricPoint, normal: CommsAnomaly['normal'], direction: 'abo
  * in. `learnExcept` names subjects with an open incident: their values are
  * not learned from, whatever they are.
  */
-export function detectAndLearn(
+export async function detectAndLearn(
   principal: Principal, at: number, timeZone: string, points: MetricPoint[], learnExcept: Set<string>,
-): { anomalies: CommsAnomaly[]; learned: number; insufficient: number } {
+): Promise<{ anomalies: CommsAnomaly[]; learned: number; insufficient: number }> {
   const how = hourOfWeek(at, timeZone);
   const when = describeHour(how);
   const anomalies: CommsAnomaly[] = [];
@@ -199,7 +199,7 @@ export function detectAndLearn(
 
   for (const p of points) {
     const k = key(p, how);
-    const b = readBaseline(principal, k);
+    const b = await readBaseline(principal, k);
     let anomalous = false;
     if (!b || b.n < MIN_HISTORY) {
       insufficient++;
@@ -219,7 +219,7 @@ export function detectAndLearn(
     }
     const subjectKey = p.subject.kind + ':' + p.subject.id;
     if (!anomalous && !learnExcept.has(subjectKey)) {
-      mainTable.put({ PK: basePk(principal), SK: k, entity: 'Baseline', ...fold(b, p.value) });
+      await mainTable.put({ PK: basePk(principal), SK: k, entity: 'Baseline', ...fold(b, p.value) });
       learned++;
     }
   }
@@ -228,11 +228,13 @@ export function detectAndLearn(
 }
 
 /** Learn without judging - for backfill, where the history is assumed normal. */
-export function learnOnly(principal: Principal, at: number, timeZone: string, points: MetricPoint[]): number {
+export async function learnOnly(principal: Principal, at: number, timeZone: string, points: MetricPoint[]): Promise<number> {
   const how = hourOfWeek(at, timeZone);
+  // Read-fold-write, one point at a time: two points can share a key, and the
+  // second must fold into the first's result, not race it from the old one.
   for (const p of points) {
     const k = key(p, how);
-    mainTable.put({ PK: basePk(principal), SK: k, entity: 'Baseline', ...fold(readBaseline(principal, k), p.value) });
+    await mainTable.put({ PK: basePk(principal), SK: k, entity: 'Baseline', ...fold(await readBaseline(principal, k), p.value) });
   }
   return points.length;
 }
@@ -256,17 +258,17 @@ export async function backfillBaselines(
   let points = 0;
   for (let w = weeks; w >= 1; w--) {
     const past = at - w * 7 * 24 * 60 * 60 * 1000;
-    points += learnOnly(principal, past, timeZone, metricsFromSignals(await signalsAt(past)));
+    points += await learnOnly(principal, past, timeZone, metricsFromSignals(await signalsAt(past)));
   }
   return points;
 }
 
 /** The latest poll's anomalies, stored as one item: they describe NOW. */
-export function putAnomalies(principal: Principal, asOf: string, anomalies: CommsAnomaly[]): void {
-  mainTable.put({ PK: pk(principal, 'COMMS'), SK: 'ANOMALIES#LATEST', entity: 'Anomalies', asOf, anomalies });
+export async function putAnomalies(principal: Principal, asOf: string, anomalies: CommsAnomaly[]): Promise<void> {
+  await mainTable.put({ PK: pk(principal, 'COMMS'), SK: 'ANOMALIES#LATEST', entity: 'Anomalies', asOf, anomalies });
 }
 
-export function latestAnomalies(principal: Principal): { asOf: string; anomalies: CommsAnomaly[] } | undefined {
-  const item = mainTable.get(pk(principal, 'COMMS'), 'ANOMALIES#LATEST');
+export async function latestAnomalies(principal: Principal): Promise<{ asOf: string; anomalies: CommsAnomaly[] } | undefined> {
+  const item = await mainTable.get(pk(principal, 'COMMS'), 'ANOMALIES#LATEST');
   return item ? { asOf: String(item.asOf), anomalies: item.anomalies as CommsAnomaly[] } : undefined;
 }

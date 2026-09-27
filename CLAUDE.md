@@ -29,13 +29,14 @@ pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180
 pnpm web:build                  # typechecks web/ AND builds it
 pnpm mock                       # mock Teams/Genesys/Webex APIs, http://127.0.0.1:5190
-pnpm verify                     # all four checks, in order
+pnpm check:promises             # no un-awaited or misused promise, backend and web/
+pnpm verify                     # all five checks, in order
 ```
 
 `--only=` takes: `auth ingest scenarios data events graphql rest geo ai comms solarwinds brief`.
 Note `pnpm start --only=x` needs no `--` separator; npm did.
 
-`pnpm verify` runs typecheck, tests, the demo and the web build in that order.
+`pnpm verify` runs typecheck, the promise check, tests, the demo and the web build in that order.
 Each catches something the others do not - and none of them catches everything,
 which is why the list ends with actually reading the demo output.
 
@@ -366,6 +367,18 @@ network. Nothing real belongs in this repo.
   watermark. A 410 means the token expired: resync, serving the old copy.
   Stored per user: a per-tenant salted hash of the address and a facility
   code - never the address.
+- **The store is ASYNC, and a missing `await` is invisible to every test.**
+  `mainTable` forwards to a `TableStore` (`aws/dynamodb.ts`) - in memory by
+  default, DynamoDB when a Lambda entry point calls `setTableStore`. The
+  in-memory table writes BEFORE its promise returns, so an un-awaited put
+  passes tests, demo and build, and against DynamoDB is a lost write or a
+  read racing it. `tsc` allows a discarded promise; `pnpm check:promises`
+  does not, nor a promise used as a condition, concatenated into a string,
+  or passed where anything is accepted - `JSON.stringify(promise)` is `"{}"`,
+  which would have made three "nothing personal is stored" tests pass
+  vacuously once the store went async. `memoryTable` is for what only the
+  fake has (size, stats, Scan); production code never touches it. Write first, delete last:
+  a crash between a delete and its replacement put loses the record.
 - **Cognito custom attributes are a one-way door.** They cannot be renamed or
   removed once the pool exists, and there is a cap of 50.
 - **Shared thresholds live in one place.** `UTILISATION_THRESHOLDS` in

@@ -174,11 +174,11 @@ function prepareAgent(): Promise<void> {
     const estate = loadEstate(principal.tenantId);
     const inventory = getInventory(principal);
 
-    putDeviceStates(principal, allDeviceStates(principal));
+    await putDeviceStates(principal, allDeviceStates(principal));
 
     for (const scenario of buildScenarios(estate)) {
       const pushed = runScenarioFeeds(principal, inventory, scenario.feeds, SCENARIO_AT).observations;
-      putObservations(principal, resolveLocations(principal, collapseDuplicates(pushed)));
+      await putObservations(principal, resolveLocations(principal, collapseDuplicates(pushed)));
     }
 
     await knowledgeBase.ingestRunbooks(principal.tenantId);
@@ -294,17 +294,27 @@ export const inProcessTransport: Transport = {
     // The CALLER polls - a tenant-wide principal, which is exactly who
     // commsVisibleTo admits - so there is no privileged principal involved.
     await ensureCommsPolled(principal);
-    return {
-      workforce: commsWorkforce(principal)!,
-      incidents: commsIncidents(principal),
-      heldBack: commsAlarms(principal).filter((a) => !a.corroborated),
-      health: loadHealth(principal),
-      resolved: commsResolvedIncidents(principal),
-      phones: commsPhones(principal),
+    const [workforce, incidents, alarms, health, resolved, phones, brief, anomalies] = await Promise.all([
+      commsWorkforce(principal),
+      commsIncidents(principal),
+      commsAlarms(principal),
+      loadHealth(principal),
+      commsResolvedIncidents(principal),
+      commsPhones(principal),
       // The network incidents the board's network view shows, so the brief and
       // the board cannot disagree about what is open.
-      brief: await buildDailyBrief(principal, now(), { networkIncidents: runScenarios(analyst()).incidents }),
-      anomalies: latestAnomalies(principal)?.anomalies ?? [],
+      buildDailyBrief(principal, now(), { networkIncidents: runScenarios(analyst()).incidents }),
+      latestAnomalies(principal),
+    ]);
+    return {
+      workforce: workforce!,
+      incidents,
+      heldBack: alarms.filter((a) => !a.corroborated),
+      health,
+      resolved,
+      phones,
+      brief,
+      anomalies: anomalies?.anomalies ?? [],
     } satisfies CommsSnapshot;
   },
 

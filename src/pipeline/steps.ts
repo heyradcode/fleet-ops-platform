@@ -838,10 +838,17 @@ export async function publish(
   alarms: Alarm[],
   incidents: Incident[],
 ) {
-  putObservations(principal, observations);
-  putDeviceStates(principal, devices);
-  putAlarms(principal, alarms);
-  for (const incident of incidents) putIncident(principal, incident);
+  // AWAITED, all of it. Until the store went async these calls returned
+  // nothing to wait for, and the in-memory table wrote before returning -
+  // so the ordering this function exists for held by accident. Against a
+  // real table an un-awaited put is still in flight when the watermark moves
+  // and the event goes out. Different partitions, so in parallel is safe.
+  await Promise.all([
+    putObservations(principal, observations),
+    putDeviceStates(principal, devices),
+    putAlarms(principal, alarms),
+    ...incidents.map((incident) => putIncident(principal, incident)),
+  ]);
 
   // AFTER the write, never before.
   //

@@ -162,7 +162,7 @@ test('end to end: the poll stores incidents with their Helix context', async () 
     roles: ['admin'], scope: { kind: 'tenant' }, identityProvider: 'cognito',
   };
   await runCommsPoll(principal, client(), config(), now());
-  const stored = commsIncidents(principal);
+  const stored = await commsIncidents(principal);
   const houston = stored.find((i) => i.subject.id === TEAMS_PLANTED.degradedFacility)!;
   assert.deepEqual(houston.context?.changes.map((c) => c.id), [HELIX_PLANTED.houstonChange]);
   // Context never changes WHETHER something paged: still exactly the four planted.

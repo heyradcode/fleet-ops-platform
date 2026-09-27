@@ -63,7 +63,7 @@ export async function backfillCommsBaselines(
 ): Promise<number> {
   assertSameTenant(principal, config.tenantId);
   if (config.sources.includes('teams')) await syncEntraDirectory(principal, client);
-  const report = await buildWorkforce(client, config, loadEntraDirectory(principal));
+  const report = await buildWorkforce(client, config, await loadEntraDirectory(principal));
   const read = async (past: number) => (await collectSignals(client, config, report, past)).signals;
   return backfillBaselines(principal, at, config.timeZone ?? 'UTC', weeks, history(read));
 }
@@ -88,7 +88,7 @@ export async function runCommsPoll(
   if (config.sources.includes('teams')) {
     try { directorySync = await syncEntraDirectory(principal, client); } catch (err) { directoryError = errorLine(err); }
   }
-  const report = await buildWorkforce(client, config, loadEntraDirectory(principal));
+  const report = await buildWorkforce(client, config, await loadEntraDirectory(principal));
   const collected = await collectSignals(client, config, report, at);
   const alarms = evaluateSignals(collected.signals, {
     unavailable: Object.keys(collected.errors) as SignalSource[],
@@ -100,16 +100,16 @@ export async function runCommsPoll(
   // Continuity: this window's incidents folded into the open set. Resolution
   // needs a HEALTHY MEASUREMENT - see lifecycle.ts - so the signals and the
   // unavailable sources go in, not just the incidents.
-  const lifecycle = reconcileIncidents(principal, at, helix.incidents, collected.signals, unavailable);
+  const lifecycle = await reconcileIncidents(principal, at, helix.incidents, collected.signals, unavailable);
   const incidents = lifecycle.open;
 
   // Anomalies AFTER the lifecycle, so the "never learn an outage" rule sees
   // this poll's open set: a subject with an open incident is judged but not
   // learned from.
-  const { anomalies } = detectAndLearn(principal, at, config.timeZone ?? 'UTC',
+  const { anomalies } = await detectAndLearn(principal, at, config.timeZone ?? 'UTC',
     metricsFromSignals(collected.signals),
     new Set(incidents.map((i) => i.subject.kind + ':' + i.subject.id)));
-  putAnomalies(principal, nowIso(), anomalies);
+  await putAnomalies(principal, nowIso(), anomalies);
   const workforce = summariseWorkforce(report, nowIso());
 
   // Kurmi: the Cisco phones. Independent of everything above - devices, not
@@ -119,18 +119,21 @@ export async function runCommsPoll(
   if (config.kurmi) {
     try {
       phones = await pullPhoneInventory(client, config, nowIso());
-      putPhoneInventory(principal, phones);
     } catch (err) {
       kurmiError = errorLine(err);
     }
+    // OUTSIDE the try. Kurmi's catch turns any error into "Kurmi is down";
+    // our own store failing to write is not Kurmi's fault, and reporting it
+    // as a vendor outage would send someone to the wrong team.
+    if (phones) await putPhoneInventory(principal, phones);
   }
 
-  const health = recordHealth(principal, at, observeRun({
+  const health = await recordHealth(principal, at, observeRun({
     config, directorySync, directoryError, report,
     signalErrors: collected.errors, helixError: helix.error, kurmiError, phones,
   }), dataQuality(report, collected.unmappedBandwidthPeers, phones, collected.unmappedStarlinkTerminals));
 
-  putCommsRun(principal, { workforce, alarms });
+  await putCommsRun(principal, { workforce, alarms });
   return {
     report, directorySync, workforce, signals: collected.signals, alarms, incidents,
     resolved: lifecycle.resolved, reopened: lifecycle.reopened, phones, anomalies, health,

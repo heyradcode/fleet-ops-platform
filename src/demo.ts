@@ -36,7 +36,7 @@ import { rawBucket, historyBucket, flowBucket } from './aws/s3.ts';
 import { observationStream } from './aws/kinesis.ts';
 import { buildScenarios } from './data/scenarios.ts';
 import { US_SOUTH_REGION } from './data/estate.ts';
-import { mainTable } from './aws/dynamodb.ts';
+import { memoryTable } from './aws/dynamodb.ts';
 import { bus } from './aws/eventbridge.ts';
 
 import {
@@ -117,11 +117,11 @@ async function main() {
   if (wants('auth')) await sectionAuth();
   if (wants('ingest')) await sectionIngest();
   if (wants('scenarios')) await sectionScenarios();
-  if (wants('data')) { await ensureData(); sectionData(); }
+  if (wants('data')) { await ensureData(); await sectionData(); }
   if (wants('events')) await sectionEvents();
   if (wants('graphql')) { await ensureData(); await sectionGraphql(); }
   if (wants('rest')) { await ensureData(); await sectionRest(); }
-  if (wants('geo')) { await ensureData(); sectionGeo(); }
+  if (wants('geo')) { await ensureData(); await sectionGeo(); }
   if (wants('ai')) { await ensureData(); await sectionAi(); }
   if (wants('comms')) await sectionComms();
   // LAST, deliberately: it loads the HHS tenant's estate, and loading another
@@ -325,7 +325,7 @@ async function sectionIngest() {
 
   note('');
   note('The hot/cold split:');
-  write('   DynamoDB ' + String(mainTable.size()).padStart(6) + ' items   ' +
+  write('   DynamoDB ' + String(memoryTable.size()).padStart(6) + ' items   ' +
     dim('one per device, OVERWRITTEN') + '\n');
   write('   S3       ' + String(historyBucket.listKeys().length).padStart(6) + ' objects  ' +
     dim('observation history, append-only') + '\n');
@@ -407,7 +407,7 @@ async function sectionScenarios() {
 // 4. DATA
 // ===========================================================================
 
-function sectionData() {
+async function sectionData() {
   section('4', 'Data: single-table design and the access patterns it serves');
 
   const sites = allSites(operator);
@@ -432,19 +432,19 @@ function sectionData() {
 
   note('');
   note('Access patterns, each ONE Query:');
-  const before = mainTable.stats.itemsScanned;
-  const recent = recentObservations(operator, 5);
+  const before = memoryTable.stats.itemsScanned;
+  const recent = await recentObservations(operator, 5);
   write('   newest observations       ' + recent.length + ' items, ' +
-    (mainTable.stats.itemsScanned - before) + ' scanned\n');
+    (memoryTable.stats.itemsScanned - before) + ' scanned\n');
 
   const sample = devices[0];
-  const forDevice = observationsForDevice(operator, sample.deviceId);
+  const forDevice = await observationsForDevice(operator, sample.deviceId);
   write('   everything about one box  ' + forDevice.length + ' items ' +
     dim('(GSI1, crosses feeds AND planes)') + '\n');
 
   note('');
   note('What a Scan would cost, for contrast:');
-  const scanned = mainTable.scanEverything().length;
+  const scanned = memoryTable.scanEverything().length;
   write('   ' + scanned + ' items read to answer any question at all\n');
 }
 
@@ -656,7 +656,7 @@ async function sectionRest() {
 // 8. GEO
 // ===========================================================================
 
-function sectionGeo() {
+async function sectionGeo() {
   section('8', 'Spatial: sites on a map, devices in a graph');
 
   note('Point-in-polygon against the US South service region:');
@@ -691,7 +691,7 @@ function sectionGeo() {
   note('');
   note('GeoJSON -> the board:');
   const devices = allDeviceStates(operator);
-  const byDevice = new Map(devices.map((d) => [d.deviceId, observationsForDevice(operator, d.deviceId)]));
+  const byDevice = new Map(await Promise.all(devices.map(async (d) => [d.deviceId, await observationsForDevice(operator, d.deviceId)] as const)));
   const fc = devicesToFeatureCollection(devices, byDevice);
   write('   ' + fc.features.length + ' features, bbox ' +
     fc.bbox?.map((n) => n.toFixed(1)).join(', ') + '\n');
@@ -1045,7 +1045,7 @@ async function sectionSolarwinds() {
   const networkIncidents = detectIncidents(hhs, alarms);
   // Stored as the ingest pipeline stores them - the daily brief reads the
   // repository, which is what production does.
-  for (const i of networkIncidents) putIncident(hhs, i);
+  for (const i of networkIncidents) await putIncident(hhs, i);
   for (const i of networkIncidents) {
     write('   ' + '\x1b[31mINCIDENT\x1b[0m  ' + i.title + '  ' + dim('root cause ' + i.rootCauseDeviceId) + '\n');
   }
@@ -1095,7 +1095,7 @@ async function sectionBrief() {
 
 async function ensureData() {
   ensurePrincipals();
-  if (mainTable.size() > 0) return;
+  if (memoryTable.size() > 0) return;
 
   const since = new Date(now() - 6 * 3600_000).toISOString();
   await buildIngestWorkflow(operator, since).start({ tenantId: operator.tenantId, since });
@@ -1117,7 +1117,7 @@ function ensurePrincipals() {
 function summary() {
   section('', 'Run summary');
   write(
-    '   DynamoDB : ' + mainTable.size() + ' items, ' + mainTable.stats.queries + ' queries\n' +
+    '   DynamoDB : ' + memoryTable.size() + ' items, ' + memoryTable.stats.queries + ' queries\n' +
     '   S3       : ' + rawBucket.listKeys().length + ' raw, ' +
       historyBucket.listKeys().length + ' history, ' + flowBucket.listKeys().length + ' flow objects\n' +
     '   Events   : ' + bus.published + ' published, ' + bus.deadLetterQueue.length + ' dead-lettered\n' +

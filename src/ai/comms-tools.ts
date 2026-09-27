@@ -48,13 +48,13 @@ export const COMMS_TOOLS: Tool[] = [
         'phones, calls, call quality, queues, or why something did or did not page.',
       input_schema: { type: 'object', properties: {}, required: [] },
     },
-    execute(_input, principal) {
+    async execute(_input, principal) {
       // Worst first. The store returns them in key order, which is a hash; a
       // reader - model or human - should meet the critical one before the rest.
       const rank = { critical: 0, warning: 1, info: 2, ok: 3 } as const;
-      const incidents = commsIncidents(principal)
+      const incidents = (await commsIncidents(principal))
         .sort((a, b) => rank[a.severity] - rank[b.severity] || a.title.localeCompare(b.title));
-      const held = commsAlarms(principal).filter((a) => !a.corroborated)
+      const held = (await commsAlarms(principal)).filter((a) => !a.corroborated)
         .sort((a, b) => rank[a.severity] - rank[b.severity] || a.subject.name.localeCompare(b.subject.name));
       if (incidents.length === 0 && held.length === 0) {
         return 'No comms incidents and no held-back comms alarms in the latest poll.';
@@ -86,7 +86,7 @@ export const COMMS_TOOLS: Tool[] = [
         lines.push('HELD BACK [' + a.severity + '] ' + a.subject.name + ' ' + a.kind + ' - ' + a.heldBack);
         for (const e of a.evidence) lines.push('  evidence: ' + e);
       }
-      const resolved = commsResolvedIncidents(principal, 5);
+      const resolved = await commsResolvedIncidents(principal, 5);
       for (const r of resolved) {
         lines.push('RESOLVED ' + r.incidentId + ' ' + r.title + ' - open ' + r.openedAt + ' to ' + r.resolvedAt);
       }
@@ -114,8 +114,8 @@ export const COMMS_TOOLS: Tool[] = [
         required: [],
       },
     },
-    execute(input, principal) {
-      const w = commsWorkforce(principal);
+    async execute(input, principal) {
+      const w = await commsWorkforce(principal);
       if (!w) return 'No workforce poll has completed for this tenant yet.';
 
       const facility = input.facility === undefined ? undefined : String(input.facility);
@@ -125,7 +125,7 @@ export const COMMS_TOOLS: Tool[] = [
           return 'ERROR: unknown facility "' + facility + '". Known facilities: ' +
             w.byFacility.map((f) => f.code).join(', ') + '.';
         }
-        const phonesHere = commsPhones(principal)?.byFacility.find((f) => f.code === facility)?.count;
+        const phonesHere = (await commsPhones(principal))?.byFacility.find((f) => f.code === facility)?.count;
         return 'Active voice users at LC=' + facility + ' (as of ' + w.asOf + '): ' +
           COMMS_SOURCES.map((s) => s + ' ' + (row.counts[s] ?? 0)).join(', ') + '.' +
           (phonesHere !== undefined ? ' Cisco desk phones there (Kurmi): ' + phonesHere + '.' : '');
@@ -152,7 +152,7 @@ export const COMMS_TOOLS: Tool[] = [
       const unplaced = Object.entries(w.unplacedByReason).map(([k, v]) => k + ' ' + v).join(', ');
       if (unplaced) lines.push('  not placed at a facility: ' + unplaced);
       // Devices, not people - reported beside the workforce, never added to it.
-      const phones = commsPhones(principal);
+      const phones = await commsPhones(principal);
       if (phones) {
         lines.push('Cisco desk phones (Kurmi, devices not people)' + (phones.truncated ? ' - INCOMPLETE' : '') + ': ' +
           phones.total + ' enabled - ' +
@@ -175,8 +175,8 @@ export const COMMS_TOOLS: Tool[] = [
         'wrong" - a quiet board can mean a feed is down.',
       input_schema: { type: 'object', properties: {}, required: [] },
     },
-    execute(_input, principal) {
-      const h = loadHealth(principal);
+    async execute(_input, principal) {
+      const h = await loadHealth(principal);
       if (!h) return 'No comms poll has recorded integration health yet.';
       const lines = ['Integration health as of ' + h.asOf + ':'];
       for (const s of h.sources) lines.push('  ' + describeSource(s));
@@ -219,15 +219,15 @@ export const COMMS_TOOLS: Tool[] = [
         'put an incident in context. Anomalies are early warnings and context, never alarms.',
       input_schema: { type: 'object', properties: {}, required: [] },
     },
-    execute(_input, principal) {
+    async execute(_input, principal) {
       requireTenantScope(principal);
-      const latest = latestAnomalies(principal);
+      const latest = await latestAnomalies(principal);
       if (!latest) return 'No comms poll has recorded anomalies yet.';
       if (latest.anomalies.length === 0) {
         return 'Nothing unusual as of ' + latest.asOf + ' - or not enough history yet: a bucket needs ' +
           'four weeks of the same hour before it gives a verdict.';
       }
-      const open = new Set(commsIncidents(principal).map((i) => i.subject.kind + ':' + i.subject.id));
+      const open = new Set((await commsIncidents(principal)).map((i) => i.subject.kind + ':' + i.subject.id));
       const early = latest.anomalies.filter((a) => !open.has(a.subject.kind + ':' + a.subject.id));
       const context = latest.anomalies.filter((a) => open.has(a.subject.kind + ':' + a.subject.id));
       return [

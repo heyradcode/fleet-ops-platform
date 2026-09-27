@@ -51,21 +51,21 @@ beforeEach(() => {
 test('poll: incidents, held-back alarms and the workforce split land in the store', async () => {
   const result = await poll();
   const admin = principal();
-  assert.equal(commsIncidents(admin).length, result.incidents.length);
+  assert.equal((await commsIncidents(admin)).length, result.incidents.length);
   assert.equal(result.incidents.length, 4);
-  assert.equal(commsAlarms(admin).length, result.alarms.length);
-  assert.ok(commsWorkforce(admin)!.byFacility.length > 0);
+  assert.equal((await commsAlarms(admin)).length, result.alarms.length);
+  assert.ok((await commsWorkforce(admin))!.byFacility.length > 0);
 });
 
 test('poll: a re-poll of the same window overwrites, it does not duplicate', async () => {
   await poll();
   await poll();
-  assert.equal(commsIncidents(principal()).length, 4);
+  assert.equal((await commsIncidents(principal())).length, 4);
 });
 
 test('store: no person-level data is persisted - counts, not names', async () => {
   await poll();
-  const stored = mainTable.query({ pk: 'TENANT#' + HHS_DEMO_TENANT + '#COMMS' });
+  const stored = await mainTable.query({ pk: 'TENANT#' + HHS_DEMO_TENANT + '#COMMS' });
   const text = JSON.stringify(stored);
   assert.ok(!text.includes('@'), 'no email address in the stored workforce');
   for (const p of directory().people.slice(0, 20)) assert.ok(!text.includes(p.lastName), p.lastName);
@@ -74,14 +74,14 @@ test('store: no person-level data is persisted - counts, not names', async () =>
 test('scope: a site-scoped caller can neither read comms data nor be offered the tools', async () => {
   await poll();
   const siteOperator = principal({ roles: ['operator'], scope: { kind: 'site', siteId: 'hou-01' } });
-  assert.throws(() => commsIncidents(siteOperator), OutOfScopeError);
+  await assert.rejects(commsIncidents(siteOperator), OutOfScopeError);
   assert.deepEqual(commsToolsFor(siteOperator), []);
 });
 
 test('tenancy: another tenant sees nothing, and cannot poll with this tenant\'s client', async () => {
   await poll();
   const other = principal({ tenantId: 'acme-networks' });
-  assert.deepEqual(commsIncidents(other), []);
+  assert.deepEqual(await commsIncidents(other), []);
   assert.deepEqual(commsToolsFor(other), [], 'acme runs no comms sources');
   assert.deepEqual(toolSpecsFor(other, { readOnly: false }), TOOL_SPECS, 'network callers are unchanged');
 

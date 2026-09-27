@@ -41,11 +41,11 @@ function device(deviceId: string, siteId: string): DeviceState {
     updatedAt: '2026-09-08T14:30:00.000Z',
   };
 }
-test('a tenant cannot read another tenant observations', () => {
-  putObservations(acme, [reading('acme', 'acme-1')]);
-  putObservations(globex, [reading('globex', 'globex-1')]);
-  const acmeSees = recentObservations(acme, 100).map((t) => t.observationId);
-  const globexSees = recentObservations(globex, 100).map((t) => t.observationId);
+test('a tenant cannot read another tenant observations', async () => {
+  await putObservations(acme, [reading('acme', 'acme-1')]);
+  await putObservations(globex, [reading('globex', 'globex-1')]);
+  const acmeSees = (await recentObservations(acme, 100)).map((t) => t.observationId);
+  const globexSees = (await recentObservations(globex, 100)).map((t) => t.observationId);
 
   assert.ok(acmeSees.includes('acme-1'));
   assert.ok(!acmeSees.includes('globex-1'));

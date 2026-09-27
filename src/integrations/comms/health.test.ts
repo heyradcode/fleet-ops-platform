@@ -135,7 +135,7 @@ test('a configuration gap is a data-quality issue with the fix named', async () 
 test('health is stored, and read back only at tenant scope', async () => {
   const { poll, principal } = setup('h-scope');
   await poll();
-  assert.equal(loadHealth(principal)!.sources.length, 8);
+  assert.equal((await loadHealth(principal))!.sources.length, 8);
   const site: Principal = { ...principal, roles: ['operator'], scope: { kind: 'site', siteId: 'x' } };
-  assert.throws(() => loadHealth(site), OutOfScopeError);
+  await assert.rejects(loadHealth(site), OutOfScopeError);
 });

@@ -45,6 +45,12 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      # tsc accepts a discarded promise. The in-memory table writes before its
+      # promise returns, so a missing `await` passes every test here and loses
+      # the write against DynamoDB. Both tsconfigs, so web/ is covered too.
+      - name: Promises awaited
+        run: pnpm check:promises
+
       - name: Unit tests
         run: pnpm test
 

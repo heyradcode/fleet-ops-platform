@@ -102,15 +102,15 @@ const STATE_SK = 'ENTRA#SYNC';
 const dirPk = (p: Principal) => pk(p, 'COMMSDIR');
 const userSk = (gen: number, id: string) => 'G' + gen + '#' + id;
 
-function loadState(principal: Principal): SyncState {
-  const item = mainTable.get(statePk(principal), STATE_SK);
+async function loadState(principal: Principal): Promise<SyncState> {
+  const item = await mainTable.get(statePk(principal), STATE_SK);
   if (!item) return { committedGen: null, deltaLink: null, building: null, deltaResume: null, nextGen: 1 };
   const { PK, SK, entity, ...state } = item;
   return state as unknown as SyncState;
 }
 
-function saveState(principal: Principal, state: SyncState): void {
-  mainTable.put({ PK: statePk(principal), SK: STATE_SK, entity: 'EntraSyncState', ...state });
+async function saveState(principal: Principal, state: SyncState): Promise<void> {
+  await mainTable.put({ PK: statePk(principal), SK: STATE_SK, entity: 'EntraSyncState', ...state });
 }
 
 function statusOf(state: SyncState): DirectoryStatus {
@@ -123,29 +123,33 @@ function statusOf(state: SyncState): DirectoryStatus {
  * carries only what changed, so a rename arrives without a street address and
  * must not erase the facility the user already had.
  */
-function applyRows(principal: Principal, gen: number, rows: Row[]): { applied: number; removed: number } {
+async function applyRows(principal: Principal, gen: number, rows: Row[]): Promise<{ applied: number; removed: number }> {
   let applied = 0;
   let removed = 0;
+  // One row at a time, in order: a delta can carry the same user twice, and
+  // the second change must merge into the first. Against a real table this is
+  // a read and a write per user - fine for deltas, slow for a first sync of
+  // 75,000; if that matters, batch the FULL-sync case, which has no merge.
   for (const row of rows) {
     const sk = userSk(gen, row.id);
     if (row['@removed']) {
-      mainTable.delete(dirPk(principal), sk);
+      await mainTable.delete(dirPk(principal), sk);
       removed++;
       continue;
     }
-    const prev = mainTable.get(dirPk(principal), sk) as (StoredUser & { PK: string; SK: string }) | undefined;
+    const prev = await mainTable.get(dirPk(principal), sk) as (StoredUser & { PK: string; SK: string }) | undefined;
     const next: StoredUser = { objectId: row.id, emailHash: prev?.emailHash, placement: prev?.placement };
     if (row.userPrincipalName !== undefined) next.emailHash = emailHash(principal.tenantId, row.userPrincipalName);
     if (row.streetAddress !== undefined) next.placement = facilityFromAddress(row.streetAddress);
-    mainTable.put({ PK: dirPk(principal), SK: sk, entity: 'EntraUser', ...next });
+    await mainTable.put({ PK: dirPk(principal), SK: sk, entity: 'EntraUser', ...next });
     applied++;
   }
   return { applied, removed };
 }
 
-function dropGeneration(principal: Principal, gen: number): void {
-  for (const item of mainTable.query({ pk: dirPk(principal), skBeginsWith: 'G' + gen + '#' })) {
-    mainTable.delete(item.PK, item.SK);
+async function dropGeneration(principal: Principal, gen: number): Promise<void> {
+  for (const item of await mainTable.query({ pk: dirPk(principal), skBeginsWith: 'G' + gen + '#' })) {
+    await mainTable.delete(item.PK, item.SK);
   }
 }
 
@@ -174,7 +178,7 @@ export async function syncEntraDirectory(
   principal: Principal, client: CommsClient, opts: { pageSize?: number } = {},
 ): Promise<EntraSyncResult> {
   const pageSize = opts.pageSize ?? 999;
-  const state = loadState(principal);
+  const state = await loadState(principal);
   const initialUrl = client.endpoints.graph + '/users/delta?$select=' + SELECT;
   let resyncStarted = false;
 
@@ -182,11 +186,11 @@ export async function syncEntraDirectory(
   if (state.committedGen !== null && !state.building && (state.deltaLink || state.deltaResume)) {
     try {
       const d = await drain(client, (state.deltaResume ?? state.deltaLink)!, pageSize);
-      const { applied, removed } = applyRows(principal, state.committedGen, d.rows);
+      const { applied, removed } = await applyRows(principal, state.committedGen, d.rows);
       // AFTER the writes. See the header.
       if (d.deltaLink) { state.deltaLink = d.deltaLink; state.deltaResume = null; }
       else state.deltaResume = d.resumeAt;
-      saveState(principal, state);
+      await saveState(principal, state);
       return { status: statusOf(state), mode: 'delta', pages: d.pages, rowsApplied: applied, removed, resyncStarted };
     } catch (err) {
       if (!(err instanceof CommsHttpError && err.status === 410)) throw err;
@@ -194,7 +198,7 @@ export async function syncEntraDirectory(
       state.building = { gen: state.nextGen++, next: initialUrl };
       state.deltaLink = null;
       state.deltaResume = null;
-      saveState(principal, state);
+      await saveState(principal, state);
       resyncStarted = true;
     }
   }
@@ -203,7 +207,7 @@ export async function syncEntraDirectory(
   if (!state.building) state.building = { gen: state.nextGen++, next: initialUrl };
   const building = state.building;
   const d = await drain(client, building.next, pageSize);
-  const { applied } = applyRows(principal, building.gen, d.rows);
+  const { applied } = await applyRows(principal, building.gen, d.rows);
 
   if (d.deltaLink) {
     // The last page landed: flip readers to the new generation, then clear
@@ -213,22 +217,22 @@ export async function syncEntraDirectory(
     state.committedGen = building.gen;
     state.deltaLink = d.deltaLink;
     state.building = null;
-    saveState(principal, state);
-    if (old !== null) dropGeneration(principal, old);
+    await saveState(principal, state);
+    if (old !== null) await dropGeneration(principal, old);
   } else {
     building.next = d.resumeAt ?? building.next;
-    saveState(principal, state);
+    await saveState(principal, state);
   }
   return { status: statusOf(state), mode: 'full', pages: d.pages, rowsApplied: applied, removed: 0, resyncStarted };
 }
 
 /** The committed generation, as lookups. Reads nothing person-identifying back out. */
-export function loadEntraDirectory(principal: Principal): EntraDirectoryView {
-  const state = loadState(principal);
+export async function loadEntraDirectory(principal: Principal): Promise<EntraDirectoryView> {
+  const state = await loadState(principal);
   const byId = new Map<string, Placement>();
   const byHash = new Map<string, Placement>();
   if (state.committedGen !== null) {
-    for (const item of mainTable.query({ pk: dirPk(principal), skBeginsWith: 'G' + state.committedGen + '#' })) {
+    for (const item of await mainTable.query({ pk: dirPk(principal), skBeginsWith: 'G' + state.committedGen + '#' })) {
       const u = item as unknown as StoredUser;
       const placement = u.placement ?? { unplaced: 'no-facility-code' as const };
       byId.set(u.objectId, placement);

@@ -96,7 +96,7 @@ export const TOOLS: Tool[] = [
         required: ['deviceId', 'hours'],
       },
     },
-    execute(input, principal) {
+    async execute(input, principal) {
       const deviceId = String(input.deviceId);
       const device = deviceState(principal, deviceId);
       if (!device) {
@@ -106,7 +106,7 @@ export const TOOLS: Tool[] = [
       }
 
       const since = new Date(now() - Number(input.hours ?? 6) * 3600_000).toISOString();
-      const observations = observationsForDevice(principal, deviceId, since);
+      const observations = await observationsForDevice(principal, deviceId, since);
       if (observations.length === 0) return 'No observations for ' + deviceId + ' in that window.';
 
       const lines = observations
@@ -220,7 +220,7 @@ export const TOOLS: Tool[] = [
         required: ['deviceId'],
       },
     },
-    execute(input, principal) {
+    async execute(input, principal) {
       const deviceId = String(input.deviceId);
       const device = deviceState(principal, deviceId);
       if (!device) {
@@ -262,8 +262,8 @@ export const TOOLS: Tool[] = [
         'whether the problem is already being worked before opening a duplicate.',
       input_schema: { type: 'object', properties: {}, required: [] },
     },
-    execute(_input, principal) {
-      const incidents = openIncidents(principal);
+    async execute(_input, principal) {
+      const incidents = await openIncidents(principal);
       if (incidents.length === 0) return 'No open incidents.';
       return incidents
         .map((i) => i.incidentId + ' [' + i.severity + '] ' + i.title +
@@ -291,7 +291,7 @@ export const TOOLS: Tool[] = [
         required: ['title', 'severity', 'siteId', 'deviceIds'],
       },
     },
-    execute(input, principal) {
+    async execute(input, principal) {
       // Authorisation belongs HERE, not in the prompt. A viewer cannot page
       // anyone, no matter how the model was talked into calling this.
       const verdict = canUseTool(principal, 'openIncident');
@@ -308,7 +308,7 @@ export const TOOLS: Tool[] = [
         alarmIds: [],
         openedAt: nowIso(),
       };
-      putIncident(principal, incident);
+      await putIncident(principal, incident);
       return 'Opened ' + incident.incidentId + ': ' + incident.title;
     },
   },
@@ -331,7 +331,7 @@ export const TOOLS: Tool[] = [
         required: ['deviceId', 'minutes', 'reason'],
       },
     },
-    execute(input, principal) {
+    async execute(input, principal) {
       // The write tool that proves the rule: the agent acts with the CALLER's
       // authority, never the platform's. An engineer can read everything here
       // and still not be able to silence a page.

@@ -105,7 +105,7 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
       return allSites(principal);
 
     case 'Query.alarms': {
-      const all = recentAlarms(principal, Number(args.limit ?? 50));
+      const all = await recentAlarms(principal, Number(args.limit ?? 50));
       const scoped = all.filter((e) => scopeAllowsSite(principal, e.siteId));
       return args.siteId
         ? scoped.filter((e) => e.siteId === args.siteId)
@@ -145,8 +145,8 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
     case 'Query.observations': {
       const limit = Number(args.limit ?? 25);
       const items = args.severity
-        ? observationsBySeverity(principal, args.severity as never).slice(0, limit)
-        : recentObservations(principal, limit);
+        ? (await observationsBySeverity(principal, args.severity as never)).slice(0, limit)
+        : await recentObservations(principal, limit);
       // The cursor is opaque to the client and encodes DynamoDB's
       // LastEvaluatedKey. Never leak the raw key - it exposes the key schema.
       const nextToken = items.length === limit
@@ -170,7 +170,7 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
 
     case 'Query.mapLayer': {
       const estate = allDeviceStates(principal);
-      const byDevice = new Map(estate.map((d) => [d.deviceId, observationsForDevice(principal, d.deviceId)]));
+      const byDevice = new Map(await Promise.all(estate.map(async (d) => [d.deviceId, await observationsForDevice(principal, d.deviceId)] as const)));
       const fc = devicesToFeatureCollection(estate, byDevice);
       return { featureCollection: JSON.stringify(fc), bbox: fc.bbox };
     }
@@ -196,7 +196,7 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
      */
     case 'Device.observations': {
       const deviceId = String(event.source?.deviceId);
-      const all = observationsForDevice(principal, deviceId);
+      const all = await observationsForDevice(principal, deviceId);
       const filtered = args.severity ? all.filter((s) => s.severity === args.severity) : all;
       return filtered.slice(0, Number(args.limit ?? 20));
     }
@@ -208,7 +208,7 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
 
     case 'Incident.observations': {
       const ids = new Set((event.source?.observationIds as string[]) ?? []);
-      return recentObservations(principal, 500).filter((s) => ids.has(s.observationId));
+      return (await recentObservations(principal, 500)).filter((s) => ids.has(s.observationId));
     }
 
     // ---- Mutation --------------------------------------------------------
@@ -232,7 +232,7 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
         alarmIds: [],
         openedAt: nowIso(),
       };
-      putIncident(principal, incident);
+      await putIncident(principal, incident);
 
       // In real AppSync you do NOT do this - returning from the mutation IS
       // the publish, because the subscription is declared against it. This
@@ -249,11 +249,11 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
 
     case 'Mutation.acknowledgeIncident': {
       requireRole(principal, 'admin', 'operator');
-      const existing = getIncident(principal, String(args.incidentId));
+      const existing = await getIncident(principal, String(args.incidentId));
       if (!existing) throw new Error('incident not found');
 
       const updated = { ...existing, status: 'acknowledged' as const };
-      putIncident(principal, updated);
+      await putIncident(principal, updated);
       publishToSubscribers('onIncidentAcknowledged', updated);
       return updated;
     }

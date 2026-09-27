@@ -228,12 +228,14 @@ const QUALITY_SK = 'HEALTH#QUALITY';
  * whole point: "down" with a success two minutes ago and "down" with none for
  * an hour are different situations, and only the history can tell them apart.
  */
-export function recordHealth(
+export async function recordHealth(
   principal: Principal, at: number, runs: SourceRun[], quality: DataQualityIssue[],
-): IntegrationHealth {
+): Promise<IntegrationHealth> {
   const nowIso = new Date(at).toISOString();
-  const sources = runs.map((r): SourceHealth => {
-    const prev = mainTable.get(healthPk(principal), sourceSk(r.source)) as unknown as SourceHealth | undefined;
+  // Independent keys, so the reads go in parallel: one round trip, not eight.
+  const previous = await Promise.all(runs.map((r) => mainTable.get(healthPk(principal), sourceSk(r.source))));
+  const sources = runs.map((r, n): SourceHealth => {
+    const prev = previous[n] as unknown as SourceHealth | undefined;
     if (!r.configured) {
       return { source: r.source, status: 'not-configured', stale: false, lastAttemptAt: nowIso, consecutiveFailures: 0, gaps: [], caveats: [] };
     }
@@ -254,23 +256,22 @@ export function recordHealth(
     };
   });
 
-  for (const s of sources) {
-    mainTable.put({ PK: healthPk(principal), SK: sourceSk(s.source), entity: 'SourceHealth', ...s });
-  }
-  mainTable.put({ PK: healthPk(principal), SK: QUALITY_SK, entity: 'DataQuality', asOf: nowIso, issues: quality });
+  await Promise.all([
+    ...sources.map((s) => mainTable.put({ PK: healthPk(principal), SK: sourceSk(s.source), entity: 'SourceHealth', ...s })),
+    mainTable.put({ PK: healthPk(principal), SK: QUALITY_SK, entity: 'DataQuality', asOf: nowIso, issues: quality }),
+  ]);
   return { asOf: nowIso, sources, dataQuality: quality };
 }
 
-export function loadHealth(principal: Principal): IntegrationHealth | undefined {
+export async function loadHealth(principal: Principal): Promise<IntegrationHealth | undefined> {
   requireTenantScope(principal);
-  const sources = HEALTH_SOURCES
-    .map((s) => mainTable.get(healthPk(principal), sourceSk(s)))
+  const sources = (await Promise.all(HEALTH_SOURCES.map((s) => mainTable.get(healthPk(principal), sourceSk(s)))))
     .filter((i): i is NonNullable<typeof i> => !!i)
     .map((i) => {
       const { PK, SK, entity, ...rest } = i;
       return rest as unknown as SourceHealth;
     });
-  const quality = mainTable.get(healthPk(principal), QUALITY_SK) as unknown as { asOf: string; issues: DataQualityIssue[] } | undefined;
+  const quality = await mainTable.get(healthPk(principal), QUALITY_SK) as unknown as { asOf: string; issues: DataQualityIssue[] } | undefined;
   if (sources.length === 0 || !quality) return undefined;
   return { asOf: quality.asOf, sources, dataQuality: quality.issues };
 }

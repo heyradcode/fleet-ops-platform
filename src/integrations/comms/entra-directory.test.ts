@@ -56,7 +56,7 @@ test('a first sync that fits in one run commits the whole directory', async () =
   const r = await syncEntraDirectory(p, client(p.tenantId));
   assert.equal(r.status, 'complete');
   assert.equal(r.mode, 'full');
-  const view = loadEntraDirectory(p);
+  const view = (await loadEntraDirectory(p));
   assert.equal(view.users, entraCount());
   const who = someone();
   assert.deepEqual(view.placementByEmail(who.email.toUpperCase()), { code: who.facility!.code },
@@ -66,7 +66,7 @@ test('a first sync that fits in one run commits the whole directory', async () =
 test('nothing person-identifying is stored - a hash and a facility code', async () => {
   const p = principal('t-pseudonymous');
   await syncEntraDirectory(p, client(p.tenantId));
-  const text = JSON.stringify(mainTable.query({ pk: 'TENANT#' + p.tenantId + '#COMMSDIR' }));
+  const text = JSON.stringify(await mainTable.query({ pk: 'TENANT#' + p.tenantId + '#COMMSDIR' }));
   assert.ok(!text.includes('@'), 'no address at rest');
   assert.ok(!text.includes('Example Pkwy'), 'no street address at rest');
 });
@@ -79,16 +79,16 @@ test('a first sync longer than one run resumes where it stopped, and readers wai
   const first = await syncEntraDirectory(p, c, { pageSize: 3 });
   assert.equal(first.status, 'first-sync-in-progress');
   assert.equal(first.pages, 50);
-  assert.equal(loadEntraDirectory(p).users, 0, 'a half-built directory is never read');
+  assert.equal((await loadEntraDirectory(p)).users, 0, 'a half-built directory is never read');
 
   // While it builds, employees are "not placed YET", not "unplaceable".
-  const report = await buildWorkforce(c, COMMS_CONFIG[HHS_DEMO_TENANT], loadEntraDirectory(p));
+  const report = await buildWorkforce(c, COMMS_CONFIG[HHS_DEMO_TENANT], (await loadEntraDirectory(p)));
   assert.ok(report.unplaced.some((u) => u.reason === 'directory-sync-incomplete'));
 
   const second = await syncEntraDirectory(p, c, { pageSize: 3 });
   assert.equal(second.status, 'complete');
   assert.equal(first.rowsApplied + second.rowsApplied, entraCount(), 'no page fetched twice, none skipped');
-  assert.equal(loadEntraDirectory(p).users, entraCount());
+  assert.equal((await loadEntraDirectory(p)).users, entraCount());
 });
 
 test('a delta carries only the change, and a partial row does not erase the rest', async () => {
@@ -103,14 +103,14 @@ test('a delta carries only the change, and a partial row does not erase the rest
   const r = await syncEntraDirectory(p, c);
   assert.equal(r.mode, 'delta');
   assert.equal(r.rowsApplied, 1);
-  assert.deepEqual(loadEntraDirectory(p).placementByEmail(mover.email), { code: target });
+  assert.deepEqual((await loadEntraDirectory(p)).placementByEmail(mover.email), { code: target });
 
   // A rename arrives WITHOUT a street address. Merging keeps the facility;
   // overwriting would have made them unplaceable.
   const renamed = 'Renamed.Person@hhs.texas.example';
   mutateEntraUser(mover.ids.entra, { userPrincipalName: renamed });
   await syncEntraDirectory(p, c);
-  const view = loadEntraDirectory(p);
+  const view = (await loadEntraDirectory(p));
   assert.deepEqual(view.placementByEmail(renamed), { code: target });
   assert.equal(view.placementByEmail(mover.email), undefined, 'the old address no longer resolves');
 });
@@ -124,7 +124,7 @@ test('a removed user is deleted, not left placed', async () => {
 
   const r = await syncEntraDirectory(p, c);
   assert.equal(r.removed, 1);
-  const view = loadEntraDirectory(p);
+  const view = (await loadEntraDirectory(p));
   assert.equal(view.placementByEmail(leaver.email), undefined);
   assert.equal(view.users, entraCount() - 1);
 });
@@ -138,12 +138,12 @@ test('an expired delta token resyncs into a new generation, serving the old one 
   const r = await syncEntraDirectory(p, c, { pageSize: 3 });
   assert.equal(r.resyncStarted, true);
   assert.equal(r.status, 'resyncing');
-  assert.equal(loadEntraDirectory(p).users, entraCount(), 'readers keep the previous generation');
+  assert.equal((await loadEntraDirectory(p)).users, entraCount(), 'readers keep the previous generation');
 
   const done = await syncEntraDirectory(p, c, { pageSize: 3 });
   assert.equal(done.status, 'complete');
   // The old generation is gone: one item per user, not two.
-  const items = mainTable.query({ pk: 'TENANT#' + p.tenantId + '#COMMSDIR' });
+  const items = await mainTable.query({ pk: 'TENANT#' + p.tenantId + '#COMMSDIR' });
   assert.equal(items.length, entraCount());
 });
 
@@ -158,11 +158,11 @@ test('a failed delta does not advance the link - the change is applied on the ne
 
   injectFault('teams', 500, 3);   // every retry fails
   await assert.rejects(syncEntraDirectory(p, c));
-  assert.notDeepEqual(loadEntraDirectory(p).placementByEmail(mover.email), { code: target });
+  assert.notDeepEqual((await loadEntraDirectory(p)).placementByEmail(mover.email), { code: target });
 
   const r = await syncEntraDirectory(p, c);
   assert.equal(r.rowsApplied, 1, 'the change was not lost with the failed run');
-  assert.deepEqual(loadEntraDirectory(p).placementByEmail(mover.email), { code: target });
+  assert.deepEqual((await loadEntraDirectory(p)).placementByEmail(mover.email), { code: target });
 });
 
 test('mock: only the LAST page of a delta listing carries the deltaLink', async () => {

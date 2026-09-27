@@ -93,16 +93,18 @@ export type Reconciled = {
  * Fold this poll's freshly correlated incidents into the stored open set.
  * `fresh` is correlateAlarms' output (with Helix context attached).
  */
-export function reconcileIncidents(
+export async function reconcileIncidents(
   principal: Principal, at: number, fresh: CommsIncident[], signals: CommsSignal[], unavailable: SignalSource[],
-): Reconciled {
+): Promise<Reconciled> {
   const nowIso = new Date(at).toISOString();
-  const stored = mainTable.query({ pk: incPk(principal), skBeginsWith: 'OPEN#' })
+  const stored = (await mainTable.query({ pk: incPk(principal), skBeginsWith: 'OPEN#' }))
     .map((i) => read(i)!)
     .filter(Boolean);
   const openBySubject = new Map(stored.map((i) => [subjectKey(i.subject), i]));
   const freshSubjects = new Set(fresh.map((i) => subjectKey(i.subject)));
   const reopened: string[] = [];
+  /** Sort keys to remove once everything this poll writes has landed. */
+  const deleteAfter: string[] = [];
   const resolved: CommsIncident[] = [];
   const open: CommsIncident[] = [];
 
@@ -114,13 +116,13 @@ export function reconcileIncidents(
 
     if (!prev) {
       // Resolved recently? Then this is the same problem back - reopen it.
-      const last = read(mainTable.get(incPk(principal), lastResolvedSk(f.subject)));
+      const last = read(await mainTable.get(incPk(principal), lastResolvedSk(f.subject)));
       if (last?.resolvedAt && at - Date.parse(last.resolvedAt) <= REOPEN_WITHIN_MS) {
         base = { ...last, reopenCount: (last.reopenCount ?? 0) + 1 };
         reopened.push(last.incidentId);
-        mainTable.delete(incPk(principal), historySk(last));
+        deleteAfter.push(historySk(last));
       }
-      mainTable.delete(incPk(principal), lastResolvedSk(f.subject));
+      deleteAfter.push(lastResolvedSk(f.subject));
     }
 
     const incident: CommsIncident = {
@@ -165,25 +167,39 @@ export function reconcileIncidents(
     });
   }
 
-  // --- Persist: open set replaced, resolved moved to history ----------------
-  for (const i of stored) mainTable.delete(incPk(principal), openSk(i.subject));
-  for (const i of open) mainTable.put({ PK: incPk(principal), SK: openSk(i.subject), entity: 'CommsIncident', ...i });
+  // --- Persist: open set rewritten, resolved moved to history --------------
+  // WRITE FIRST, DELETE LAST, and delete only what resolved. The open row's key
+  // is the subject, so a put overwrites it in place; clearing the whole open
+  // set first and re-writing it was harmless in memory and, against a real
+  // table, a crash between the two would lose every open incident - the one
+  // record of what is broken right now. The same goes for a reopen: its
+  // history row is removed only after the incident is written back as open.
+  // In this order a crash leaves at worst
+  // a resolved incident still listed open for one more poll, which the next
+  // poll resolves again. Sequential on purpose, not Promise.all: a delete
+  // racing a put on the same key could land second.
+  for (const i of open) await mainTable.put({ PK: incPk(principal), SK: openSk(i.subject), entity: 'CommsIncident', ...i });
   for (const i of resolved) {
-    mainTable.put({ PK: incPk(principal), SK: historySk(i), entity: 'CommsIncident', ...i });
-    mainTable.put({ PK: incPk(principal), SK: lastResolvedSk(i.subject), entity: 'CommsIncident', ...i });
+    await mainTable.put({ PK: incPk(principal), SK: historySk(i), entity: 'CommsIncident', ...i });
+    await mainTable.put({ PK: incPk(principal), SK: lastResolvedSk(i.subject), entity: 'CommsIncident', ...i });
   }
+  const stillOpen = new Set(open.map((i) => openSk(i.subject)));
+  for (const i of stored) {
+    if (!stillOpen.has(openSk(i.subject))) deleteAfter.push(openSk(i.subject));
+  }
+  for (const sk of deleteAfter) await mainTable.delete(incPk(principal), sk);
 
   open.sort((a, b) => RANK[b.severity] - RANK[a.severity] || a.title.localeCompare(b.title));
   return { open, resolved, reopened };
 }
 
-export function openCommsIncidents(principal: Principal): CommsIncident[] {
-  return mainTable.query({ pk: incPk(principal), skBeginsWith: 'OPEN#' })
+export async function openCommsIncidents(principal: Principal): Promise<CommsIncident[]> {
+  return (await mainTable.query({ pk: incPk(principal), skBeginsWith: 'OPEN#' }))
     .map((i) => read(i)!)
     .sort((a, b) => RANK[b.severity] - RANK[a.severity] || a.title.localeCompare(b.title));
 }
 
-export function resolvedCommsIncidents(principal: Principal, limit = 10): CommsIncident[] {
-  return mainTable.query({ pk: incPk(principal), skBeginsWith: 'RESOLVED#', scanIndexForward: false, limit })
+export async function resolvedCommsIncidents(principal: Principal, limit = 10): Promise<CommsIncident[]> {
+  return (await mainTable.query({ pk: incPk(principal), skBeginsWith: 'RESOLVED#', scanIndexForward: false, limit }))
     .map((i) => read(i)!);
 }

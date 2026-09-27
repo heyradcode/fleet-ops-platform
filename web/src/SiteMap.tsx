@@ -112,7 +112,8 @@ export function SiteMap({
     let cancelled = false;
     let m: MapLibreMap | null = null;
 
-    (async () => {
+    // `void`: an effect cannot wait, and says so. `cancelled` handles unmount.
+    void (async () => {
       const { style, mode } = await resolveStyle(basemap);
       if (cancelled) return;
       onBasemap?.(mode);

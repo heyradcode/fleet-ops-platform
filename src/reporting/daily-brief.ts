@@ -225,9 +225,20 @@ export async function buildDailyBrief(
 ): Promise<Brief> {
   requireTenantScope(principal);
   const from = at - DAY_MS;
-  const workforce = commsWorkforce(principal);
-  const phones = commsPhones(principal);
-  const health = loadHealth(principal);
+  // Every read up front, once, and in parallel. The open incidents were read
+  // three times when reads were free; against a real table that is three round
+  // trips, and three reads a poll can land between - a brief that counted an
+  // incident in one section and not the next.
+  const [workforce, phones, health, latestAnomalySet, openComms, resolvedComms, alarms, networkStored] = await Promise.all([
+    commsWorkforce(principal),
+    commsPhones(principal),
+    loadHealth(principal),
+    latestAnomalies(principal),
+    commsIncidents(principal),
+    commsResolvedIncidents(principal, 50),
+    commsAlarms(principal),
+    opts.networkIncidents ?? openIncidents(principal),
+  ]);
 
   const peopleAt = (code: string) => {
     const people = workforce?.byFacility.find((f) => f.code === code)?.people;
@@ -239,7 +250,7 @@ export async function buildDailyBrief(
     return parts.length ? parts.join(', and ') : 'size not known';
   };
 
-  const anomalies = latestAnomalies(principal)?.anomalies ?? [];
+  const anomalies = latestAnomalySet?.anomalies ?? [];
   const subjectKey = (s: { kind: string; id: string }) => s.kind + ':' + s.id;
   // "Normally X" beside an incident: its worst NON-volume anomaly - the rate
   // or count the incident is about, set against this hour's baseline.
@@ -247,17 +258,17 @@ export async function buildDailyBrief(
     const a = anomalies.find((x) => subjectKey(x.subject) === subjectKey(i.subject) && !x.metric.endsWith(':volume'));
     return a ? 'Normally ' + normalText(a) + ' for ' + a.when + ' (' + a.normal.samples + ' weeks of history)' : undefined;
   };
-  const commsOpen = commsIncidents(principal).map((i) => ({ ...commsItem(i, at, peopleAt), normally: normallyFor(i) }));
-  const openSubjects = new Set(commsIncidents(principal).map((i) => subjectKey(i.subject)));
+  const commsOpen = openComms.map((i) => ({ ...commsItem(i, at, peopleAt), normally: normallyFor(i) }));
+  const openSubjects = new Set(openComms.map((i) => subjectKey(i.subject)));
   const unusual = anomalies
     .filter((a) => !openSubjects.has(subjectKey(a.subject)))
     .map((a) => a.explanation.charAt(0).toUpperCase() + a.explanation.slice(1));
-  const network = (opts.networkIncidents ?? openIncidents(principal)).filter((n) => n.status !== 'resolved');
+  const network = networkStored.filter((n) => n.status !== 'resolved');
   const networkOpen = await Promise.all(network.map((n) => networkItem(principal, n, at)));
   const open = [...commsOpen, ...networkOpen]
     .sort((a, b) => RANK[b.severity] - RANK[a.severity] || a.title.localeCompare(b.title));
 
-  const resolved = commsResolvedIncidents(principal, 50)
+  const resolved = resolvedComms
     .filter((i) => i.resolvedAt && Date.parse(i.resolvedAt) >= from)
     .map((i) => ({
       ...commsItem(i, at, peopleAt),
@@ -266,12 +277,11 @@ export async function buildDailyBrief(
     }));
 
   // Held back in the LATEST poll only - older polls' alarms are history.
-  const alarms = commsAlarms(principal);
   const latest = alarms.reduce((m, a) => (a.raisedAt > m ? a.raisedAt : m), '');
   const watch = [
     ...alarms.filter((a) => a.raisedAt === latest && !a.corroborated)
       .map((a) => a.subject.name + ': ' + a.kind.replace(/-/g, ' ') + ' reported but not confirmed - ' + a.heldBack),
-    ...commsIncidents(principal).filter((i) => i.reopenCount > 0)
+    ...openComms.filter((i) => i.reopenCount > 0)
       .map((i) => i.subject.name + ' has come back ' + i.reopenCount + 'x after resolving - flapping'),
   ];
 

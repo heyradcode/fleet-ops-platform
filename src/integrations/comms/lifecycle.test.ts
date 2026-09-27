@@ -85,7 +85,7 @@ test('recovery resolves after three MEASURED-healthy polls, and not before', asy
   const third = await poll();
   assert.equal(third.incidents.length, 0);
   assert.equal(third.resolved.length, 4);
-  assert.equal(commsResolvedIncidents(principal).length, 4);
+  assert.equal((await commsResolvedIncidents(principal)).length, 4);
 });
 
 test('a source that is DOWN cannot vouch for recovery: unknown neither counts nor resets', async () => {
@@ -124,7 +124,7 @@ test('still firing but held back RESETS the count - Houston bad while Webex is d
   assert.match(houston.lifecycleNote!, /still firing/);
 });
 
-test('too few samples to measure is not health: no signal, no resolution', () => {
+test('too few samples to measure is not health: no signal, no resolution', async () => {
   const principal: Principal = {
     sub: 't', email: 'x', tenantId: 'l-samples', roles: ['admin'], scope: { kind: 'tenant' }, identityProvider: 'cognito',
   };
@@ -135,10 +135,10 @@ test('too few samples to measure is not health: no signal, no resolution', () =>
     sources: ['teams'], localisation: [], openedAt: new Date(at).toISOString(), evidence: [], figures: [],
     status: 'open', lastSeenAt: new Date(at).toISOString(), clearPolls: 0, reopenCount: 0, peakSeverity: 'critical',
   };
-  reconcileIncidents(principal, at, [incident], [], []);
+  await reconcileIncidents(principal, at, [incident], [], []);
   for (let n = 1; n <= 5; n++) {
     // No signal at all: the trunk carried too few calls to compute a rate.
-    const r = reconcileIncidents(principal, at + n * POLL_MS, [], [], []);
+    const r = await reconcileIncidents(principal, at + n * POLL_MS, [], [], []);
     assert.equal(r.open.length, 1, 'poll ' + n);
     assert.match(r.open[0].lifecycleNote!, /too few samples/);
   }

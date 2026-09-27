@@ -94,9 +94,9 @@ test('with eight weeks of history: exactly the unusual things, and nothing healt
 test('it never learns an outage: incident subjects and anomalous values are not folded in', async () => {
   const { backfill, poll } = setup('a-learn');
   await backfill();
-  const before = new Map(baselinesOf('a-learn').map((b) => [b.SK, Number(b.n)]));
+  const before = new Map((await baselinesOf('a-learn')).map((b) => [b.SK, Number(b.n)]));
   await poll();
-  const after = new Map(baselinesOf('a-learn').map((b) => [b.SK, Number(b.n)]));
+  const after = new Map((await baselinesOf('a-learn')).map((b) => [b.SK, Number(b.n)]));
   // Baseline keys carry the subject ID - for a queue a UUID, never its name.
   // Matching on the name made the first version of this test check nothing.
   const idOf = (name: string) => genesysQueues().find((q) => q.name === name)!.id;
@@ -119,15 +119,15 @@ test('it never learns an outage: incident subjects and anomalous values are not 
   assert.ok([...after].some(([sk, n]) => n > (before.get(sk) ?? 0)), 'healthy values ARE learned');
 });
 
-test('floors: one caller where there are usually none, and Poisson-sized volume noise, are not news', () => {
+test('floors: one caller where there are usually none, and Poisson-sized volume noise, are not news', async () => {
   const p: Principal = { sub: 't', email: 'x', tenantId: 'a-floor', roles: ['admin'], scope: { kind: 'tenant' }, identityProvider: 'cognito' };
   const at = now();
   const pt = (metric: MetricPoint['metric'], value: number, unit: 'ratio' | 'count'): MetricPoint =>
     ({ subject: { kind: 'queue', id: 'q', name: 'Q' }, metric, source: 'genesys', value, unit });
   for (let w = 0; w < 8; w++) {
-    learnOnly(p, at, 'America/Chicago', [pt('queue-backlog', 0, 'count'), pt('queue-abandonment:volume', 17 + (w % 3) - 1, 'count')]);
+    await learnOnly(p, at, 'America/Chicago', [pt('queue-backlog', 0, 'count'), pt('queue-abandonment:volume', 17 + (w % 3) - 1, 'count')]);
   }
-  const r = detectAndLearn(p, at, 'America/Chicago',
+  const r = await detectAndLearn(p, at, 'America/Chicago',
     [pt('queue-backlog', 1, 'count'), pt('queue-abandonment:volume', 24, 'count')], new Set());
   assert.deepEqual(r.anomalies, [], 'zero-spread baselines would otherwise make these infinitely unusual');
 });

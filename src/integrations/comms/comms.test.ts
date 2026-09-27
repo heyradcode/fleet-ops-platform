@@ -63,7 +63,7 @@ const PRINCIPAL: Principal = {
 /** Sync the Entra directory, then build - the order the poll uses. */
 async function workforce(c = client(), cfg = config()) {
   await syncEntraDirectory(PRINCIPAL, c);
-  return buildWorkforce(c, cfg, loadEntraDirectory(PRINCIPAL));
+  return buildWorkforce(c, cfg, (await loadEntraDirectory(PRINCIPAL)));
 }
 
 /** Ground truth: group people by a key, the way the split should. */

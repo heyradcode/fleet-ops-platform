@@ -92,11 +92,11 @@ export async function handler(event: ApiGatewayEvent): Promise<ApiGatewayResult>
 
       case 'GET /observations': {
         const limit = Math.min(Number(query.limit ?? 25), 100);
-        return json(200, { items: recentObservations(principal, limit) });
+        return json(200, { items: await recentObservations(principal, limit) });
       }
 
       case 'GET /incidents':
-        return json(200, { items: openIncidents(principal) });
+        return json(200, { items: await openIncidents(principal) });
 
       /**
        * The map endpoint. Serves GeoJSON by default and TopoJSON when the
@@ -105,7 +105,7 @@ export async function handler(event: ApiGatewayEvent): Promise<ApiGatewayResult>
        */
       case 'GET /map': {
         const estate = allDeviceStates(principal);
-        const byDevice = new Map(estate.map((d) => [d.deviceId, observationsForDevice(principal, d.deviceId)]));
+        const byDevice = new Map(await Promise.all(estate.map(async (d) => [d.deviceId, await observationsForDevice(principal, d.deviceId)] as const)));
         const fc = devicesToFeatureCollection(estate, byDevice);
 
         if (query.format === 'topojson') {

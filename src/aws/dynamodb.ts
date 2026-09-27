@@ -37,6 +37,20 @@
  *
  * The rule worth internalising: *model your access patterns first, then
  * derive the keys*. Never the other way round.
+ *
+ * EVERY METHOD IS ASYNC, including on the in-memory table, which could answer
+ * synchronously. That is the point: a real table is a network call, and code
+ * written against a synchronous fake cannot be pointed at it without being
+ * rewritten. The failure worth fearing is a write without `await` - in memory
+ * it lands anyway, so every test passes, and against DynamoDB it is a lost
+ * write or a read that races it. `scripts/check-floating-promises.mjs` fails
+ * `pnpm verify` on one.
+ *
+ * `mainTable` forwards to whichever store is set. The real adapter is
+ * registered by a Lambda entry point (`setTableStore`), never by anything the
+ * browser loads - the same shape as `platform/membership.ts`, and for the same
+ * reason: one `@aws-sdk` import in the shared graph breaks the board's build,
+ * and the portability grep does not catch it.
  */
 import type { Principal } from '../platform/types.ts';
 import { log } from '../platform/logger.ts';
@@ -44,8 +58,30 @@ import { env } from '../platform/env.ts';
 
 export type Item = Record<string, unknown> & { PK: string; SK: string; GSI1PK?: string; GSI1SK?: string };
 
+export interface QueryOptions {
+  pk: string;
+  skBeginsWith?: string;
+  skBetween?: [string, string];
+  scanIndexForward?: boolean;
+  limit?: number;
+  index?: 'GSI1';
+}
+
+/**
+ * The five operations the platform uses, and no more. Anything a real adapter
+ * cannot do in one DynamoDB call does not belong here - a Scan especially.
+ */
+export interface TableStore {
+  readonly name: string;
+  put(item: Item): Promise<void>;
+  batchPut(items: Item[]): Promise<void>;
+  get(pk: string, sk: string): Promise<Item | undefined>;
+  delete(pk: string, sk: string): Promise<void>;
+  query(opts: QueryOptions): Promise<Item[]>;
+}
+
 /** Stand-in for one physical DynamoDB table. */
-export class DynamoTable {
+export class DynamoTable implements TableStore {
   readonly name: string;
   /** PK -> (SK -> item). A real table is a hash of sorted ranges; so is this. */
   #items = new Map<string, Map<string, Item>>();
@@ -55,7 +91,11 @@ export class DynamoTable {
   constructor(name: string) { this.name = name; }
 
   /** PutItem. Idempotent by construction because our SKs embed a content hash. */
-  put(item: Item): void {
+  async put(item: Item): Promise<void> {
+    this.#put(item);
+  }
+
+  #put(item: Item): void {
     const part = this.#items.get(item.PK) ?? new Map<string, Item>();
     part.set(item.SK, item);
     this.#items.set(item.PK, part);
@@ -63,19 +103,19 @@ export class DynamoTable {
   }
 
   /** BatchWriteItem - real limit is 25 items per call, so we chunk. */
-  batchPut(items: Item[]): void {
+  async batchPut(items: Item[]): Promise<void> {
     for (let i = 0; i < items.length; i += 25) {
-      for (const it of items.slice(i, i + 25)) this.put(it);
+      for (const it of items.slice(i, i + 25)) this.#put(it);
     }
     log.debug('batchWrite', { table: this.name, items: items.length, requests: Math.ceil(items.length / 25) });
   }
 
-  get(pk: string, sk: string): Item | undefined {
+  async get(pk: string, sk: string): Promise<Item | undefined> {
     return this.#items.get(pk)?.get(sk);
   }
 
   /** DeleteItem. Deleting an item that is not there is not an error, as in DynamoDB. */
-  delete(pk: string, sk: string): void {
+  async delete(pk: string, sk: string): Promise<void> {
     this.#items.get(pk)?.delete(sk);
   }
 
@@ -83,14 +123,7 @@ export class DynamoTable {
    * Query one partition, optionally restricted to a sort-key prefix/range and
    * reversed. This is the ONLY read pattern you should be using in production.
    */
-  query(opts: {
-    pk: string;
-    skBeginsWith?: string;
-    skBetween?: [string, string];
-    scanIndexForward?: boolean;
-    limit?: number;
-    index?: 'GSI1';
-  }): Item[] {
+  async query(opts: QueryOptions): Promise<Item[]> {
     this.stats.queries++;
     let rows: Item[];
 
@@ -115,7 +148,10 @@ export class DynamoTable {
     return opts.limit ? rows.slice(0, opts.limit) : rows;
   }
 
-  /** Only here to prove a point in the demo: how bad a Scan is. */
+  /**
+   * Only here to prove a point in the demo: how bad a Scan is. Synchronous,
+   * and deliberately NOT on TableStore - no production path may call it.
+   */
   scanEverything(): Item[] {
     const all = [...this.#items.values()].flatMap((p) => [...p.values()]);
     this.stats.itemsScanned += all.length;
@@ -126,7 +162,32 @@ export class DynamoTable {
   size(): number { return [...this.#items.values()].reduce((n, p) => n + p.size, 0); }
 }
 
-export const mainTable = new DynamoTable(env('TABLE_NAME', 'netpulse-dev-main'));
+/**
+ * The in-memory table. Tests and the demo reach for it directly when they want
+ * what only a fake can give - its size, its counters, a Scan.
+ */
+export const memoryTable = new DynamoTable(env('TABLE_NAME', 'netpulse-dev-main'));
+
+let store: TableStore = memoryTable;
+
+/** Point the platform at a real table. Called by Lambda entry points only. */
+export function setTableStore(next: TableStore): void { store = next; }
+
+/** Back to the in-memory table. For tests. */
+export function resetTableStore(): void { store = memoryTable; }
+
+/**
+ * What every repository function calls. It forwards on each call rather than
+ * capturing the store at import time, so `setTableStore` works whenever it runs.
+ */
+export const mainTable: TableStore = {
+  get name() { return store.name; },
+  put: (item) => store.put(item),
+  batchPut: (items) => store.batchPut(items),
+  get: (pk, sk) => store.get(pk, sk),
+  delete: (pk, sk) => store.delete(pk, sk),
+  query: (opts) => store.query(opts),
+};
 
 /** Key builders live next to the table so the layout is documented in one place. */
 export const keys = {

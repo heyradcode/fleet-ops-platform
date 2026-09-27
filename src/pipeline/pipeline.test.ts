@@ -448,7 +448,7 @@ test('the agent loop terminates within its iteration budget', async () => {
 });
 
 test('a viewer asking the agent to act is refused by the TOOL, not by the prompt', async () => {
-  const before = openIncidents(viewer).length;
+  const before = (await openIncidents(viewer)).length;
 
   const result = await runAgent({
     question: 'Open a critical incident for the Dallas core switch.',
@@ -467,7 +467,7 @@ test('a viewer asking the agent to act is refused by the TOOL, not by the prompt
 
   // And the refusal was real, not merely logged. This is the assertion that
   // cannot pass by accident.
-  assert.equal(openIncidents(viewer).length, before, 'no incident may have been created');
+  assert.equal((await openIncidents(viewer)).length, before, 'no incident may have been created');
 
   // An earlier version of this test looked for 'ERROR' in `evidence` or the
   // word 'refus' in the trace. Neither can ever appear: failed tool results are

@@ -31,8 +31,8 @@ import type {
  * devices, not by the number of syslog lines. History goes to S3 via
  * appendHistory() instead - see pipeline/steps.ts.
  */
-export function putDeviceState(principal: Principal, device: DeviceState): void {
-  mainTable.put({
+export async function putDeviceState(principal: Principal, device: DeviceState): Promise<void> {
+  await mainTable.put({
     ...keys.device(principal, device.deviceId),
     ...keys.deviceBySite(principal, device.siteId, device.deviceId),
     entity: 'DeviceState',
@@ -40,8 +40,8 @@ export function putDeviceState(principal: Principal, device: DeviceState): void 
   });
 }
 
-export function putDeviceStates(principal: Principal, devices: DeviceState[]): void {
-  mainTable.batchPut(devices.map((d) => ({
+export async function putDeviceStates(principal: Principal, devices: DeviceState[]): Promise<void> {
+  await mainTable.batchPut(devices.map((d) => ({
     ...keys.device(principal, d.deviceId),
     ...keys.deviceBySite(principal, d.siteId, d.deviceId),
     entity: 'DeviceState',
@@ -57,9 +57,9 @@ export function putDeviceStates(principal: Principal, devices: DeviceState[]): v
  * rather than to your answer - the difference between one site and forty
  * thousand devices.
  */
-export function devicesAtSite(principal: Principal, siteId: string): DeviceState[] {
-  return mainTable
-    .query({ index: 'GSI1', pk: 'TENANT#' + principal.tenantId + '#SITE#' + siteId })
+export async function devicesAtSite(principal: Principal, siteId: string): Promise<DeviceState[]> {
+  return (await mainTable
+    .query({ index: 'GSI1', pk: 'TENANT#' + principal.tenantId + '#SITE#' + siteId }))
     .map(strip<DeviceState>);
 }
 
@@ -67,20 +67,20 @@ export function devicesAtSite(principal: Principal, siteId: string): DeviceState
 // Observations
 // ---------------------------------------------------------------------------
 
-export function putObservations(principal: Principal, observations: Observation[]): void {
+export async function putObservations(principal: Principal, observations: Observation[]): Promise<void> {
   const items: Item[] = observations.map((o) => ({
     ...keys.observation(principal, o.observedAt, o.observationId),
     ...keys.observationByDevice(principal, o.deviceId, o.observedAt),
     entity: 'Observation',
     ...o,
   }));
-  mainTable.batchPut(items);
+  await mainTable.batchPut(items);
 }
 
 /** "Newest N observations for this tenant" - one Query, descending, limited. */
-export function recentObservations(principal: Principal, limit = 25): Observation[] {
-  return mainTable
-    .query({ pk: 'TENANT#' + principal.tenantId + '#OBSERVATION', scanIndexForward: false, limit })
+export async function recentObservations(principal: Principal, limit = 25): Promise<Observation[]> {
+  return (await mainTable
+    .query({ pk: 'TENANT#' + principal.tenantId + '#OBSERVATION', scanIndexForward: false, limit }))
     .map(strip<Observation>);
 }
 
@@ -92,62 +92,62 @@ export function recentObservations(principal: Principal, limit = 25): Observatio
  * controller's opinion of it, and our probe all come back together, which is
  * exactly what makes the corroboration story legible to a human reading it.
  */
-export function observationsForDevice(
+export async function observationsForDevice(
   principal: Principal,
   deviceId: string,
   sinceIso?: string,
-): Observation[] {
-  return mainTable.query({
+): Promise<Observation[]> {
+  return (await mainTable.query({
     index: 'GSI1',
     pk: 'TENANT#' + principal.tenantId + '#DEVICE#' + deviceId,
     skBetween: sinceIso ? [sinceIso, '9999'] : undefined,
     scanIndexForward: false,
-  }).map(strip<Observation>);
+  })).map(strip<Observation>);
 }
 
-export function observationsBySeverity(principal: Principal, severity: Severity): Observation[] {
+export async function observationsBySeverity(principal: Principal, severity: Severity): Promise<Observation[]> {
   // A filter, applied after the Query. Filters do NOT reduce read cost - the
   // items are read and then discarded. Fine for a small partition; if this were
   // hot, severity would belong in a sort key or a sparse GSI instead.
-  return recentObservations(principal, 500).filter((o) => o.severity === severity);
+  return (await recentObservations(principal, 500)).filter((o) => o.severity === severity);
 }
 
 // ---------------------------------------------------------------------------
 // Alarms and incidents
 // ---------------------------------------------------------------------------
 
-export function putAlarms(principal: Principal, alarms: Alarm[]): void {
-  mainTable.batchPut(alarms.map((a) => ({
+export async function putAlarms(principal: Principal, alarms: Alarm[]): Promise<void> {
+  await mainTable.batchPut(alarms.map((a) => ({
     ...keys.alarm(principal, a.raisedAt, a.alarmId),
     entity: 'Alarm',
     ...a,
   })));
 }
 
-export function recentAlarms(principal: Principal, limit = 50): Alarm[] {
-  return mainTable
-    .query({ pk: 'TENANT#' + principal.tenantId + '#ALARM', scanIndexForward: false, limit })
+export async function recentAlarms(principal: Principal, limit = 50): Promise<Alarm[]> {
+  return (await mainTable
+    .query({ pk: 'TENANT#' + principal.tenantId + '#ALARM', scanIndexForward: false, limit }))
     .map(strip<Alarm>);
 }
 
-export function putIncident(principal: Principal, incident: Incident): void {
-  mainTable.put({
+export async function putIncident(principal: Principal, incident: Incident): Promise<void> {
+  await mainTable.put({
     ...keys.incident(principal, incident.openedAt, incident.incidentId),
     entity: 'Incident',
     ...incident,
   });
 }
 
-export function openIncidents(principal: Principal, limit = 25): Incident[] {
-  return mainTable
-    .query({ pk: 'TENANT#' + principal.tenantId + '#INCIDENT', scanIndexForward: false, limit })
+export async function openIncidents(principal: Principal, limit = 25): Promise<Incident[]> {
+  return (await mainTable
+    .query({ pk: 'TENANT#' + principal.tenantId + '#INCIDENT', scanIndexForward: false, limit }))
     .map(strip<Incident>)
     .filter((i) => i.status !== 'resolved');
 }
 
-export function getIncident(principal: Principal, incidentId: string): Incident | undefined {
-  return mainTable
-    .query({ pk: 'TENANT#' + principal.tenantId + '#INCIDENT' })
+export async function getIncident(principal: Principal, incidentId: string): Promise<Incident | undefined> {
+  return (await mainTable
+    .query({ pk: 'TENANT#' + principal.tenantId + '#INCIDENT' }))
     .map(strip<Incident>)
     .find((i) => i.incidentId === incidentId);
 }

@@ -77,48 +77,48 @@ export function requireTenantScope(principal: Principal): void {
 }
 
 /** Incidents are NOT written here - lifecycle.ts owns them, one open record per subject. */
-export function putCommsRun(principal: Principal, run: {
+export async function putCommsRun(principal: Principal, run: {
   workforce: WorkforceSummary;
   alarms: CommsAlarm[];
-}): void {
-  mainTable.put({ PK: pk(principal, 'COMMS'), SK: 'WORKFORCE#LATEST', entity: 'CommsWorkforce', ...run.workforce });
-  mainTable.batchPut(run.alarms.map((a) => ({
+}): Promise<void> {
+  await mainTable.put({ PK: pk(principal, 'COMMS'), SK: 'WORKFORCE#LATEST', entity: 'CommsWorkforce', ...run.workforce });
+  await mainTable.batchPut(run.alarms.map((a) => ({
     PK: pk(principal, 'COMMSALARM'), SK: a.raisedAt + '#' + a.alarmId, entity: 'CommsAlarm', ...a,
   })));
 }
 
-export function commsWorkforce(principal: Principal): WorkforceSummary | undefined {
+export async function commsWorkforce(principal: Principal): Promise<WorkforceSummary | undefined> {
   requireTenantScope(principal);
-  const item = mainTable.query({ pk: pk(principal, 'COMMS') }).find((i) => i.SK === 'WORKFORCE#LATEST');
+  const item = await mainTable.get(pk(principal, 'COMMS'), 'WORKFORCE#LATEST');
   return item ? strip<WorkforceSummary>(item) : undefined;
 }
 
 /** The Cisco phone inventory: counts only, overwritten each poll. */
-export function putPhoneInventory(principal: Principal, inventory: PhoneInventory): void {
-  mainTable.put({ PK: pk(principal, 'COMMS'), SK: 'PHONES#LATEST', entity: 'PhoneInventory', ...inventory });
+export async function putPhoneInventory(principal: Principal, inventory: PhoneInventory): Promise<void> {
+  await mainTable.put({ PK: pk(principal, 'COMMS'), SK: 'PHONES#LATEST', entity: 'PhoneInventory', ...inventory });
 }
 
-export function commsPhones(principal: Principal): PhoneInventory | undefined {
+export async function commsPhones(principal: Principal): Promise<PhoneInventory | undefined> {
   requireTenantScope(principal);
-  const item = mainTable.get(pk(principal, 'COMMS'), 'PHONES#LATEST');
+  const item = await mainTable.get(pk(principal, 'COMMS'), 'PHONES#LATEST');
   return item ? strip<PhoneInventory>(item) : undefined;
 }
 
 /** The OPEN incidents - one per subject that is currently a problem. */
-export function commsIncidents(principal: Principal): CommsIncident[] {
+export async function commsIncidents(principal: Principal): Promise<CommsIncident[]> {
   requireTenantScope(principal);
   return openCommsIncidents(principal);
 }
 
 /** Recently resolved, newest first. */
-export function commsResolvedIncidents(principal: Principal, limit = 10): CommsIncident[] {
+export async function commsResolvedIncidents(principal: Principal, limit = 10): Promise<CommsIncident[]> {
   requireTenantScope(principal);
   return resolvedCommsIncidents(principal, limit);
 }
 
-export function commsAlarms(principal: Principal, limit = 50): CommsAlarm[] {
+export async function commsAlarms(principal: Principal, limit = 50): Promise<CommsAlarm[]> {
   requireTenantScope(principal);
-  return mainTable.query({ pk: pk(principal, 'COMMSALARM'), scanIndexForward: false, limit }).map(strip<CommsAlarm>);
+  return (await mainTable.query({ pk: pk(principal, 'COMMSALARM'), scanIndexForward: false, limit })).map(strip<CommsAlarm>);
 }
 
 function strip<T>(item: Record<string, unknown>): T {

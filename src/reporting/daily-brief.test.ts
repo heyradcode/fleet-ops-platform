@@ -68,7 +68,7 @@ test('figures are the stored ones - quoted, never recomputed', async () => {
   const { principal, poll } = setup('b-figures');
   await poll();
   const b = await buildDailyBrief(principal, now(), noNetwork);
-  const queue = commsIncidents(principal).find((i) => i.subject.kind === 'queue')!;
+  const queue = (await commsIncidents(principal)).find((i) => i.subject.kind === 'queue')!;
   const waiting = queue.figures.find((f) => f.kind === 'queue-backlog')!.value;
   const item = b.open.find((o) => o.area === 'contact centre')!;
   assert.match(item.impact, new RegExp('^' + waiting + ' callers waiting'));
@@ -78,7 +78,7 @@ test('people at a facility are counted ONCE, however many platforms they are on'
   const { principal, poll } = setup('b-people');
   await poll();
   const code = TEAMS_PLANTED.degradedFacility;
-  const row = commsWorkforce(principal)!.byFacility.find((f) => f.code === code)!;
+  const row = (await commsWorkforce(principal))!.byFacility.find((f) => f.code === code)!;
   // EMPLOYEES only: a contractor is not in Entra and Genesys holds no
   // facility, so the platform cannot place one - they are reported as
   // unplaced, never guessed into a building.

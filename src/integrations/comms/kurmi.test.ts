@@ -108,7 +108,7 @@ test('Kurmi down costs Kurmi only; its gaps are data-quality items with fixes; n
   for (const k of ['unknown-agency-code', 'blank-agency', 'unmapped-kurmi-department', 'kurmi-no-facility']) {
     assert.ok(kinds.includes(k as never), k);
   }
-  assert.ok(!JSON.stringify(mainTable.get('TENANT#' + tenantId + '#COMMS', 'PHONES#LATEST')).includes('SEP'),
+  assert.ok(!JSON.stringify(await mainTable.get('TENANT#' + tenantId + '#COMMS', 'PHONES#LATEST')).includes('SEP'),
     'no device names at rest - counts only');
 
   injectFault('kurmi', 503, 1000);
