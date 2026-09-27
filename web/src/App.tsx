@@ -17,9 +17,10 @@ import type { BasemapMode } from './SiteMap.tsx';
 import { DevicePanel } from './DevicePanel.tsx';
 import { CommsBoard } from './CommsBoard.tsx';
 import { transport } from './transport/select.ts';
-import { SignIn } from './SignIn.tsx';
+import { BoardApiError } from './transport/api.ts';
+import { CognitoNotConfigured, SignIn } from './SignIn.tsx';
 import { useRestoredSession } from './auth/useSession.ts';
-import { auth } from './auth/provider.ts';
+import { auth, cognitoReady } from './auth/provider.ts';
 import {
   UTILISATION_MAX, formatPercent, loadLevel, roleLabel, statusRank, witness,
   type LoadLevel,
@@ -43,7 +44,13 @@ import type {
  * see that file for why the order matters.
  */
 export function App() {
-  const [session, setSession, restoreError] = useRestoredSession();
+  // A module constant, so this branch never changes between renders - the
+  // hooks below it are called in the same order every time.
+  return cognitoReady ? <Shell /> : <CognitoNotConfigured />;
+}
+
+function Shell() {
+  const [session, setSession, restoreError, expire] = useRestoredSession();
 
   if (!session) return <SignIn onSignedIn={setSession} initialError={restoreError} />;
 
@@ -52,11 +59,14 @@ export function App() {
       key={session.principal.sub}
       session={session}
       onSignOut={() => { auth.signOut(); setSession(null); }}
+      onExpired={expire}
     />
   );
 }
 
-function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) {
+function Board({ session, onSignOut, onExpired }: {
+  session: Session; onSignOut(): void; onExpired(reason: string): void;
+}) {
   const scope = session.principal.scope;
 
   // An operator opens on their own site and has no other option. An ops lead
@@ -74,8 +84,12 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
   // In the tab a load cannot fail; over the API it can - an expired token, a
   // network, a throttle. Say so where the estate would be, never a blank board.
   const [loadError, setLoadError] = useState<string | null>(null);
-  const failed = (what: string) => (err: unknown) =>
+  const failed = (what: string) => (err: unknown) => {
+    // A token the API no longer accepts is not a board error: a board that
+    // stays up looks signed in and cannot load anything. Back to sign-in.
+    if (err instanceof BoardApiError && err.status === 401) return onExpired(err.message);
     setLoadError(what + (err instanceof Error ? err.message : String(err)));
+  };
 
   // The comms view exists only when the token admits it; `null` from the
   // transport means "not yours", and the switch is then never rendered - the

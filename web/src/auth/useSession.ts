@@ -17,7 +17,7 @@
  *    By the time anything renders with a session, the transport already has it.
  */
 import { useCallback, useEffect, useState } from 'react';
-import { auth, usingCognito } from './provider.ts';
+import { auth } from './provider.ts';
 import { completeRedirect } from './cognito.ts';
 import { transport } from '../transport/select.ts';
 import type { Session } from './index.ts';
@@ -27,6 +27,8 @@ type Restored = [
   setSession: (s: Session | null) => void,
   /** Why the page arrived signed out, when there is a reason worth showing. */
   restoreError: string | null,
+  /** The token stopped being accepted mid-session: back to sign-in, saying why. */
+  expire: (reason: string) => void,
 ];
 
 export function useRestoredSession(): Restored {
@@ -44,7 +46,7 @@ export function useRestoredSession(): Restored {
 
     // Back from the hosted UI. The code in the URL is single-use and must not
     // survive a refresh, so it is exchanged and then scrubbed from history.
-    if (usingCognito && (params.has('code') || params.has('error'))) {
+    if (params.has('code') || params.has('error')) {
       completeRedirect(params)
         .then((s) => {
           globalThis.history.replaceState(null, '', globalThis.location.pathname);
@@ -57,7 +59,7 @@ export function useRestoredSession(): Restored {
     }
 
     // Restore on load, so a refresh does not sign you out. Re-verified rather
-    // than trusted - see localAuth.restore().
+    // than trusted - see cognitoAuth.restore().
     let stale = false;
     auth.restore()
       .then((s) => { if (!stale) setSession(s); })
@@ -65,5 +67,11 @@ export function useRestoredSession(): Restored {
     return () => { stale = true; };
   }, [setSession]);
 
-  return [session, setSession, restoreError];
+  const expire = useCallback((reason: string) => {
+    auth.forget();
+    setSession(null);
+    setRestoreError(reason);
+  }, [setSession]);
+
+  return [session, setSession, restoreError, expire];
 }

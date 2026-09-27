@@ -12,15 +12,17 @@ pnpm start       # the backend, narrated, in your terminal
 pnpm web         # the operations board, at localhost:5180
 ```
 
-The board opens on a sign-in page. Offline there are no passwords — type any
-address at one of five registered customer domains (`acme-networks.com`,
-`eng.acme-networks.com`, `netpulse.io`, `northwind-utilities.com`,
-`hhs.texas.example`) and the same Cognito logic the Lambdas run mints and
-verifies a token locally. What you see afterwards is decided by that token, not
-by anything on the page: an operator gets one site, an admin the whole estate,
-and an unregistered domain gets nothing at all. `hhs.texas.example` is the
-voice and contact-centre customer, and its board has a second view - Teams,
-Genesys and Webex, polled from offline mocks of those APIs.
+The board signs in through a real Cognito user pool - `infra/terraform/auth/`
+creates one for pennies a month, and its README walks through it; `pnpm
+web:env` then writes the board's settings. Without them the board shows what
+it needs instead of a sign-in page. What you see afterwards is decided by the
+access token, not by anything on the page: the email's domain maps to a
+customer, a role and a site in the membership table, so an operator gets one
+site, an admin the whole estate, and an unregistered domain gets nothing at
+all. The `hhs-demo` customer has a second view - Teams, Genesys and Webex,
+polled from offline mocks of those APIs.
+
+`pnpm start` and the tests need no AWS account at all.
 
 <sub>Node 22+ for the backend — it is TypeScript and Node runs it directly via
 type-stripping, so there is no build step. The board is a separate workspace
@@ -141,7 +143,8 @@ pnpm start --only=comms     # seven sources, one workforce, incidents that resol
 pnpm start --only=brief     # the executive brief - every figure from stored data
 ```
 
-Sign in to the board as `ops-lead@hhs.texas.example` for the comms view.
+Sign in with an account whose domain maps to the `hhs-demo` customer for the
+comms view (`infra/terraform/auth/README.md`, *Onboarding a customer*).
 What it shows that a dashboard would not:
 
 - **Call quality at a facility needs two services to agree** — and when one is
@@ -306,7 +309,7 @@ pnpm start --only=ai               # graphql | rest | geo | ai
 pnpm start --only=comms            # comms | solarwinds | brief
 pnpm dev                           # the same, restarting on every save
 
-pnpm test                          # 274 tests, no network
+pnpm test                          # 272 tests, no network
 pnpm typecheck
 pnpm mock                          # the vendor mocks on localhost, for curl
 
@@ -329,16 +332,13 @@ serves `web/dist`; the same three settings work on Netlify or Cloudflare
 Pages. Import the repo, keep the root directory at the repo root (the build
 reaches into `src/`), and enable Corepack so the pinned pnpm is used.
 
-Sign-in works with no AWS account: the board runs Cognito's own logic —
-home-realm discovery, the PreTokenGeneration trigger, the verifier's seven
-checks — against a local issuer. Set `VITE_COGNITO_DOMAIN`,
-`VITE_COGNITO_CLIENT_ID` and `VITE_COGNITO_ISSUER` and it switches to a real
-user pool with RS256 verification against the published JWKS;
-`infra/terraform/auth/` creates one for pennies a month.
-
-There is no separately hostable API. `src/api/` holds the Lambda handlers and
-the rest of `infra/` the Terraform that would run them — read-only material,
-and not free to deploy.
+Sign-in is a real Cognito user pool, verified RS256 against its published
+JWKS: set `VITE_COGNITO_DOMAIN`, `VITE_COGNITO_CLIENT_ID` and
+`VITE_COGNITO_ISSUER` on the host (`terraform output vercel_env` prints them).
+Add `VITE_BOARD_API_URL` and the network and comms views come from the board
+API - one Lambda over the real DynamoDB table - instead of being computed in
+the tab. Both live in `infra/terraform/auth/`; the rest of `infra/` is
+read-only material, and not free to deploy.
 
 ---
 

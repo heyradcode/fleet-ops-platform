@@ -24,9 +24,10 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 274 tests, no network. Picks up web/ tests too.
+pnpm test                       # 272 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
-pnpm web                        # operations board, http://localhost:5180
+pnpm web                        # operations board, http://localhost:5180 - real Cognito sign-in
+pnpm web:env                    # write web/.env.cognito.local from the Terraform outputs
 pnpm web:build                  # typechecks web/ AND builds it
 pnpm mock                       # mock Teams/Genesys/Webex APIs, http://127.0.0.1:5190
 pnpm check:promises             # no un-awaited or misused promise, backend and web/
@@ -404,14 +405,15 @@ network. Nothing real belongs in this repo.
   `integrations/classify.ts` drives the capacity rule AND the board's load
   strip. An amber strip that disagreed with the rule would have been the
   symptom.
-- **The token trigger is in the BROWSER's module graph.**
-  `web/src/auth/local.ts` imports `auth/pre-token-generation.ts` so the offline
-  board runs Cognito's real logic — which means an AWS SDK import there breaks
-  `pnpm web:build`, and **CI would not catch it**: the portability check greps
-  for `node:` builtins and `@aws-sdk/*` is not one. Membership therefore goes
-  through a registry (`platform/membership.ts`), with the DynamoDB adapter
-  wired in `infra/terraform/auth/lambda-entry.ts`, which only esbuild reads.
-  Same shape as `runbook-loader.ts` / `runbook-loader.node.ts`.
+- **The token trigger stays SDK-free, though the board no longer runs it.**
+  `web/src/auth/local.ts` imports `auth/pre-token-generation.ts` so the TESTS
+  run Cognito's real logic with no pool; the board signs in through the real
+  pool only, and local.ts is out of its bundle. The trigger is still shared
+  code, so membership goes through a registry (`platform/membership.ts`),
+  with the DynamoDB adapter wired in `infra/terraform/auth/lambda-entry.ts`,
+  which only esbuild reads - same shape as `runbook-loader.node.ts` and
+  `aws/dynamodb.sdk.ts`. CI's portability step greps for `@aws-sdk` imports
+  and the two adapters in shared code; it did not always.
 - **`crypto.randomUUID()` is secure-context only.** Undefined over plain http
   on a LAN address, which is how the board is reached behind a VPN that
   intercepts loopback. `platform/crypto.ts` falls back to `getRandomValues`.
@@ -468,7 +470,8 @@ web/src/transport/  the boundary that lets the backend run in the browser;
                  api.ts reads the two data views over HTTP, select.ts picks
 src/api/board-api.ts  GET /board and GET /comms - the one implementation of
                  both views, served from Lambda (infra/terraform/auth/api.tf)
-web/src/auth/    sign-in: the same Cognito logic the Lambdas run, local issuer
+web/src/auth/    sign-in: the real pool only (provider.ts); local.ts is the
+                 offline issuer, kept as a TEST fixture, never on the page
 src/platform/membership.ts  which customer an email domain belongs to; a
                  registry, so the browser never loads the DynamoDB client
 ```

@@ -82,6 +82,15 @@ export type AuthProvider = {
    */
   signUp(request: SignUpRequest): Promise<{ message: string }>;
 
+  /**
+   * Drop THIS BROWSER's copy of the session, leaving the identity provider's
+   * own alone. For a token the API stopped accepting mid-session: the board
+   * returns to sign-in and says why, and signing in again need not start from
+   * a password. signOut() is the deliberate one - it ends the provider's
+   * session too.
+   */
+  forget(): void;
+
   signOut(): void;
 };
 

@@ -21,13 +21,13 @@ pnpm start
 pnpm web
 ```
 
-The board opens on a sign-in page. There are no passwords offline — type any
-address at `acme-networks.com` (a site operator), `netpulse.io` (an
-admin, tenant-wide) or `northwind-utilities.com` (a different customer), and
-notice that what each one can see is decided by the token it was issued, not
-by anything on the page. An unregistered domain signs in and sees nothing,
-which is the fail-closed rule rather than a bug. `ops-lead@hhs.texas.example`
-opens the second half: the voice and contact-centre view.
+The board signs in through a real Cognito pool - set it up with
+`infra/terraform/auth/README.md` first; until then it shows what it needs.
+What each account can see is decided by the token it was issued, not by
+anything on the page: the email's domain maps to a customer, role and site in
+the membership table. A domain with no row signs in and sees nothing, which is
+the fail-closed rule rather than a bug. An account mapped to the `hhs-demo`
+customer opens the second half: the voice and contact-centre view.
 
 ## 2. Read in this order (2-3 hours)
 

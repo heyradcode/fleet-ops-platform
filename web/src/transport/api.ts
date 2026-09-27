@@ -26,8 +26,19 @@ export function boardApiUrl(): string | undefined {
   return url ? url.replace(/\/+$/, '') : undefined;
 }
 
-/** A failed API call, with a message fit to show the person at the board. */
-export class BoardApiError extends Error {}
+/**
+ * A failed API call, with a message fit to show the person at the board.
+ * `status` 401 means the token is no longer accepted - the shell sends the
+ * person back to sign-in rather than leaving a board that cannot load.
+ */
+export class BoardApiError extends Error {
+  readonly status: number | undefined;
+  constructor(message: string, status?: number) {
+    super(message);
+    this.name = 'BoardApiError';
+    this.status = status;
+  }
+}
 
 /**
  * A transport against one API. `fetch` is injected so the tests can wire it
@@ -53,7 +64,8 @@ export function createApiTransport(base: string | undefined, fetchImpl: typeof f
       // browser hides the difference on purpose.
       throw new BoardApiError('The board API did not answer - check the network, or that this origin is allowed.');
     }
-    if (res.status === 401) throw new BoardApiError('Your session has expired or was not accepted - sign in again.');
+    // An access token lives an hour (the pool's access_token_validity).
+    if (res.status === 401) throw new BoardApiError('Your session has expired - sign in again.', 401);
     if (res.status === 403) throw new BoardApiError('That is outside what your account can see.');
     if (res.status === 429) throw new BoardApiError('The board API is busy - try again in a moment.');
     if (!res.ok) throw new BoardApiError('The board API failed (' + res.status + ').');

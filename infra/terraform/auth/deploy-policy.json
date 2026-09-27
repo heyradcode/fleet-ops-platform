@@ -32,6 +32,22 @@
         "dynamodb:DeleteItem"
       ],
       "Resource": "arn:aws:dynamodb:us-east-1:588651260734:table/netpulse-*"
+    },
+    {
+      "Sid": "ManageBoardApi",
+      "Effect": "Allow",
+      "Action": [
+        "apigateway:GET",
+        "apigateway:POST",
+        "apigateway:PUT",
+        "apigateway:PATCH",
+        "apigateway:DELETE"
+      ],
+      "Resource": [
+        "arn:aws:apigateway:us-east-1::/apis",
+        "arn:aws:apigateway:us-east-1::/apis/*",
+        "arn:aws:apigateway:us-east-1::/tags/*"
+      ]
     }
   ]
 }

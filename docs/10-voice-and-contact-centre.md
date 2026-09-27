@@ -10,7 +10,7 @@ of the vendors' own APIs.
 pnpm start --only=comms        # the whole comms story, narrated
 pnpm start --only=solarwinds   # the network half: an on-prem poller, two planes
 pnpm start --only=brief        # the executive brief (after the two above)
-pnpm web                       # sign in as ops-lead@hhs.texas.example -> "comms"
+pnpm web                       # sign in as an hhs-demo account -> "comms"
 pnpm mock                      # the vendor mocks on http://127.0.0.1:5190, for curl
 ```
 

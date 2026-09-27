@@ -61,6 +61,12 @@ aws iam attach-user-policy --user-name YOUR_USER --policy-arn arn:aws:iam::aws:p
 aws iam put-user-policy --user-name YOUR_USER --policy-name NetpulseBudgets --policy-document file://deploy-policy.json
 ```
 
+`deploy-policy.json` also grants the two DynamoDB tables and the board API's
+HTTP API (`apigateway:*` verbs on `/apis`), which a developer group usually
+lacks. Re-running the same `put-user-policy` after pulling a newer copy
+replaces the old one - it is how the API permission arrives for an identity
+that applied an earlier version.
+
 `deploy-policy.json` sits beside this file; change the account id in it if you
 are deploying elsewhere. Attach both to the **user**, not to a shared group -
 nobody else needs Cognito because of this.
@@ -133,35 +139,41 @@ VITE_COGNITO_CLIENT_ID  the app client
 VITE_COGNITO_ISSUER     https://cognito-idp.<region>.amazonaws.com/<poolId>
 ```
 
-With any of them missing the board keeps using the offline provider. That is
-the intended default, not a failure — the local issuer still mints and
-verifies tokens for the registered customer domains, with no password.
+All three are required. The board signs in through the pool and nothing
+else: with any of them missing it shows a "sign-in is not configured" page
+naming them, rather than signing people in some other way.
 
-**Locally,** put the same three in `web/.env.cognito.local` and run
-`pnpm web:cognito` (Vite's `--mode cognito`). The pool already allows
-`http://localhost:5180/callback`, which is why the dev port is pinned. The
-file NAME is load-bearing: Vite reads `.env.[mode].local`, and a
-`.env.local.cognito` is silently ignored — the board comes up on the offline
-issuer and nothing says why.
+**Locally,** `pnpm web:env` writes them - with the API URL below - into
+`web/.env.cognito.local`, and `pnpm web` loads that file (Vite's
+`--mode cognito`). The pool already allows `http://localhost:5180/callback`,
+which is why the dev port is pinned. The file NAME is load-bearing: Vite
+reads `.env.[mode].local`, and a `.env.local.cognito` is silently ignored.
+
+**Who can see what** is decided by the email's DOMAIN, through the membership
+table, after Cognito has authenticated the person. Sign in with an address at
+a domain that has no row and Cognito lets you in, the trigger finds no
+customer, and the board refuses you with a sentence saying so - fail closed.
+So each person needs two things: a user in the pool, and a membership row
+for their domain (next section).
+
+A user with a real mailbox gets Cognito's invitation email with a temporary
+password and is asked to set their own at first sign-in:
 
 ```bash
-terraform output -json vercel_env   | node -e 'const o=JSON.parse(require("fs").readFileSync(0));for(const k in o)console.log(k+"="+o[k])'   > ../../../web/.env.cognito.local
+aws cognito-idp admin-create-user --user-pool-id "<user_pool_id>" --username you@yourdomain.com --user-attributes Name=email,Value=you@yourdomain.com Name=email_verified,Value=true
 ```
 
-For the voice and contact-centre view, the user must be at
-`hhs.texas.example` and that domain must be in the membership table. It is in
-`demo_customers`, so with `seed_demo_customers = true` a plain
-`terraform apply` writes it. `.example` is a reserved domain that can receive
-no mail, so create the user with a password rather than an invitation:
+`.example` domains (`hhs.texas.example`) can receive no mail, so for those,
+suppress the invitation and set the password yourself:
 
 ```bash
-POOL="$(terraform output -raw user_pool_id)"
-aws cognito-idp admin-create-user --user-pool-id "$POOL"   --username ops-lead@hhs.texas.example --message-action SUPPRESS   --user-attributes Name=email,Value=ops-lead@hhs.texas.example Name=email_verified,Value=true
-aws cognito-idp admin-set-user-password --user-pool-id "$POOL"   --username ops-lead@hhs.texas.example --permanent --password '<choose one>'
+aws cognito-idp admin-create-user --user-pool-id "<user_pool_id>" --username ops-lead@hhs.texas.example --message-action SUPPRESS --user-attributes Name=email,Value=ops-lead@hhs.texas.example Name=email_verified,Value=true
+aws cognito-idp admin-set-user-password --user-pool-id "<user_pool_id>" --username ops-lead@hhs.texas.example --permanent --password "<choose one>"
 ```
 
-The header then shows the user's `sub`, not an address: a Cognito ACCESS
-token has no `email` claim, and the trigger deliberately adds none.
+`terraform output -raw user_pool_id` prints the pool id. The header shows
+the user's `sub`, not an address: a Cognito ACCESS token has no `email`
+claim, and the trigger deliberately adds none.
 
 ### Onboarding a customer
 
@@ -176,6 +188,19 @@ aws dynamodb put-item --table-name netpulse-demo-membership --item '{
   "site": {"S": "phx-01"}
 }'
 ```
+
+In Windows PowerShell, put the JSON in a file instead - PowerShell 5.1
+strips the inner quotes when it hands a string to a native program, and the
+CLI then reports a parse error about JSON that looks correct:
+
+```powershell
+aws dynamodb put-item --table-name netpulse-demo-membership --item file://membership.json
+```
+
+**The comms view** (Teams, Genesys, Webex, the SIP trunks) belongs to the
+`hhs-demo` tenant and needs tenant-wide scope, so its row is
+`"tenantId": {"S": "hhs-demo"}`, `"roles": {"SS": ["admin"]}` and no `site` -
+for whichever domain the people who should see it sign in with.
 
 No rebuild, no deploy. Terraform declares rows with `aws_dynamodb_table_item`,
 which manages only the rows it declares — rows added this way survive the next
@@ -235,14 +260,10 @@ aws dynamodb query --table-name netpulse-demo-main   --key-condition-expression 
 
 ### Pointing the board at the API
 
-`terraform output vercel_env` now prints four variables; the fourth is
-`VITE_BOARD_API_URL`. Locally, the same one-liner as above writes all four
-into `web/.env.cognito.local`; then `pnpm web:cognito`.
-
-It needs Cognito sign-in as well: the API accepts only an access token from
-the pool, and the offline issuer's tokens are signed with a demo key it has
-never seen - so with the URL set but not Cognito, the board says so in the
-console and stays in the tab.
+`terraform output vercel_env` prints four variables; the fourth is
+`VITE_BOARD_API_URL`, and `pnpm web:env` writes it with the other three.
+With it set the board reads its two data views from the API; remove the
+line and it computes them in the tab instead. Sign-in is the pool either way.
 
 What moves to the API is what reads DATA: the network view and the comms
 view. The health replay, the live alarm feed and the assistant stay in the

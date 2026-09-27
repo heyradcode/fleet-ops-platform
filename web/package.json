@@ -5,8 +5,7 @@
   "type": "module",
   "description": "NetPulse operations board",
   "scripts": {
-    "dev": "vite",
-    "dev:cognito": "vite --mode cognito",
+    "dev": "vite --mode cognito",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview"
   },

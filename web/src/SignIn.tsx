@@ -1,24 +1,26 @@
 /**
  * ---------------------------------------------------------------------------
- * Sign in
+ * Sign in - through the real Cognito pool, and only through it
  * ---------------------------------------------------------------------------
- * The interesting part of this screen is HOME-REALM DISCOVERY, and it is real.
- *
  * Type a work email and the platform decides which identity provider handles
- * it - SAML for one customer, OIDC for another, the Cognito-native pool for
- * everyone else - before any password is asked for. That is what enterprise
- * users expect ("type your work email, land on your own login page"), Cognito
- * has no built-in support for it, and the lookup is the same one the hosted UI
- * would drive: `resolveIdpForEmail` in src/auth/providers.ts.
+ * it - HOME-REALM DISCOVERY, `resolveIdpForEmail` in src/auth/providers.ts,
+ * bounded to the providers the pool actually has - then Continue goes to the
+ * hosted UI with PKCE. The password is Cognito's; this page never sees one.
  *
- * Signing in is also what makes the board's scope real rather than asserted.
- * The site on the token comes from the PreTokenGeneration trigger, and a
- * Dallas operator genuinely cannot reach Phoenix because their token does not
- * say they may.
+ * What the account can see is decided AFTER Cognito authenticates it: the
+ * PreTokenGeneration trigger looks the email's domain up in the membership
+ * table and stamps tenant, role and site into the access token. An account
+ * whose domain is not there signs in successfully and is then refused here,
+ * with a sentence saying so - the fail-closed path, not a broken sign-in.
+ *
+ * No self-registration. Accounts are created by an administrator
+ * (`aws cognito-idp admin-create-user`, see infra/terraform/auth/README.md):
+ * an estate platform onboards organisations, it does not let strangers sign
+ * themselves up next to real customers. The offline issuer and its one-click
+ * accounts are gone from this page; they survive only as test fixtures.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { auth, usingCognito } from './auth/provider.ts';
-import { DEMO_ACCOUNTS } from './auth/local.ts';
+import { auth } from './auth/provider.ts';
 import { AuthError, type Realm, type Session } from './auth/index.ts';
 
 type Props = {
@@ -31,7 +33,6 @@ export function SignIn({ onSignedIn, initialError = null }: Props) {
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(initialError);
-  const [mode, setMode] = useState<'in' | 'up'>('in');
 
   // useState's initial value is used on the FIRST render and never again, so
   // an error that arrives later - and this one always does, because the token
@@ -54,23 +55,11 @@ export function SignIn({ onSignedIn, initialError = null }: Props) {
     setBusy(true);
     setError(null);
     try {
+      // Navigates to the hosted UI; the session arrives on the way back, in
+      // useRestoredSession. onSignedIn is here for the interface's sake.
       onSignedIn(await auth.signIn(email.trim()));
     } catch (err) {
       setError(err instanceof AuthError ? err.message : 'Sign-in failed. Try again.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function useAccount(address: string) {
-    setEmail(address);
-    setBusy(true);
-    setError(null);
-    try {
-      onSignedIn(await auth.signIn(address));
-    } catch (err) {
-      setError(err instanceof AuthError ? err.message : 'Sign-in failed. Try again.');
-    } finally {
       setBusy(false);
     }
   }
@@ -84,184 +73,88 @@ export function SignIn({ onSignedIn, initialError = null }: Props) {
           <span className="gate-tag">Operations board</span>
         </header>
 
-        {mode === 'in' ? (
-          <>
-            <form className="gate-form" onSubmit={submit}>
-              <label className="field">
-                <span className="field-label">Work email</span>
-                <input
-                  className="field-input mono"
-                  type="email"
-                  autoComplete="username"
-                  placeholder="you@customer.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  autoFocus
-                />
-              </label>
+        <form className="gate-form" onSubmit={submit}>
+          <label className="field">
+            <span className="field-label">Work email</span>
+            <input
+              className="field-input mono"
+              type="email"
+              autoComplete="username"
+              placeholder="you@customer.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              autoFocus
+            />
+          </label>
 
-              {/* The discovery result, as it resolves. */}
-              {realm && (
-                <p className={`realm is-${realm.kind}`}>
-                  <span className="realm-kind">{realm.kind}</span>
-                  {realm.kind === 'cognito'
-                    ? 'No single sign-on for this domain — the Cognito pool will handle it.'
-                    : `Routed to ${realm.idp}. You will sign in with your own provider.`}
-                </p>
-              )}
-
-              {error && <p className="gate-error">{error}</p>}
-
-              {/* Cognito keeps its OWN session cookie, so /oauth2/authorize
-                  re-issues a code for the same rejected account on every
-                  attempt - a loop with no visible exit. Only /logout breaks
-                  it, and that is what signOut() does. */}
-              {error && usingCognito && (
-                <button type="button" className="linkish gate-switch" onClick={() => auth.signOut()}>
-                  Sign in as someone else
-                </button>
-              )}
-
-              <button className="ask gate-submit" type="submit" disabled={busy || !realm}>
-                {busy ? 'Signing in…' : realm ? realm.label : 'Continue'}
-              </button>
-            </form>
-
-            {/* Only the local issuer can honour a click on one of these. */}
-            {!usingCognito && (
-              <section className="gate-demo">
-                <h2 className="panel-h">Or sign in as</h2>
-                <p className="gate-note">
-                  {DEMO_ACCOUNTS.length} accounts, each showing a different scope. There are no
-                  passwords — this build runs Cognito's logic against a local issuer rather
-                  than a user pool.
-                </p>
-                {DEMO_ACCOUNTS.map((a) => (
-                  <button
-                    key={a.email}
-                    className="demo-account"
-                    onClick={() => useAccount(a.email)}
-                    disabled={busy}
-                  >
-                    <span className="demo-name">{a.name}</span>
-                    <span className="demo-email mono">{a.email}</span>
-                    <span className="demo-shows">{a.shows}</span>
-                  </button>
-                ))}
-              </section>
-            )}
-
-            <p className="gate-switch">
-              New customer?{' '}
-              <button className="linkish" onClick={() => { setMode('up'); setError(null); }}>
-                Register
-              </button>
+          {/* The discovery result, as it resolves. */}
+          {realm && (
+            <p className={`realm is-${realm.kind}`}>
+              <span className="realm-kind">{realm.kind}</span>
+              {realm.kind === 'cognito'
+                ? 'No single sign-on for this domain — the Cognito pool will handle it.'
+                : `Routed to ${realm.idp}. You will sign in with your own provider.`}
             </p>
-          </>
-        ) : (
-          <SignUp onBack={() => { setMode('in'); setError(null); }} />
-        )}
+          )}
+
+          {error && <p className="gate-error">{error}</p>}
+
+          {/* Cognito keeps its OWN session cookie, so /oauth2/authorize
+              re-issues a code for the same rejected account on every
+              attempt - a loop with no visible exit. Only /logout breaks
+              it, and that is what signOut() does. */}
+          {error && (
+            <button type="button" className="linkish gate-switch" onClick={() => auth.signOut()}>
+              Sign in as someone else
+            </button>
+          )}
+
+          <button className="ask gate-submit" type="submit" disabled={busy || !realm}>
+            {busy ? 'Signing in…' : realm ? realm.label : 'Continue'}
+          </button>
+        </form>
+
+        <p className="gate-note">
+          No account? Ask your operations lead - accounts are created for you,
+          and your organisation has to be registered before you can see anything.
+        </p>
       </div>
     </div>
   );
 }
 
-/* -------------------------------------------------------------------------- */
-
 /**
- * Register a customer — not "create an account".
+ * Shown instead of sign-in when the build has no pool to sign in to.
  *
- * An operator does not sign themselves up for an estate platform. The customer is
- * onboarded, its SSO is configured, and its people arrive through it. Modelling
- * that honestly is more useful than a generic signup form, and it is also the
- * only truthful thing this screen can do: nothing here can grant access to
- * anyone's estate data.
+ * Better than the alternative it replaced - a silent fallback to an offline
+ * issuer - because a board that signs people in some other way when the pool
+ * is misconfigured is a board whose sign-in nobody can reason about.
  */
-function SignUp({ onBack }: { onBack(): void }) {
-  const [email, setEmail] = useState('');
-  const [customerName, setCustomerName] = useState('');
-  const [estateSize, setEstateSize] = useState('50-500');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [done, setDone] = useState<string | null>(null);
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      const { message } = await auth.signUp({ email: email.trim(), customerName, estateSize });
-      setDone(message);
-    } catch (err) {
-      setError(err instanceof AuthError ? err.message : 'Registration failed. Try again.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (done) {
-    return (
-      <div className="gate-form">
-        <h2 className="panel-h">Request received</h2>
-        <p className="gate-note">{done}</p>
-        <button className="ask gate-submit" onClick={onBack}>Back to sign in</button>
-      </div>
-    );
-  }
-
+export function CognitoNotConfigured() {
   return (
-    <form className="gate-form" onSubmit={submit}>
-      <h2 className="panel-h">Register a customer</h2>
-      <p className="gate-note">
-        Onboarding creates the tenant, seeds its sites, and points your
-        domain at your identity provider. An operations lead confirms it.
-      </p>
-
-      <label className="field">
-        <span className="field-label">Customer name</span>
-        <input
-          className="field-input"
-          value={customerName}
-          onChange={(e) => setCustomerName(e.target.value)}
-          placeholder="Northwind Utilities"
-          required
-        />
-      </label>
-
-      <label className="field">
-        <span className="field-label">Work email</span>
-        <input
-          className="field-input mono"
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="ops@customer.com"
-          required
-        />
-      </label>
-
-      <label className="field">
-        <span className="field-label">Estate size</span>
-        <select
-          className="field-input"
-          value={estateSize}
-          onChange={(e) => setEstateSize(e.target.value)}
-        >
-          <option>Under 50</option>
-          <option>50-500</option>
-          <option>500-5,000</option>
-          <option>Over 5,000</option>
-        </select>
-      </label>
-
-      {error && <p className="gate-error">{error}</p>}
-
-      <button className="ask gate-submit" type="submit" disabled={busy}>
-        {busy ? 'Sending…' : 'Request onboarding'}
-      </button>
-      <button className="linkish gate-back" type="button" onClick={onBack}>
-        Back to sign in
-      </button>
-    </form>
+    <div className="gate">
+      <div className="gate-panel">
+        <header className="gate-brand">
+          <span className="brand-mark">NETPULSE</span>
+          <span className="brand-rule" />
+          <span className="gate-tag">Operations board</span>
+        </header>
+        <div className="gate-form">
+          <h2 className="panel-h">Sign-in is not configured</h2>
+          <p className="gate-note">
+            This build has no Cognito user pool to sign in to. Put these in{' '}
+            <code className="mono">web/.env.cognito.local</code> and restart{' '}
+            <code className="mono">pnpm web</code>:
+          </p>
+          <pre className="mono gate-note">
+            VITE_COGNITO_DOMAIN{'\n'}VITE_COGNITO_CLIENT_ID{'\n'}VITE_COGNITO_ISSUER{'\n'}VITE_BOARD_API_URL  (optional)
+          </pre>
+          <p className="gate-note">
+            <code className="mono">terraform output vercel_env</code> in{' '}
+            <code className="mono">infra/terraform/auth</code> prints the values.
+          </p>
+        </div>
+      </div>
+    </div>
   );
 }

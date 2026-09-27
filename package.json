@@ -23,7 +23,7 @@
     "test:watch": "node --test --watch",
     "typecheck": "tsc --noEmit",
     "web": "pnpm --filter @netpulse/web dev",
-    "web:cognito": "pnpm --filter @netpulse/web dev:cognito",
+    "web:env": "node scripts/write-web-env.mjs",
     "web:build": "pnpm --filter @netpulse/web build",
     "mock": "node scripts/mock-vendors.ts",
     "seed:aws": "node scripts/seed-aws.ts",

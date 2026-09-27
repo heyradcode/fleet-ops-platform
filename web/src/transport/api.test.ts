@@ -85,12 +85,16 @@ test('a token the API does not accept says "sign in again", not "broken"', async
   const session = await localAuth.signIn('lead@netpulse.io');
   const t = createApiTransport('https://board-api.test', handlerFetch);
   t.setSession(session.principal, session.token + 'x');
-  await assert.rejects(t.loadBoard(), (e: unknown) => e instanceof BoardApiError && /sign in again/.test(e.message));
+  // Status 401 is what sends the board back to sign-in (App.tsx); anything
+  // else is a load error shown on the board, so the two must not blur.
+  await assert.rejects(t.loadBoard(), (e: unknown) =>
+    e instanceof BoardApiError && e.status === 401 && /sign in again/.test(e.message));
 });
 
 test('a network failure is reported as one', async () => {
   const session = await signInAs('lead@netpulse.io');
   const down = createApiTransport('https://board-api.test', async () => { throw new TypeError('Failed to fetch'); });
   down.setSession(session.principal, session.token);
-  await assert.rejects(down.loadBoard(), /did not answer/);
+  await assert.rejects(down.loadBoard(), (e: unknown) =>
+    e instanceof BoardApiError && e.status === undefined && /did not answer/.test(e.message));
 });

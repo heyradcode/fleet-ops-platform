@@ -150,6 +150,13 @@ export const cognitoAuth: AuthProvider = {
     throw new AuthError('Customer onboarding is handled by the operations team.');
   },
 
+  forget() {
+    // This browser's copy only. Cognito's own session cookie survives, so
+    // "Continue" goes straight back through the hosted UI - often without a
+    // password, while that cookie lasts.
+    sessionStorage.removeItem(TOKEN_KEY);
+  },
+
   signOut() {
     sessionStorage.removeItem(TOKEN_KEY);
     // Clearing local state is not signing out. The Cognito session cookie is
@@ -168,11 +175,9 @@ export const cognitoAuth: AuthProvider = {
  *
  * Called by useRestoredSession when the page loads with a code in the URL.
  * The token endpoint is a POST with the verifier - no client secret, because
- * a SPA cannot hold one.
- *
- * What stops short of a real deployment is the last line: verifyToken() is the
- * offline verifier, HMAC against a demo secret. A pool signs RS256, so the
- * swap there is a JWKS fetch - see the note at the top of auth/index.ts.
+ * a SPA cannot hold one. The token that comes back is verified RS256 against
+ * the pool's published JWKS before it becomes a session - the same seven
+ * checks the board API's Lambda runs on every request.
  */
 export async function completeRedirect(searchParams: URLSearchParams): Promise<Session> {
   const code = searchParams.get('code');
@@ -221,15 +226,22 @@ export async function completeRedirect(searchParams: URLSearchParams): Promise<S
     sessionStorage.setItem(TOKEN_KEY, token);
     return session;
   } catch (err) {
+    // The REAL reason, to the console. The person sees a sentence they can
+    // act on; whoever is wiring the pool needs the check that failed - a
+    // wrong VITE_COGNITO_ISSUER, a JWKS fetch the browser blocked and clock
+    // skew all read "could not be verified" on the screen, and without this
+    // line there is nothing else to go on. It names a check, never the token.
+    console.warn('Cognito sign-in: token rejected -', err instanceof Error ? err.message : String(err));
+
     // A token that verified everything EXCEPT tenancy is the fail-closed path,
     // not a broken sign-in: Cognito authenticated them, the trigger found no
-    // customer for their domain, and the board must not show an estate. Say that
-    // in words the person can act on - "JWT rejected: no tenant claim" is
+    // customer for their domain, and the board must not show an estate. Say
+    // that in words the person can act on - "JWT rejected: no tenant claim" is
     // true and tells them nothing.
+    //
     // Not named, deliberately. A Cognito ACCESS token carries no `email`
     // claim - that lives in the id token - so decoding this one to name the
-    // account returns nothing every time. The generic wording is the honest
-    // one until the trigger stamps an email of its own.
+    // account returns nothing every time.
     const noTenant = err instanceof TokenVerificationError
       && err.message.includes('no tenant claim');
     throw new AuthError(

@@ -1,26 +1,17 @@
 /**
- * Which transport this build uses. One decision, made once, from config -
- * the same shape as auth/provider.ts, and dependent on it.
+ * Which transport this build uses. One decision, made once, from config.
  *
- *   VITE_BOARD_API_URL set, and signed in through Cognito  -> the API
- *   otherwise                                              -> in the tab
+ *   VITE_BOARD_API_URL set  -> the board API (the network and comms views
+ *                              over HTTP, from the real table)
+ *   otherwise               -> computed in the tab, from the in-memory store
  *
- * The API needs COGNITO sign-in, not just its URL: it accepts only an access
- * token from the real pool, and the offline issuer's tokens are signed with a
- * demo key it has never heard of. A build with the URL but not Cognito would
- * answer every request with 401 and look like a broken API, so it says why
- * once, and stays in the tab.
+ * Sign-in is the real pool either way (auth/provider.ts), so the token the
+ * API needs is always one it can verify.
  */
 import type { Transport } from './index.ts';
 import { inProcessTransport } from './in-process.ts';
 import { apiTransport, boardApiUrl } from './api.ts';
-import { usingCognito } from '../auth/provider.ts';
 
-export const usingBoardApi = Boolean(boardApiUrl()) && usingCognito;
-
-if (boardApiUrl() && !usingCognito) {
-  console.warn('VITE_BOARD_API_URL is set but Cognito is not - the API only accepts the real pool\'s ' +
-    'tokens, so the board is computing in the tab. See infra/terraform/auth/README.md.');
-}
+export const usingBoardApi = Boolean(boardApiUrl());
 
 export const transport: Transport = usingBoardApi ? apiTransport : inProcessTransport;
