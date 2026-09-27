@@ -5,8 +5,10 @@ and guardrails — can run on **Amazon Bedrock AgentCore Runtime** instead of in
 the browser tab. This document explains what AgentCore is, how it works, how
 this repository uses it and why, how to deploy it, and what it costs.
 
-Status: **deployed** - runtime `netpulse_demo_agent`, `READY` (version 2:
-follow-up conversations), running the offline model. The authorizer is verified from outside: no token and a
+Status: **deployed** - runtime `netpulse_demo_agent`, `READY` (version 3),
+running the offline model. Every answer on the board ends with where it
+came from - *via AgentCore (offline model) · turn 2* - and the assistant
+panels offer **New conversation** when the agent is remembering one. The authorizer is verified from outside: no token and a
 forged token are both refused with 401 before any microVM starts. One thing
 outside the code blocks real Claude: the AWS account is not yet enabled for
 Anthropic models (see [Claude model access](#claude-model-access)). Until it
@@ -239,7 +241,9 @@ the idle timeout. No database, no AgentCore Memory, no extra cost.
   session to a user. Anyone authorised who sent another person's session id
   would reach their microVM, and there find their own history, not the other
   person's.
-- **Starting over:** `{"newConversation": true}` in the body clears it.
+- **Starting over:** `{"newConversation": true}` in the body clears it. The
+  board's *New conversation* button sends it on the next question, in the
+  same session, so the warm microVM is kept.
 
 **A separate Terraform root.** AgentCore's Terraform resources exist only in
 AWS provider 6.x, while `infra/terraform/auth` runs on 5.x with a live

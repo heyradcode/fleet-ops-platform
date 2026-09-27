@@ -163,3 +163,18 @@ test('a refused answer is not remembered as context', async () => {
     assert.deepEqual(texts(seen[1]), ['user:next']);
   } finally { resetModelInvoker(); }
 });
+
+test('the answer says where it came from: AgentCore, the model, and the turn', async () => {
+  const p = person('served-by');
+  TOKENS['tok-' + p.sub] = p;
+  const ask2 = (question: string, extra: Record<string, unknown> = {}) => handleAgentInvocation(
+    { authorization: 'Bearer tok-' + p.sub, body: JSON.stringify({ question, ...extra }) },
+    { verify, model: 'anthropic.claude-opus-5' },
+  );
+  const first = (await ask2('How do I fix a link down?')).body as AgentResult;
+  const second = (await ask2('And after that?')).body as AgentResult;
+  const fresh = (await ask2('Start over', { newConversation: true })).body as AgentResult;
+  assert.deepEqual(first.servedBy, { host: 'agentcore', model: 'anthropic.claude-opus-5', turn: 1 });
+  assert.equal(second.servedBy?.turn, 2);
+  assert.equal(fresh.servedBy?.turn, 1);
+});

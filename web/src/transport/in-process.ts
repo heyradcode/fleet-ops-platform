@@ -205,13 +205,14 @@ export const inProcessTransport: Transport = {
     // The agent runs with the CALLER's principal, never a privileged one. An
     // operator scoped to Dallas gets an assistant scoped to Dallas, and the
     // tools enforce that themselves rather than trusting the prompt.
-    return runAgent({
+    const result = await runAgent({
       question,
       principal: caller(),
       // Per caller: a comms tenant's assistant also gets the comms tools.
       // For every network-only tenant this is exactly TOOL_SPECS, as before.
       tools: toolSpecsFor(caller(), { readOnly: false }),
     });
+    return { ...result, servedBy: { host: 'tab', model: 'offline', turn: 1 } };
   },
 
   async loadComms() {

@@ -85,6 +85,7 @@ const server = createServer((req, res) => {
     readBody(req)
       .then((body) => handleAgentInvocation({ authorization: req.headers.authorization, body }, {
         verify: (token) => verifyTokenRs256(token, { issuer, clientId }),
+        model,
       }))
       .then((out) => send(out.status, out.body))
       .catch((err: unknown) => {

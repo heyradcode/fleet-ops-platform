@@ -53,6 +53,12 @@ export type AgentResult = {
   evidence: string[];
   stoppedBecause: 'end_turn' | 'max_iterations' | 'guardrail' | 'refusal' | 'max_tokens';
   usage: { modelCalls: number; inputTokens: number; outputTokens: number };
+  /**
+   * Where the answer was produced, for the person reading it: in the tab or
+   * on AgentCore, by which model, and which turn of the conversation. Set by
+   * the CALLER of runAgent - the loop does not know where it is running.
+   */
+  servedBy?: { host: 'tab' | 'agentcore'; model: string; turn: number };
 };
 
 const SYSTEM_PROMPT = [

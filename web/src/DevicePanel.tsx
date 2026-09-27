@@ -23,6 +23,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { transport } from './transport/select.ts';
+import { agentSource } from './agentSource.ts';
 import { formatPercent, loadLevel, roleLabel, witness } from './format.ts';
 import type { AgentResult, AgentTrace, Alarm, DeviceState } from './transport/index.ts';
 
@@ -209,9 +210,15 @@ export function DevicePanel({
                 {result.usage.inputTokens.toLocaleString()} in /{' '}
                 {result.usage.outputTokens.toLocaleString()} out · stopped:{' '}
                 {result.stoppedBecause.replace(/_/g, ' ')}
+                {agentSource(result)}
               </p>
 
               <button className="ask" onClick={ask}>Ask again</button>
+              {transport.newConversation && (
+                <button className="linkish" onClick={() => { transport.newConversation!(); setResult(null); }}>
+                  New conversation
+                </button>
+              )}
             </>
           )}
         </section>

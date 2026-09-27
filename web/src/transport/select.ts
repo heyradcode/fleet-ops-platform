@@ -35,5 +35,6 @@ export const transport: Transport = asker
         asker.setToken(accessToken ?? null);
       },
       askAgent: (question) => asker.ask(question),
+      newConversation: () => asker.newConversation(),
     }
   : base;

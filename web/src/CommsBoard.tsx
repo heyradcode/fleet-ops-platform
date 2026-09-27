@@ -19,6 +19,7 @@
  */
 import { useState } from 'react';
 import { transport } from './transport/select.ts';
+import { agentSource } from './agentSource.ts';
 import { TraceStep } from './DevicePanel.tsx';
 import type {
   AgentResult, Brief, CommsAlarm, CommsAnomaly, CommsIncident, IntegrationHealth, PhoneInventory, WorkforceSummary,
@@ -477,7 +478,13 @@ function Assistant() {
             <p className="answer">{result.answer}</p>
             <p className="usage mono">
               {result.usage.modelCalls} model calls · stopped: {result.stoppedBecause.replace(/_/g, ' ')}
+              {agentSource(result)}
             </p>
+            {transport.newConversation && (
+              <button className="linkish" onClick={() => { transport.newConversation!(); setResult(null); }}>
+                New conversation
+              </button>
+            )}
           </>
         )}
       </div>

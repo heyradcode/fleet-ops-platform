@@ -119,6 +119,14 @@ export type Transport = {
   askAgent(question: string): Promise<AgentResult>;
 
   /**
+   * Forget the assistant's conversation so the next question starts fresh.
+   * Only where the assistant REMEMBERS - on AgentCore, in the session's
+   * microVM. Absent in the tab, where every question already starts fresh,
+   * and the board shows no button it could not honour.
+   */
+  newConversation?(): void;
+
+  /**
    * The comms view, or null when this caller has none - their tenant runs no
    * comms sources, or their scope is narrower than tenant-wide. Null rather
    * than an empty snapshot, so the board can tell "nothing wrong" from

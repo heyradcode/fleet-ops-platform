@@ -116,3 +116,16 @@ test('a 409 that is NOT retryable is reported, not retried', async () => {
   await assert.rejects(asker.ask('q'), /still starting up/);
   assert.equal(calls, 1);
 });
+
+test('newConversation sends the flag ONCE, then questions carry on as normal', async () => {
+  const s = await signIn('lead@netpulse.io');
+  const bodies: string[] = [];
+  const recording: typeof fetch = async (input, init) => { bodies.push(String(init?.body)); return fakeAgentCore(input, init); };
+  const asker = createAgentCoreAsker(ARN, recording);
+  asker.setToken(s.token);
+  await asker.ask('first');
+  asker.newConversation();
+  await asker.ask('second');
+  await asker.ask('third');
+  assert.deepEqual(bodies.map((b) => JSON.parse(b).newConversation ?? false), [false, true, false]);
+});

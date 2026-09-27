@@ -46,6 +46,8 @@ function newSessionId(): string {
 export type AgentCoreAsker = {
   setToken(token: string | null): void;
   ask(question: string): Promise<AgentResult>;
+  /** The next question starts a fresh conversation - same session, same warm microVM. */
+  newConversation(): void;
   /** For tests and the trace: which microVM this tab is talking to. */
   readonly sessionId: string;
 };
@@ -67,9 +69,12 @@ export function createAgentCoreAsker(
   const url = invocationUrl(arn);
   let token: string | null = null;
   let sessionId = makeSessionId();
+  let fresh = false;
 
   return {
     get sessionId() { return sessionId; },
+
+    newConversation() { fresh = true; },
 
     setToken(next) {
       if (next !== token) sessionId = makeSessionId();
@@ -85,7 +90,7 @@ export function createAgentCoreAsker(
           'content-type': 'application/json',
           'x-amzn-bedrock-agentcore-runtime-session-id': sessionId,
         },
-        body: JSON.stringify({ question }),
+        body: JSON.stringify(fresh ? { question, newConversation: true } : { question }),
         credentials: 'omit',
       });
       let res: Response;
@@ -100,7 +105,10 @@ export function createAgentCoreAsker(
       } catch {
         throw new BoardApiError('The assistant did not answer - check the network.');
       }
-      if (res.ok) return await res.json() as AgentResult;
+      if (res.ok) {
+        fresh = false;
+        return await res.json() as AgentResult;
+      }
 
       // AgentCore names the failure in x-amzn-ErrorType; the agent's own
       // errors arrive wrapped as a 424 RuntimeClientError.

@@ -52,6 +52,8 @@ export type InvocationResponse = { status: number; body: AgentResult | { error: 
 export type InvocationDeps = {
   /** Access token -> Principal, or throw. In AgentCore: RS256 against the pool's JWKS. */
   verify: (token: string) => Promise<Principal>;
+  /** Shown with the answer: "offline", or the Claude model id. */
+  model?: string;
 };
 
 /** A question longer than this is not a question an operator typed. */
@@ -128,6 +130,7 @@ export async function handleAgentInvocation(req: InvocationRequest, deps: Invoca
       tools: toolSpecsFor(principal, { readOnly: true }),
       history,
     });
+    result.servedBy = { host: 'agentcore', model: deps.model ?? 'offline', turn: history.length + 1 };
 
     // Only answers that passed the output guardrail become context - a
     // withheld answer fed back in would be the model reading what it was
