@@ -86,3 +86,18 @@ export function getClock(): Clock { return current; }
 /** The two functions the rest of the codebase actually calls. */
 export function now(): Millis { return current.now(); }
 export function nowIso(): string { return current.nowIso(); }
+
+/**
+ * REAL time, whatever the ambient clock has been set to. For checks against
+ * the outside world - a token a real Cognito pool issued - and for nothing
+ * that becomes data.
+ *
+ * WHY IT EXISTS. The demo world pins the ambient clock to DEMO_EPOCH so its
+ * output is reproducible, and the board API and the AgentCore agent re-pin it
+ * on every request. A real token checked against that clock was "issued in
+ * the future" - every request after the first in a warm container failed -
+ * and, worse, could never expire: a token from last month looked valid
+ * against a clock stuck on 8 September. Determinism is a property of the
+ * demo's DATA; the expiry of a credential is a fact about now.
+ */
+export function wallNow(): Millis { return Date.now(); }

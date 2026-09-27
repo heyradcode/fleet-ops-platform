@@ -49,7 +49,7 @@
 import { b64urlDecode, b64urlDecodeText, b64urlEncode, hmacSha256, timingSafeEqual } from '../platform/crypto.ts';
 import type { Principal, TenantId } from '../platform/types.ts';
 import { env } from '../platform/env.ts';
-import { now as clockNow } from '../platform/clock.ts';
+import { now as clockNow, wallNow } from '../platform/clock.ts';
 
 const DEMO_SECRET = 'demo-only-not-a-real-signing-key';
 const ISSUER = env('COGNITO_ISSUER', 'https://cognito-idp.us-east-1.amazonaws.com/us-east-1_ABC123DEF');
@@ -125,8 +125,8 @@ function split(token: string) {
 }
 
 /** Checks 2-6 and the tenant claim, then the Principal. Shared by both paths. */
-function principalFrom(claims: CognitoClaims, issuer: string, clientId: string): Principal {
-  const now = Math.floor(clockNow() / 1000);
+function principalFrom(claims: CognitoClaims, issuer: string, clientId: string, nowMs: number): Principal {
+  const now = Math.floor(nowMs / 1000);
 
   if (claims.iss !== issuer) throw new TokenVerificationError('wrong issuer');                    // 2
   if (claims.client_id !== clientId) throw new TokenVerificationError('wrong client_id');         // 3
@@ -158,7 +158,9 @@ export function verifyToken(token: string): Principal {
     throw new TokenVerificationError('signature mismatch');
   }
 
-  return principalFrom(claims, ISSUER, CLIENT_ID);
+  // The DEMO path: tokens minted by signDemoToken on the injected clock, so
+  // checked against the same clock - a fixed-clock demo accepts its own.
+  return principalFrom(claims, ISSUER, CLIENT_ID, clockNow());
 }
 
 // ---------------------------------------------------------------------------
@@ -253,7 +255,9 @@ export async function verifyTokenRs256(token: string, pool: PoolConfig): Promise
   );
   if (!ok) throw new TokenVerificationError('signature mismatch');
 
-  return principalFrom(claims, pool.issuer, pool.clientId);
+  // A REAL pool's token: checked against REAL time, never the demo clock the
+  // board and the agent pin per request. See wallNow() for what that cost.
+  return principalFrom(claims, pool.issuer, pool.clientId, wallNow());
 }
 
 /**

@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 308 tests, no network. Picks up web/ tests too.
+pnpm test                       # 311 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180 - real Cognito sign-in
 pnpm web:env                    # write web/.env.cognito.local from the Terraform outputs
@@ -74,6 +74,17 @@ legitimately produces both planes.
 `pnpm start` runs must produce identical output apart from wall-clock
 durations, and CI diffs them. This is what makes a screenshot reproducible and
 a real change distinguishable from noise.
+
+**Real credentials are checked against REAL time - `wallNow()`, never the
+demo clock.** The demo world pins the ambient clock to 8 September, and the
+board API and the AgentCore agent re-pin it per request. A real pool's token
+judged by that clock was "issued in the future" on every request after the
+first in a warm container - the board bounced everyone to sign-in - and,
+silently worse, could never EXPIRE. `verifyTokenRs256` uses `wallNow()`;
+only the offline HS256 demo tokens, minted on the pinned clock, are checked
+against it. Determinism is a property of the demo's data, not of whether a
+credential is still valid. `cognito-jwt-verifier-rs256.test.ts` signs real
+RS256 tokens under a pinned clock and pins both halves.
 
 **`loadEstate()` is idempotent, and that is load-bearing.** The generator draws
 from the seeded random source, so regenerating advances it — a second call
