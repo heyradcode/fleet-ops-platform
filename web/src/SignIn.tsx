@@ -79,9 +79,9 @@ export function SignIn({ onSignedIn, initialError = null }: Props) {
     <div className="gate">
       <div className="gate-panel">
         <header className="gate-brand">
-          <span className="brand-mark">MERIDIAN</span>
+          <span className="brand-mark">NETPULSE</span>
           <span className="brand-rule" />
-          <span className="gate-tag">Estate dispatch</span>
+          <span className="gate-tag">Operations board</span>
         </header>
 
         {mode === 'in' ? (
@@ -171,7 +171,7 @@ export function SignIn({ onSignedIn, initialError = null }: Props) {
 /**
  * Register a customer — not "create an account".
  *
- * A operator does not sign themselves up for a estate platform. The customer is
+ * An operator does not sign themselves up for an estate platform. The customer is
  * onboarded, its SSO is configured, and its people arrive through it. Modelling
  * that honestly is more useful than a generic signup form, and it is also the
  * only truthful thing this screen can do: nothing here can grant access to

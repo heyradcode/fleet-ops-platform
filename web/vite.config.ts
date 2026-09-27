@@ -23,5 +23,14 @@ export default defineConfig({
     // allowed to serve files from above the web/ root.
     fs: { allow: ['..'] },
   },
-  build: { outDir: 'dist', sourcemap: true },
+  build: {
+    outDir: 'dist',
+    sourcemap: true,
+    // Just above MapLibre's own chunk (~1,060 kB), which is one library and
+    // cannot be split - it is already loaded lazily, off the sign-in path (see
+    // App.tsx). A warning that always fires trains everyone to ignore it; at
+    // this limit it stays silent for MapLibre and still fires the day any
+    // OTHER chunk grows past it.
+    chunkSizeWarningLimit: 1100,
+  },
 });

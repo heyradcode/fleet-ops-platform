@@ -181,7 +181,7 @@ export const localAuth: AuthProvider = {
   },
 
   async signUp(request: SignUpRequest) {
-    // NOT self-serve access, and the difference is not pedantry. A operator
+    // NOT self-serve access, and the difference is not pedantry. An operator
     // does not sign themselves up for a customer's estate platform - the customer
     // is onboarded, its SSO is configured, and its people arrive through it.
     // What this form starts is the PostConfirmation flow: create the tenant

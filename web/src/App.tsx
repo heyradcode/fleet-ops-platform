@@ -12,8 +12,8 @@
  * the rules raise them. That asymmetry is the architecture, and the board shows
  * it rather than describing it.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { SiteMap, type BasemapMode } from './SiteMap.tsx';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import type { BasemapMode } from './SiteMap.tsx';
 import { DevicePanel } from './DevicePanel.tsx';
 import { CommsBoard } from './CommsBoard.tsx';
 import { inProcessTransport } from './transport/in-process.ts';
@@ -25,6 +25,13 @@ import {
   type LoadLevel,
 } from './format.ts';
 import type { Session } from './auth/index.ts';
+
+/**
+ * The map is loaded on demand. MapLibre is most of the bundle, and nothing on
+ * the sign-in page or the comms view draws a map - so it arrives when the
+ * network view first renders, not before anyone has signed in.
+ */
+const SiteMap = lazy(() => import('./SiteMap.tsx').then((m) => ({ default: m.SiteMap })));
 import type {
   Alarm, BoardSnapshot, CommsSnapshot, DeviceState, HealthTick,
 } from './transport/index.ts';
@@ -298,14 +305,17 @@ function Board({ session, onSignOut }: { session: Session; onSignOut(): void }) 
 
         <main className="stage">
           <div className="map-wrap">
-            <SiteMap
-              sites={allSites}
-              devices={devices}
-              selectedSiteId={selectedDevice?.siteId ?? siteId}
-              onSelectSite={(id) => { if (!siteId) setSiteId(id); }}
-              basemap={basemap}
-              onBasemap={setBasemapActual}
-            />
+            {/* Same box as the map, so the layout does not jump when it lands. */}
+            <Suspense fallback={<div className="map" aria-busy="true" />}>
+              <SiteMap
+                sites={allSites}
+                devices={devices}
+                selectedSiteId={selectedDevice?.siteId ?? siteId}
+                onSelectSite={(id) => { if (!siteId) setSiteId(id); }}
+                basemap={basemap}
+                onBasemap={setBasemapActual}
+              />
+            </Suspense>
 
             <div className="legend">
               <div className="legend-row">

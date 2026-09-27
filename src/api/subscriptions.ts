@@ -23,7 +23,7 @@
  *     To push from a Lambda you must CALL THE MUTATION (usually with IAM auth).
  *     That is why `publishException` exists in the schema and is @aws_iam: the
  *     ingest pipeline calls it purely to trigger the subscription fan-out.
- *   - Filtering happens server-side, so a operator watching one site is
+ *   - Filtering happens server-side, so an operator watching one site is
  *     neither billed for nor woken by another site's traffic. At estate
  *     scale that is a cost decision, not a nicety.
  *   - Limits worth remembering: 100 subscriptions per connection, 240KB max

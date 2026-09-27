@@ -29,3 +29,13 @@ infra/terraform/modules/lambda/.build/
 creds.json
 *creds*.json
 accessKeys.csv
+
+# Variants like .env.local.cognito - the same real pool ids and endpoints as
+# .env.local, under a name the patterns above do not match.
+.env.local.*
+
+# Customer engagement material: a CONFIDENTIAL architecture deck, discovery
+# notes, and vendor samples with what look like real staff records. Nothing
+# real belongs in this repository (CLAUDE.md, "Data"); the code uses these
+# files' STRUCTURE only. Kept on disk, never tracked.
+docs/nwn/

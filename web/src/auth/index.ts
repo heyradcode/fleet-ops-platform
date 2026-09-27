@@ -77,7 +77,7 @@ export type AuthProvider = {
   /**
    * Register a customer.
    *
-   * Not self-serve access: see the note in local.ts on why a estate platform
+   * Not self-serve access: see the note in local.ts on why an estate platform
    * onboards organisations rather than individuals.
    */
   signUp(request: SignUpRequest): Promise<{ message: string }>;
