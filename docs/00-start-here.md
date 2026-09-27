@@ -10,9 +10,9 @@ pnpm start --only=scenarios
 ```
 
 Six situations go through the real pipeline. Each one exists to prove a claim
-about how the rules behave, and the second — a GPS spike that raises an
-alarm and pages nobody — is the one worth pausing on. Any dashboard can
-light up; a board that cries wolf is one people stop reading.
+about how the rules behave, and the fourth — one access port flapping alone,
+which raises an alarm and pages nobody — is the one worth pausing on. Any
+dashboard can light up; a board that cries wolf is one people stop reading.
 
 Then the whole thing, and the board:
 
@@ -26,7 +26,8 @@ address at `acme-networks.com` (a site operator), `netpulse.io` (an
 admin, tenant-wide) or `northwind-utilities.com` (a different customer), and
 notice that what each one can see is decided by the token it was issued, not
 by anything on the page. An unregistered domain signs in and sees nothing,
-which is the fail-closed rule rather than a bug.
+which is the fail-closed rule rather than a bug. `ops-lead@hhs.texas.example`
+opens the second half: the voice and contact-centre view.
 
 ## 2. Read in this order (2-3 hours)
 
@@ -51,9 +52,11 @@ codebase exists to serve.
 The architecture, IAM, SQL, schemas and integration logic are real.
 `src/aws/` contains local stand-ins for DynamoDB, S3, EventBridge, Step
 Functions, Kinesis and Bedrock so the whole thing runs offline, and all data is
-generated from a seed — real device observations is a location trace of an
-identifiable person. Vendor payload shapes are modelled from published API
-references rather than captured from live accounts.
+generated from a seed — a real device inventory is a map of an identifiable
+organisation's internal network. Vendor payload shapes are modelled from
+published API references rather than captured from live accounts, and
+`docs/10-voice-and-contact-centre.md` says, per source, which parts are
+placeholders still to be verified.
 
 The root README says all of this in more detail. It is worth being precise
 about, because the value of a reference implementation is entirely in whether
@@ -69,3 +72,4 @@ you can trust what it claims.
 - `docs/07-data-modelling.md` — DynamoDB single-table, Aurora, S3, idempotency
 - `docs/08-terraform-cicd.md` — modules, environments, state, OIDC deploys
 - `docs/09-code-tour.md` — a walk through the code itself, file by file
+- `docs/10-voice-and-contact-centre.md` — the comms estate: seven sources, one set of rules

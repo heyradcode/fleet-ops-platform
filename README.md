@@ -129,6 +129,38 @@ a signed claim.
 
 ---
 
+## Voice, contact centre and the remote-site WAN
+
+The same rules, applied to a public agency's communications estate: **Teams,
+Webex and Cisco phones, a Genesys contact centre, the Bandwidth SIP trunks
+and the Starlink links at remote sites** — with Helix for changes and tickets,
+SolarWinds for the network underneath, and Entra for who works where.
+
+```bash
+pnpm start --only=comms     # seven sources, one workforce, incidents that resolve on evidence
+pnpm start --only=brief     # the executive brief - every figure from stored data
+```
+
+Sign in to the board as `ops-lead@hhs.texas.example` for the comms view.
+What it shows that a dashboard would not:
+
+- **Call quality at a facility needs two services to agree** — and when one is
+  down, the held-back alarm says so, rather than "single source".
+- **The two ends of a SIP trunk locate the fault.** Teams on one side, the
+  carrier on the other: both failing is the SBC; only one is its leg.
+- **An incident resolves on a healthy measurement, never on silence.** A dead
+  SBC at 3am produces no signal at all.
+- **Anomalies against this subject's own week** — a queue taking twice its
+  Tuesday-9am calls, which no threshold watches.
+- **Helix changes as candidates, never causes** — along a device's uplink
+  chain, never sideways to a sibling.
+
+All against offline mocks of the vendors' real APIs. `docs/10-voice-and-contact-centre.md`
+has the design, and a table of exactly what is grounded, what is modelled and
+what must be verified against a live tenant.
+
+---
+
 ## Where to look
 
 You have limited time, so:
@@ -143,6 +175,9 @@ You have limited time, so:
 | `src/pipeline/steps.ts` | Where observations become alarms become incidents |
 | `src/data/scenarios.ts` | Six scenarios, each proving one claim about the rules |
 | `web/src/transport/` | Why the whole backend runs inside the browser tab |
+| `src/integrations/comms/poll.ts` | The comms poll, stage by stage — each stage one file |
+| `src/integrations/comms/lifecycle.ts` | Why "no alarm" is not "recovered" |
+| `src/reporting/daily-brief.ts` | An executive summary with no number from a model |
 
 One vertical slice, end to end:
 `integrations/controller/meraki.ts` → `pipeline/steps.ts` →
@@ -227,7 +262,11 @@ GitHub Actions.
 **Simulated, so it runs offline:** `src/aws/` stands in for DynamoDB, S3,
 EventBridge, Step Functions, Kinesis and Bedrock. Each fake mirrors the real
 SDK's method names, and each file's header shows the call it replaces. Vendor
-HTTP calls return fixtures instead of hitting the network.
+HTTP calls return fixtures instead of hitting the network. The comms
+sources answer through `mockFetch` on the vendors' **real hostnames**, so a
+connector reaches the live service by being handed the real `fetch`; where an
+API's shape is a placeholder or unverified, `docs/10-voice-and-contact-centre.md`
+says which.
 
 **Synthetic, deliberately:** every site, device and observation is generated
 from a seed. A real device inventory is a map of an identifiable organisation's
@@ -264,10 +303,12 @@ pnpm start                         # every section, in order
 pnpm start --only=scenarios        # the six scenarios — start here
 pnpm start --only=ingest           # auth | ingest | scenarios | data | events
 pnpm start --only=ai               # graphql | rest | geo | ai
+pnpm start --only=comms            # comms | solarwinds | brief
 pnpm dev                           # the same, restarting on every save
 
-pnpm test                          # 121 tests, no network
+pnpm test                          # 254 tests, no network
 pnpm typecheck
+pnpm mock                          # the vendor mocks on localhost, for curl
 
 pnpm web                           # the operations board
 pnpm web:build
@@ -309,7 +350,9 @@ src/          the platform. Zero runtime dependencies.
   integrations/ cloud connectors, HTTP mechanics, webhook verification, the probe
   pipeline/     collect → normalise → stream → enrich → evaluate → correlate
   geo/          spatial maths, PostGIS queries, GeoJSON/TopoJSON, topology walks
-  ai/           RAG, the agent loop, guardrails
+  ai/           RAG, the agent loop, guardrails, and the per-tenant tools
+  integrations/comms/  Teams, Genesys, Webex, Bandwidth, Helix, Kurmi, Starlink
+  reporting/    the executive daily brief
   aws/          local stand-ins for six AWS services
   data/         seeded estate generator, scenarios, health trace, runbooks
 web/          the operations board. React + MapLibre, its own dependencies.
