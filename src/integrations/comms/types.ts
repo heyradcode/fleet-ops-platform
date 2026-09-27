@@ -140,4 +140,10 @@ export type CommsTenantConfig = {
    * executive reading the daily brief needs "Houston Regional".
    */
   facilityNames?: Record<string, string>;
+  /**
+   * The customer's IANA time zone. Baselines are per hour of THEIR week -
+   * "Tuesday 10am" is a Texas Tuesday - and a fixed UTC offset would shift
+   * every bucket by an hour at each daylight-saving change.
+   */
+  timeZone?: string;
 };

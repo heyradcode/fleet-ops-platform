@@ -40,6 +40,7 @@ import { loadHealth } from '../integrations/comms/health.ts';
 import type { CommsIncident } from '../integrations/comms/incidents.ts';
 import { changesAroundDevice } from '../integrations/comms/helix-network.ts';
 import { COMMS_SOURCES } from '../integrations/comms/types.ts';
+import { latestAnomalies, type CommsAnomaly } from '../integrations/comms/anomalies.ts';
 
 export type BriefStatus = 'red' | 'amber' | 'green';
 
@@ -58,6 +59,8 @@ export type BriefItem = {
   candidate?: string;
   /** Already on the service desk's radar. */
   ticket?: string;
+  /** What this subject normally looks like at this hour of the week, when there is history. */
+  normally?: string;
 };
 
 export type Brief = {
@@ -69,6 +72,11 @@ export type Brief = {
   open: BriefItem[];
   resolved: BriefItem[];
   watch: string[];
+  /**
+   * Unusual for the subject and hour of week, with NO open incident: the
+   * proactive list. Never alarms - "worth a look before it becomes one".
+   */
+  unusual: string[];
   confidence: { complete: boolean; notes: string[]; fixes: string[] };
   estate: string[];
 };
@@ -159,6 +167,11 @@ function plainLifecycle(note: string): string {
   return note;
 }
 
+function normalText(a: CommsAnomaly): string {
+  const fmt = (v: number) => (a.unit === 'ratio' ? Math.round(v * 1000) / 10 + '%' : String(Math.round(v * 10) / 10));
+  return fmt(a.normal.mean) + ' (±' + fmt(a.normal.std) + ')';
+}
+
 // ---------------------------------------------------------------------------
 // Network incidents
 // ---------------------------------------------------------------------------
@@ -217,7 +230,19 @@ export async function buildDailyBrief(
     return parts.length ? parts.join(', and ') : 'size not known';
   };
 
-  const commsOpen = commsIncidents(principal).map((i) => commsItem(i, at, peopleAt));
+  const anomalies = latestAnomalies(principal)?.anomalies ?? [];
+  const subjectKey = (s: { kind: string; id: string }) => s.kind + ':' + s.id;
+  // "Normally X" beside an incident: its worst NON-volume anomaly - the rate
+  // or count the incident is about, set against this hour's baseline.
+  const normallyFor = (i: CommsIncident): string | undefined => {
+    const a = anomalies.find((x) => subjectKey(x.subject) === subjectKey(i.subject) && !x.metric.endsWith(':volume'));
+    return a ? 'Normally ' + normalText(a) + ' for ' + a.when + ' (' + a.normal.samples + ' weeks of history)' : undefined;
+  };
+  const commsOpen = commsIncidents(principal).map((i) => ({ ...commsItem(i, at, peopleAt), normally: normallyFor(i) }));
+  const openSubjects = new Set(commsIncidents(principal).map((i) => subjectKey(i.subject)));
+  const unusual = anomalies
+    .filter((a) => !openSubjects.has(subjectKey(a.subject)))
+    .map((a) => a.explanation.charAt(0).toUpperCase() + a.explanation.slice(1));
   const network = (opts.networkIncidents ?? openIncidents(principal)).filter((n) => n.status !== 'resolved');
   const networkOpen = await Promise.all(network.map((n) => networkItem(principal, n, at)));
   const open = [...commsOpen, ...networkOpen]
@@ -285,7 +310,7 @@ export async function buildDailyBrief(
     tenantId: principal.tenantId,
     generatedAt: new Date(at).toISOString(),
     period: { from: new Date(from).toISOString(), to: new Date(at).toISOString() },
-    status, headline, open, resolved, watch,
+    status, headline, open, resolved, watch, unusual,
     confidence: { complete, notes, fixes },
     estate,
   };
@@ -314,6 +339,7 @@ export function renderBrief(b: Brief, format: 'text' | 'markdown'): string {
     if (i.status) lines.push(sub('Status: ' + i.status));
     if (i.candidate) lines.push(sub(i.candidate + ' - a candidate, not a confirmed cause'));
     if (i.ticket) lines.push(sub(i.ticket));
+    if (i.normally) lines.push(sub(i.normally));
   };
 
   lines.push('', h('Open now'));
@@ -323,6 +349,11 @@ export function renderBrief(b: Brief, format: 'text' | 'markdown'): string {
   lines.push('', h('Resolved in the last 24 hours'));
   if (b.resolved.length === 0) lines.push(li('Nothing resolved.'));
   for (const r of b.resolved) lines.push(li(r.title + ' - ' + r.when));
+
+  if (b.unusual.length > 0) {
+    lines.push('', h('Unusual, not yet at alarm level'));
+    b.unusual.forEach((u) => lines.push(li(u)));
+  }
 
   if (b.watch.length > 0) {
     lines.push('', h('Watching'));

@@ -27,11 +27,13 @@ import type { Principal } from '../platform/types.ts';
 import type { Tool } from './tools.ts';
 import {
   commsAlarms, commsIncidents, commsPhones, commsResolvedIncidents, commsVisibleTo, commsWorkforce,
+  requireTenantScope,
 } from '../integrations/comms/store.ts';
 import { COMMS_SOURCES } from '../integrations/comms/types.ts';
 import { describeChange } from '../integrations/comms/helix-context.ts';
 import { describeSource, loadHealth } from '../integrations/comms/health.ts';
 import { buildDailyBrief, renderBrief } from '../reporting/daily-brief.ts';
+import { latestAnomalies } from '../integrations/comms/anomalies.ts';
 import { now } from '../platform/clock.ts';
 
 export const COMMS_TOOLS: Tool[] = [
@@ -205,6 +207,36 @@ export const COMMS_TOOLS: Tool[] = [
     },
     async execute(_input, principal) {
       return renderBrief(await buildDailyBrief(principal, now()), 'text');
+    },
+  },
+  {
+    spec: {
+      name: 'explainAnomalies',
+      description:
+        'List what is UNUSUAL right now for each trunk, facility and queue compared with its own ' +
+        'history for this hour of the week - including things below every alarm threshold - each ' +
+        'with its normal range. Use it for "is anything odd", "is this normal for a Tuesday", or to ' +
+        'put an incident in context. Anomalies are early warnings and context, never alarms.',
+      input_schema: { type: 'object', properties: {}, required: [] },
+    },
+    execute(_input, principal) {
+      requireTenantScope(principal);
+      const latest = latestAnomalies(principal);
+      if (!latest) return 'No comms poll has recorded anomalies yet.';
+      if (latest.anomalies.length === 0) {
+        return 'Nothing unusual as of ' + latest.asOf + ' - or not enough history yet: a bucket needs ' +
+          'four weeks of the same hour before it gives a verdict.';
+      }
+      const open = new Set(commsIncidents(principal).map((i) => i.subject.kind + ':' + i.subject.id));
+      const early = latest.anomalies.filter((a) => !open.has(a.subject.kind + ':' + a.subject.id));
+      const context = latest.anomalies.filter((a) => open.has(a.subject.kind + ':' + a.subject.id));
+      return [
+        'As of ' + latest.asOf + ':',
+        'EARLY WARNING (no incident open):',
+        ...(early.length ? early.map((a) => '  ' + a.explanation) : ['  none']),
+        'CONTEXT for open incidents:',
+        ...(context.length ? context.map((a) => '  ' + a.explanation) : ['  none']),
+      ].join('\n');
     },
   },
 ];

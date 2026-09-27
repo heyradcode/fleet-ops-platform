@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 242 tests, no network. Picks up web/ tests too.
+pnpm test                       # 248 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180
 pnpm web:build                  # typechecks web/ AND builds it
@@ -222,6 +222,18 @@ one, change the test deliberately rather than making it pass.
   open but a feed down is AMBER with the feed named - never a calm green over
   missing data. Delivery (scheduler + SES/Teams) is documented, not wired:
   mailing executives is the customer's decision.
+- **Anomalies are unusual for THIS subject at THIS hour of the week - and
+  never alarms.** `comms/anomalies.ts` keeps Welford running stats per
+  (subject, metric, source, hour-of-week) in the CUSTOMER's zone via `Intl` -
+  a fixed UTC offset moves every bucket an hour at each DST change. It never
+  learns an outage: anomalous values and subjects with an open incident are
+  not folded in. No verdict under 4 weeks of history. Counts get a sqrt(mean)
+  spread floor (Poisson noise) and a minimum change, so one caller where
+  there are usually none is not news. Volume is a metric - a dead SBC's
+  SILENCE is found as calls-through far below normal. Backfill reads past
+  windows through an injected reader; offline, `mockHistory` moves the clock.
+  Rates over ~30 calls are noisy: a sub-threshold abandonment plant realised
+  as 2 calls and was, correctly, not flagged.
 - **The workforce roster is never persisted.** The join links named people
   to agencies and buildings; the store keeps counts only, and the roster is
   rebuilt each poll. Comms reads need TENANT scope until an agency/facility

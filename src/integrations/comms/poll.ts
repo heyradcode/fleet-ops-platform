@@ -24,6 +24,7 @@ import { errorLine, type SignalSource } from './types.ts';
 import { reconcileIncidents } from './lifecycle.ts';
 import { pullPhoneInventory, type PhoneInventory } from './kurmi.ts';
 import { putPhoneInventory } from './store.ts';
+import { backfillBaselines, detectAndLearn, metricsFromSignals, putAnomalies, type CommsAnomaly } from './anomalies.ts';
 
 export type CommsPollResult = {
   /** The full roster, for the caller's use in memory. Never persisted; see store.ts. */
@@ -41,9 +42,31 @@ export type CommsPollResult = {
   reopened: string[];
   /** The Cisco phone estate from Kurmi, when the tenant runs it and the pull succeeded. */
   phones?: PhoneInventory;
+  /** Unusual for this subject at this hour of the week. Never alarms; see anomalies.ts. */
+  anomalies: CommsAnomaly[];
   /** Per-source health and data quality, as recorded by this poll. */
   health: IntegrationHealth;
 };
+
+/**
+ * Seed the anomaly baselines from `weeks` past weeks of the same hour.
+ *
+ * `history` wraps the signal read for a past time. In production it is the
+ * identity: the vendors answer for past windows. The offline mocks serve only
+ * RECENT activity, so the demo, board and tests pass `mockHistory` (in the
+ * mock harness), which moves the injected clock back first. Needs the
+ * workforce, because facility signals are attributed through it.
+ */
+export async function backfillCommsBaselines(
+  principal: Principal, client: CommsClient, config: CommsTenantConfig, at: number, weeks: number,
+  history: (read: (at: number) => Promise<CommsSignal[]>) => (at: number) => Promise<CommsSignal[]> = (r) => r,
+): Promise<number> {
+  assertSameTenant(principal, config.tenantId);
+  if (config.sources.includes('teams')) await syncEntraDirectory(principal, client);
+  const report = await buildWorkforce(client, config, loadEntraDirectory(principal));
+  const read = async (past: number) => (await collectSignals(client, config, report, past)).signals;
+  return backfillBaselines(principal, at, config.timeZone ?? 'UTC', weeks, history(read));
+}
 
 export async function runCommsPoll(
   principal: Principal, client: CommsClient, config: CommsTenantConfig, at: number,
@@ -79,6 +102,14 @@ export async function runCommsPoll(
   // unavailable sources go in, not just the incidents.
   const lifecycle = reconcileIncidents(principal, at, helix.incidents, collected.signals, unavailable);
   const incidents = lifecycle.open;
+
+  // Anomalies AFTER the lifecycle, so the "never learn an outage" rule sees
+  // this poll's open set: a subject with an open incident is judged but not
+  // learned from.
+  const { anomalies } = detectAndLearn(principal, at, config.timeZone ?? 'UTC',
+    metricsFromSignals(collected.signals),
+    new Set(incidents.map((i) => i.subject.kind + ':' + i.subject.id)));
+  putAnomalies(principal, nowIso(), anomalies);
   const workforce = summariseWorkforce(report, nowIso());
 
   // Kurmi: the Cisco phones. Independent of everything above - devices, not
@@ -102,6 +133,6 @@ export async function runCommsPoll(
   putCommsRun(principal, { workforce, alarms });
   return {
     report, directorySync, workforce, signals: collected.signals, alarms, incidents,
-    resolved: lifecycle.resolved, reopened: lifecycle.reopened, phones, health,
+    resolved: lifecycle.resolved, reopened: lifecycle.reopened, phones, anomalies, health,
   };
 }

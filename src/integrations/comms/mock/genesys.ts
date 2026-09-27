@@ -67,6 +67,19 @@ const QUEUE_DEFS: Array<{ name: string; division: string }> = [
 ];
 
 export const PLANTED_QUEUE = 'Eligibility - English';
+/**
+ * The SUBTLE plant: twice its normal call volume for the hour, with normal
+ * abandonment. No rule watches volume at all, so nothing fires; only a
+ * baseline notices. It exists to prove the anomaly engine is proactive
+ * rather than a second copy of the thresholds.
+ *
+ * Why volume and not a sub-threshold abandonment rate: that was tried first.
+ * At ~26 calls a half hour, "11% abandoning" realised as 2 calls - within a
+ * standard deviation of a normal 3-5%, and the engine correctly refused to
+ * call it unusual. Rates over small samples are noisy; a volume doubling is
+ * not.
+ */
+export const SUBTLE_QUEUE = 'Eligibility - Spanish';
 
 let reference: Reference | undefined;
 
@@ -265,6 +278,7 @@ function generate(anchor: number): Conversation[] {
 
   for (const q of ref().queues) {
     const planted = plantedActive() && q.name === PLANTED_QUEUE;
+    const subtle = plantedActive() && q.name === SUBTLE_QUEUE;
     // Minute by minute, with a daytime curve: a contact centre at 3am and at
     // 11am are different systems.
     for (let t = anchor - ACTIVITY_WINDOW_MS; t < anchor; t += 60_000) {
@@ -273,7 +287,7 @@ function generate(anchor: number): Conversation[] {
       const surge = planted && t >= incidentFrom;
       // The surge ignores the time of day, so the planted incident is there
       // whenever the mock server is queried, not only in Texas office hours.
-      const rate = surge ? 1.8 : daytime ? 0.9 : 0.1;
+      const rate = surge ? 1.8 : subtle && t >= incidentFrom ? 1.8 : daytime ? 0.9 : 0.1;
       let arrivals = Math.floor(rate) + (rng() < rate % 1 ? 1 : 0);
       while (arrivals-- > 0) {
         const waitMs = surge ? 180_000 + Math.floor(rng() * 540_000) : Math.floor(rng() * 45_000);

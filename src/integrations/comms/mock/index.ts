@@ -21,7 +21,8 @@
 import type { MockApp, MockRequest, MockResponse } from './kernel.ts';
 import { notModelled, resetMockState as resetKernelState } from './kernel.ts';
 import { resetEntraChanges, teamsGraph, teamsLogin } from './teams.ts';
-import { setPlanted } from './time.ts';
+import { plantedActive, setPlanted } from './time.ts';
+import { fixedClock, getClock, setClock } from '../../../platform/clock.ts';
 import { genesysApi, genesysLogin } from './genesys.ts';
 import { webexAnalytics, webexApi, webexCallingAnalytics } from './webex.ts';
 import { bandwidthApi, bandwidthInsights } from './bandwidth.ts';
@@ -37,6 +38,29 @@ export { BANDWIDTH_ACCOUNT, BANDWIDTH_PEERS, BANDWIDTH_PLANTED } from './bandwid
 export { mutateEntraUser, removeEntraUser, DELTA_TOKEN_TTL_MS } from './teams.ts';
 export { setPlanted } from './time.ts';
 
+/**
+ * Test harness for anomaly backfill: read signals "as at" a past time.
+ *
+ * The mocks only serve activity near the injected clock, so this moves the
+ * clock to the past time, turns the planted problems OFF (history is meant to
+ * be normal), reads, and puts both back - whatever they were. Production never
+ * needs this: the vendors answer for past windows directly.
+ */
+export function mockHistory<T>(read: (at: number) => Promise<T>): (at: number) => Promise<T> {
+  return async (past: number) => {
+    const clock = getClock();
+    const wasPlanted = plantedActive();
+    setClock(fixedClock(past));
+    setPlanted(false);
+    try {
+      return await read(past);
+    } finally {
+      setPlanted(wasPlanted);
+      setClock(clock);
+    }
+  };
+}
+
 /** Tests call this between cases: tokens, faults, and Entra directory changes. */
 export function resetMockState(): void {
   resetKernelState();
@@ -46,7 +70,7 @@ export function resetMockState(): void {
 }
 export { directory, agencyOf, facilityCodeOf, AGENCY_DOMAINS, FACILITIES } from './directory.ts';
 export { PLANTED as TEAMS_PLANTED, TEAMS_TRUNKS } from './teams.ts';
-export { PLANTED_QUEUE as GENESYS_PLANTED_QUEUE, genesysQueues } from './genesys.ts';
+export { PLANTED_QUEUE as GENESYS_PLANTED_QUEUE, SUBTLE_QUEUE as GENESYS_SUBTLE_QUEUE, genesysQueues } from './genesys.ts';
 export { CDR_VISIBILITY_DELAY_MS } from './webex.ts';
 
 /** Real hostname -> the app that stands in for it. */

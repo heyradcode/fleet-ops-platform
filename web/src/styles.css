@@ -1249,6 +1249,9 @@ button.topo-node:hover { border-color: var(--amber); }
 .comms-incident .exception:hover { background: none; }
 .comms-incident.is-noise { opacity: 0.5; }
 .comms-incident.is-resolved { opacity: 0.35; }
+/* Unusual, pre-alarm: calm, never amber - nothing fired. The explanation
+   carries the finding; colour would overstate it. */
+.comms-incident.is-unusual .exception-detail { color: var(--text); }
 
 .comms-lifecycle {
   margin: 0;

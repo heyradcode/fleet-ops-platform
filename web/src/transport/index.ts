@@ -30,6 +30,7 @@ import type { WorkforceSummary } from '../../../src/integrations/comms/store.ts'
 import type { IntegrationHealth } from '../../../src/integrations/comms/health.ts';
 import type { PhoneInventory } from '../../../src/integrations/comms/kurmi.ts';
 import type { Brief } from '../../../src/reporting/daily-brief.ts';
+import type { CommsAnomaly } from '../../../src/integrations/comms/anomalies.ts';
 
 export type BoardSnapshot = {
   devices: DeviceState[];
@@ -79,6 +80,8 @@ export type CommsSnapshot = {
   phones?: PhoneInventory;
   /** The executive daily brief, built from exactly what this snapshot shows. */
   brief: Brief;
+  /** Unusual for the subject and hour of week. Early warnings and context - never alarms. */
+  anomalies: CommsAnomaly[];
 };
 
 export type Transport = {
@@ -147,7 +150,9 @@ export type Transport = {
   loadComms(): Promise<CommsSnapshot | null>;
 };
 
-export type { AgentResult, Brief, CommsAlarm, CommsIncident, IntegrationHealth, PhoneInventory, WorkforceSummary };
+export type {
+  AgentResult, Brief, CommsAlarm, CommsAnomaly, CommsIncident, IntegrationHealth, PhoneInventory, WorkforceSummary,
+};
 export type { AgentTrace } from '../../../src/ai/agent-core.ts';
 
 export type { Alarm, DeviceState, DeviceStatus, Incident, Principal, Site };

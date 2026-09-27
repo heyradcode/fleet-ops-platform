@@ -29,10 +29,11 @@ import {
 } from '../../../src/pipeline/steps.ts';
 import { runAgent } from '../../../src/ai/agent-core.ts';
 import { toolSpecsFor } from '../../../src/ai/tools.ts';
-import { mockFetch, directory as commsDirectory, DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER, DEMO_KURMI_USER } from '../../../src/integrations/comms/mock/index.ts';
+import { mockHistory, mockFetch, directory as commsDirectory, DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER, DEMO_KURMI_USER } from '../../../src/integrations/comms/mock/index.ts';
 import { createCommsClient } from '../../../src/integrations/comms/client.ts';
 import { commsConfigFor } from '../../../src/integrations/comms/config.ts';
-import { runCommsPoll } from '../../../src/integrations/comms/poll.ts';
+import { backfillCommsBaselines, runCommsPoll } from '../../../src/integrations/comms/poll.ts';
+import { latestAnomalies } from '../../../src/integrations/comms/anomalies.ts';
 import {
   commsAlarms, commsIncidents, commsPhones, commsResolvedIncidents, commsVisibleTo, commsWorkforce,
 } from '../../../src/integrations/comms/store.ts';
@@ -225,7 +226,12 @@ function ensureCommsPolled(principal: Principal): Promise<void> {
         kurmi: { ...DEMO_KURMI_USER },
       },
     });
-    done = runCommsPoll(principal, client, config, now()).then(() => undefined);
+    // Eight weeks of baseline first, so the anomaly view has history to
+    // judge against - read "as at" each past week through the mock harness.
+    const at = now();
+    done = backfillCommsBaselines(principal, client, config, at, 8, mockHistory)
+      .then(() => runCommsPoll(principal, client, config, at))
+      .then(() => undefined);
     commsPolled.set(principal.tenantId, done);
   }
   return done;
@@ -297,6 +303,7 @@ export const inProcessTransport: Transport = {
       // The network incidents the board's network view shows, so the brief and
       // the board cannot disagree about what is open.
       brief: await buildDailyBrief(principal, now(), { networkIncidents: runScenarios(analyst()).incidents }),
+      anomalies: latestAnomalies(principal)?.anomalies ?? [],
     } satisfies CommsSnapshot;
   },
 

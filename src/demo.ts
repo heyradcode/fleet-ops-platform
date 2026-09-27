@@ -67,10 +67,10 @@ import { setClock, fixedClock, now, nowIso } from './platform/clock.ts';
 import { setRandom, seededRandom } from './platform/random.ts';
 import { mockFetch, directory as commsDirectory, DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER, DEMO_KURMI_USER } from './integrations/comms/mock/index.ts';
 import { createCommsClient } from './integrations/comms/client.ts';
-import { runCommsPoll } from './integrations/comms/poll.ts';
+import { backfillCommsBaselines, runCommsPoll } from './integrations/comms/poll.ts';
 import { syncEntraDirectory } from './integrations/comms/entra-directory.ts';
 import { describeChange } from './integrations/comms/helix-context.ts';
-import { mutateEntraUser, injectFault, clearFaults, setPlanted } from './integrations/comms/mock/index.ts';
+import { mutateEntraUser, injectFault, clearFaults, setPlanted, mockHistory } from './integrations/comms/mock/index.ts';
 import { describeSource } from './integrations/comms/health.ts';
 import { setHelixClientFactory } from './integrations/comms/helix.ts';
 import { toolSpecsFor } from './ai/tools.ts';
@@ -806,6 +806,10 @@ async function sectionComms() {
     sub: 'cognito_hhs_ops', email: 'ops-lead@hhs.texas.example',
     'custom:tenantId': HHS_DEMO_TENANT, 'cognito:groups': ['admin'],
   }));
+  // Eight weeks of this hour's history first - what the anomaly baselines
+  // judge against. Production reads past windows from the vendors; offline,
+  // the mock harness serves them by moving the injected clock back.
+  const backfilled = await backfillCommsBaselines(hhsAdmin, client, config, now(), 8, mockHistory);
   const poll = await runCommsPoll(hhsAdmin, client, config, now());
   const report = poll.report;
 
@@ -908,6 +912,16 @@ async function sectionComms() {
       write('             ' + dim('helix: ' + (incident.context.note ?? '')) + '\n');
     }
   }
+  note('');
+  note('Unusual for this hour of the week, with NO incident - below every threshold, found by baseline (' +
+    backfilled + ' historical points):');
+  const openSubjects = new Set(poll.incidents.map((i) => i.subject.kind + ':' + i.subject.id));
+  for (const a of poll.anomalies.filter((x) => !openSubjects.has(x.subject.kind + ':' + x.subject.id))) {
+    write('   ' + dim('z ' + String(a.z).padStart(4) + '  ') + a.explanation + '\n');
+  }
+  const silence = poll.anomalies.find((a) => a.metric === 'trunk-call-failure:volume' && a.direction === 'below');
+  if (silence) write('   ' + dim('and beside the SBC2 incident: ' + silence.explanation.replace(/\.$/, '') + ' - the dead SBC has stopped sending') + '\n');
+
   // The half of the outage only the carrier saw. A dead SBC's inbound calls
   // fail AT Bandwidth and never reach Teams - so the Teams report has no row
   // for them, failed or otherwise.

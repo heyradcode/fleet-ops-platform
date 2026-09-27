@@ -56,6 +56,7 @@ export const COMMS_CONFIG: Record<string, CommsTenantConfig> = {
         'SBC2-TEAMS-DR': 'sbc2.voice.hhs.texas.example',
       },
     },
+    timeZone: 'America/Chicago',
     facilityNames: {
       '0412': 'Austin Central Office',
       '0417': 'North Austin Campus',

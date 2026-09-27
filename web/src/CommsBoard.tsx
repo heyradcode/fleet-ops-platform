@@ -21,7 +21,7 @@ import { useState } from 'react';
 import { inProcessTransport } from './transport/in-process.ts';
 import { TraceStep } from './DevicePanel.tsx';
 import type {
-  AgentResult, Brief, CommsAlarm, CommsIncident, IntegrationHealth, PhoneInventory, WorkforceSummary,
+  AgentResult, Brief, CommsAlarm, CommsAnomaly, CommsIncident, IntegrationHealth, PhoneInventory, WorkforceSummary,
 } from './transport/index.ts';
 import type { CommsSnapshot } from './transport/index.ts';
 
@@ -50,6 +50,9 @@ export function CommsBoard({ snapshot }: { snapshot: CommsSnapshot }) {
         <div className="roster-list">
           {snapshot.incidents.map((i) => <IncidentRow key={i.incidentId} incident={i} />)}
           {snapshot.heldBack.map((a) => <HeldRow key={a.alarmId} alarm={a} />)}
+          {snapshot.anomalies
+            .filter((a) => !snapshot.incidents.some((i) => i.subject.kind === a.subject.kind && i.subject.id === a.subject.id))
+            .map((a) => <AnomalyRow key={a.subject.id + a.metric + a.source} anomaly={a} />)}
           {snapshot.resolved.map((i) => <ResolvedRow key={i.incidentId} incident={i} />)}
           {snapshot.incidents.length === 0 && snapshot.heldBack.length === 0 && (
             <p className="empty">Nothing raised on any trunk, facility or queue. Quiet is the goal.</p>
@@ -136,6 +139,24 @@ function HeldRow({ alarm }: { alarm: CommsAlarm }) {
   );
 }
 
+/**
+ * Unusual for this subject at this hour of the week, with no incident open -
+ * the proactive row. Labelled UNUSUAL, not PAGED: nothing fired, and the row
+ * says what "normal" is so the reader can judge the distance themselves.
+ */
+function AnomalyRow({ anomaly }: { anomaly: CommsAnomaly }) {
+  return (
+    <div className="comms-incident is-unusual">
+      <div className="exception">
+        <span className="exception-time">z {anomaly.z}</span>
+        <span className="exception-kind">{SUBJECT_LABEL[anomaly.subject.kind]}</span>
+        <span className="exception-detail">{anomaly.explanation}</span>
+        <span className="verdict is-held">UNUSUAL</span>
+      </div>
+    </div>
+  );
+}
+
 /** Resolved, dimmed further than held-back: history, not attention. */
 function ResolvedRow({ incident }: { incident: CommsIncident }) {
   return (
@@ -180,6 +201,7 @@ function BriefPanel({ brief }: { brief: Brief }) {
                   {i.status && <div>Status: {i.status}</div>}
                   {i.candidate && <div>{i.candidate} - a candidate, not a confirmed cause</div>}
                   {i.ticket && <div>{i.ticket}</div>}
+                  {i.normally && <div className="dim">{i.normally}</div>}
                 </li>
               ))}
             </ul>
@@ -187,6 +209,7 @@ function BriefPanel({ brief }: { brief: Brief }) {
           <h4>Resolved in the last 24 hours</h4>
           {brief.resolved.length === 0 ? <p>Nothing resolved.</p>
             : <ul>{brief.resolved.map((r) => <li key={r.id}>{r.title} <span className="dim">- {r.when}</span></li>)}</ul>}
+          {brief.unusual.length > 0 && <><h4>Unusual, not yet at alarm level</h4><ul>{brief.unusual.map((u) => <li key={u}>{u}</li>)}</ul></>}
           {brief.watch.length > 0 && <><h4>Watching</h4><ul>{brief.watch.map((w) => <li key={w}>{w}</li>)}</ul></>}
           <h4>How much to trust this</h4>
           <ul>
