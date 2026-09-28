@@ -186,3 +186,31 @@ test('an HHS caller - ten read-only tools on offer - gets an ANSWER, not "could 
   const result = res.body as AgentResult;
   assert.equal(result.stoppedBecause, 'end_turn', 'the first real AgentCore question ended at max_iterations');
 });
+
+test('tools that cannot be LISTED: an honest answer that nothing was looked up - not a failure that blames the question', async () => {
+  const p = person('tools-down');
+  TOKENS['tok-' + p.sub] = p;
+  const broken = () => ({
+    via: 'mcp' as const, route: 'gateway' as const,
+    list: async () => { throw new Error('MCP server answered 401: Transaction token required: authorizer has AllowedWorkloadConfiguration configured'); },
+    call: async () => 'unreachable',
+  });
+  const res = await handleAgentInvocation(
+    { authorization: 'Bearer tok-' + p.sub, body: JSON.stringify({ question: 'Why is dal-01 down?' }) },
+    { verify, tools: broken },
+  );
+  // 200, deliberately: AgentCore turns any error status into a bare 424 and
+  // the board can no longer say what happened.
+  assert.equal(res.status, 200);
+  const r = res.body as AgentResult;
+  assert.equal(r.stoppedBecause, 'tools_unavailable');
+  assert.match(r.answer, /could not reach my tools .* have not looked anything up/);
+  assert.ok(!r.answer.includes('Transaction token'), 'the reason goes to the log, never to the caller');
+  assert.deepEqual({ tools: r.servedBy?.tools, route: r.servedBy?.toolsRoute }, { tools: 'mcp', route: 'gateway' });
+
+  // And it is not remembered: the next question starts clean.
+  await withRecordingModel(async (seen) => {
+    await askAs(p, 'And now?');
+    assert.deepEqual(texts(seen[0]), ['user:And now?']);
+  });
+});

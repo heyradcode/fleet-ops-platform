@@ -35,6 +35,7 @@ import type { Principal } from '../platform/types.ts';
 import { log } from '../platform/logger.ts';
 import { runAgent, type AgentResult, type AgentTrace } from './agent-core.ts';
 import { inProcessTools, type ToolProvider } from './tool-provider.ts';
+import type { ToolSpec } from '../aws/bedrock.ts';
 import { redactPii } from './guardrails.ts';
 
 export type InvocationRequest = {
@@ -73,6 +74,28 @@ export const HISTORY_ANSWER_CHARS = 1500;
 type Turn = { question: string; answer: string };
 const conversations = new Map<string, Turn[]>();
 const conversationKey = (p: Principal) => p.tenantId + '|' + p.sub;
+
+/**
+ * The answer when there are no tools to answer with. Says what did NOT
+ * happen - nothing was looked up - so it cannot be mistaken for an answer
+ * about the estate, and carries no internals: the reason is in the log.
+ */
+function toolsUnavailable(model: string | undefined, turn: number, provider: ToolProvider): AgentResult {
+  return {
+    answer:
+      'I could not reach my tools just now, so I have not looked anything up - no device, runbook or ' +
+      'incident - and cannot answer this yet. Try again in a minute. If it keeps happening, the ' +
+      'agent\'s log names the reason ("agent: tools unavailable").',
+    trace: [],
+    evidence: [],
+    stoppedBecause: 'tools_unavailable',
+    usage: { modelCalls: 0, inputTokens: 0, outputTokens: 0 },
+    servedBy: {
+      host: 'agentcore', model: model ?? 'offline', turn, tools: provider.via,
+      ...(provider.route ? { toolsRoute: provider.route } : {}),
+    },
+  };
+}
 
 export async function handleAgentInvocation(req: InvocationRequest, deps: InvocationDeps): Promise<InvocationResponse> {
   const header = req.authorization ?? '';
@@ -116,12 +139,31 @@ export async function handleAgentInvocation(req: InvocationRequest, deps: Invoca
     if (fresh) conversations.delete(key);
     const history = conversations.get(key) ?? [];
 
+    // The tools first, apart. If the tool server cannot be reached - or
+    // refuses, as it did when the runtime was locked to the gateway - the
+    // invocation used to FAIL, AgentCore turned that into a bare 424, and
+    // the person was told to rephrase a question that was never the
+    // problem. The agent knows exactly what happened, so it says it: an
+    // answer that nothing was looked up, the reason in the log. It does NOT
+    // fall back to another route: the gateway is the governed path, and a
+    // quiet detour around it is the one thing a front door must not allow.
+    let tools: ToolSpec[];
+    try {
+      tools = await provider.list();
+    } catch (err) {
+      log.error('agent: tools unavailable', {
+        tenant: principal.tenantId, tools: provider.via, route: provider.route ?? '-',
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return { status: 200, body: toolsUnavailable(deps.model, history.length + 1, provider) };
+    }
+
     const result = await runAgent({
       question,
       // The CALLER's principal - never a privileged one. A Dallas operator's
       // assistant sees Dallas, because the tools derive keys from this.
       principal,
-      tools: await provider.list(),
+      tools,
       callTool: provider.call,
       history,
       onStep: deps.onStep,

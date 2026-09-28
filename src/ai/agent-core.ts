@@ -51,7 +51,12 @@ export type AgentResult = {
   trace: AgentTrace[];
   /** Everything the tools returned, so the caller can render citations. */
   evidence: string[];
-  stoppedBecause: 'end_turn' | 'max_iterations' | 'guardrail' | 'refusal' | 'max_tokens';
+  /**
+   * `tools_unavailable`: the tools could not even be LISTED - the tool
+   * server was unreachable or refused - so nothing was looked up and the
+   * answer says so. Set by the caller that owns the provider, not the loop.
+   */
+  stoppedBecause: 'end_turn' | 'max_iterations' | 'guardrail' | 'refusal' | 'max_tokens' | 'tools_unavailable';
   usage: { modelCalls: number; inputTokens: number; outputTokens: number };
   /**
    * Where the answer was produced, for the person reading it: in the tab or
