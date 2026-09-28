@@ -29,6 +29,7 @@ import {
 import { createCommsClient } from '../src/integrations/comms/client.ts';
 import { COMMS_CONFIG, HHS_DEMO_TENANT } from '../src/integrations/comms/config.ts';
 import { backfillCommsBaselines, runCommsPoll } from '../src/integrations/comms/poll.ts';
+import { buildGraph } from '../src/graph/store.ts';
 
 /** Weeks of baseline history - the anomaly detector's 4-week minimum, with room. */
 export const BACKFILL_WEEKS = 8;
@@ -117,4 +118,13 @@ export async function seedDemoData(log: (line: string) => void = () => {}): Prom
     observations += resolved.length;
   }
   log('  network: ' + allDeviceStates(acme).length + ' devices, ' + observations + ' observations');
+
+  // --- The knowledge graph ---------------------------------------------------
+  // LAST: it loads the HHS estate, and nothing above should see that. Derived
+  // from the estate, the tenant's tables and the workforce counts the poll
+  // just stored, so it is built after them. Re-runnable: a rebuild overwrites
+  // by key and removes only what the sources dropped.
+  const graph = await buildGraph(hhs);
+  log('  knowledge graph: ' + graph.nodes + ' nodes, ' + graph.edges + ' edges' +
+    (graph.removed ? ', ' + graph.removed + ' stale items removed' : ''));
 }

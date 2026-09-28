@@ -251,7 +251,9 @@ function Board({ session, onSignOut, onExpired }: {
             <button
               key={s.siteId}
               className="site"
-              title={s.name}
+              // The facility code is the join to the comms view: Houston is
+              // 1120 there and here, which is what lets the two be compared.
+              title={s.name + (s.facility ? ' - facility ' + s.facility : '')}
               aria-pressed={siteId === s.siteId}
               onClick={() => { setSiteId(s.siteId); setSelected(undefined); }}
             >

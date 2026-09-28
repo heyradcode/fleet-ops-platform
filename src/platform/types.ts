@@ -452,6 +452,16 @@ export type Site = {
   lat: number;
   /** People who notice when this site goes down. Weights incident severity. */
   headcount: number;
+  /**
+   * The customer's facility code for this building - HHS's `LC=NNNN` - where
+   * the customer has one. The JOIN between the network and everything keyed
+   * by facility (the workforce, call quality, Webex locations, Kurmi phones,
+   * Starlink terminals): without it a facility's call quality and the
+   * network in that building are two graphs side by side. In production it
+   * is a SolarWinds custom property or a tenant table; offline, the estate
+   * layout carries it. Absent for a tenant with no facility scheme.
+   */
+  facility?: string;
 };
 
 export type DeviceStatus = 'healthy' | 'degraded' | 'down' | 'unknown';

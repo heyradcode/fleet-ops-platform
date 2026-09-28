@@ -7,7 +7,8 @@ Three parts:
 2. **MCP.** Built: an MCP tool server on AgentCore Runtime, behind an
    AgentCore Gateway that passes the user's token through, with an audit
    trail and a board view of it.
-3. **How the knowledge graph would be built.** A design; none of it is built.
+3. **The knowledge graph.** Phases 1 and 2 are built: the facility join and
+   the graph itself. Candidate causes and graph tools are still a design.
 
 The designs follow the proposal deck's AI architecture (slides 3, 5, 6, 11
 and 12). The deck is held locally and not in the repository. They are shaped
@@ -464,7 +465,7 @@ Lambda code, plus the TTL if it isn't applied yet.
 
 ---
 
-## Part 3 — The knowledge graph (design)
+## Part 3 — The knowledge graph (phases 1 and 2 built)
 
 ### What it is for
 
@@ -529,6 +530,9 @@ Without this join, a knowledge graph would be two graphs side by side.
 **No person nodes.** The workforce roster is never persisted, and the graph
 must not become the persisted roster by another name. People appear only as
 counts on `Facility` and `Queue`.
+
+*As built*, `Incident` and `Change` are **not** stored in the graph, and two
+edges wait for a source. See "Built: phases 1 and 2" below.
 
 ### Where it lives: an adjacency list in the existing table
 
@@ -618,6 +622,71 @@ walking the whole estate.
 4. **The graph tools,** exposed through MCP (Part 2) so every agent gets them
    with the same audit trail.
 
+### Built: phases 1 and 2
+
+**Phase 1: the facility join.** `hhs-demo` now has its own network estate
+(`estateLayout` in `src/data/estate.ts`), laid over the same six facilities
+the comms sources use. Houston is `1120` on the network side as it is in
+Entra, Webex, Kurmi and the Starlink table. `Site.facility` carries the
+code, and `facilityOfDevice` and `devicesAtFacility` (scoped, like every
+repository read) are the join.
+
+| Site | Facility | Vendor | Devices |
+|---|---|---|---|
+| `dal-01` Dallas Regional Office | 1455 | Cisco IOS-XE | 16 |
+| `aus-01` Austin Central Office | 0412 | Juniper | 11 |
+| `hou-01` Houston Regional Office | 1120 | Cisco IOS-XE | 11 |
+| `aus-02` North Austin Campus | 0417 | Juniper | 9 |
+| `elp-01` El Paso Field Office | 2031 | Aruba | 7 |
+| `lbb-01` Lubbock Field Office | 3308 | Aruba | 6 |
+
+The first two rows are Acme's `dal-01` and `aus-01` unchanged, and that is
+load-bearing:
+- the SolarWinds fixture resolves HHS's Orion nodes by IP, and IPs follow
+  site order;
+- the Helix mock's changes name Dallas devices;
+- the scenarios pick Dallas's switches and a Juniper access point.
+
+The demo's output changed by exactly one site name. Acme keeps its five
+cities.
+
+**Phase 2: the graph.** `src/graph/`:
+
+| File | What it does |
+|---|---|
+| `model.ts` | Node and relation types. There is no `Person` type, so none can be written. |
+| `derive.ts` | `deriveGraph(sources)`: a **pure** function of the estate, the tenant's tables and the per-facility people counts, sorted so the same sources give byte-identical output. |
+| `store.ts` | `writeGraph`, `buildGraph`, `graphNode`, `neighbours`: the adjacency list above, every edge stored both ways, one Query per question. |
+
+What it holds for HHS: 80 nodes and 126 edges.
+- Every device `LOCATED_AT` its facility, plus the uplink tree.
+- Both Starlink terminals `SERVES` their facility; the mobile van isn't in
+  the table, so it gets no edge.
+- The Bandwidth peers `TERMINATES_ON` their SBC; the legacy PBX peer has no
+  SBC, so it gets no edge.
+- Helix's CI and site names `IS` our SBCs and facilities.
+
+It's rebuilt by `pnpm seed:aws` (and therefore by `pnpm mcp`) after the
+poll. A rebuild is idempotent, and stale items are found through an index
+partition rather than a Scan. The order survives a crash anywhere: write
+everything, then delete what the build didn't write, then trim the index
+**last**. Reads need **tenant** scope, as comms reads do: a scoped view of a
+graph that spans sites and facilities needs a facility scope that doesn't
+exist yet.
+
+**Deliberate differences from the design above:**
+- **Incidents and changes are not graph nodes.** They stay in their own
+  stores, and phase 3 joins them at query time. A second, graph-shaped copy
+  of every incident would be a consistency bug waiting for its day.
+- **`Sbc RUNS_ON Device` is not built.** The SBCs sit in the Austin data
+  centre, which isn't a facility and has no site; an invented edge would
+  plant a candidate cause that isn't there. It waits for a real source,
+  such as the Helix CMDB's relationships or a tenant table.
+- **`Queue STAFFED_FROM Facility` is not built.** The workforce split counts
+  people per facility and platform, not per queue.
+- **Device CIs in Helix** are still joined at query time through the
+  inventory aliases (`recentChanges`), as before.
+
 ---
 
 ## Decisions these designs need from you
@@ -626,7 +695,8 @@ walking the whole estate.
 |---|---|
 | **The facility source** on the network side: a SolarWinds custom property, or a tenant table | It depends on what HHS's Orion actually carries. |
 | **Audit retention**, and whether prompts and responses are logged | It's personal data with its own retention and access obligations. |
-| **Gateway, and how identity reaches the tool** (token exchange, signed header propagation, or Gateway-side rules) | It changes where the tenant boundary is enforced. |
+| **Token passthrough or on-behalf-of exchange** at the Gateway | Passthrough is built and keeps the user's identity end to end. AWS recommends on-behalf-of exchange for production, which needs an identity provider that supports it (Cognito doesn't). That changes the identity architecture. |
+| **Where the SBCs sit on the network** (`Sbc RUNS_ON Device`) | No source carries it: the Helix CMDB's relationships or a tenant table would. Without it, candidate causes stop at the SBC. |
 | **One agent with tools, or five purpose-built agents** | The deck names five; the tool-based agent already covers the ground. Separate agents mean separate prompts, budgets and costs. |
 
 ## Where to look

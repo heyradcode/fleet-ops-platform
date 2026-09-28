@@ -31,6 +31,7 @@ import type {
   Device, DeviceAlias, DeviceRole, NetworkInterface, PlatformId, Site, TenantId, VendorId,
 } from '../platform/types.ts';
 import { random } from '../platform/random.ts';
+import { HHS_DEMO_TENANT } from '../integrations/comms/config.ts';
 
 export const DEMO_TENANT: TenantId = 'acme-networks';
 
@@ -62,6 +63,58 @@ const SITE_VENDOR: Record<string, { vendor: VendorId; platform: PlatformId }> = 
 const SITE_DEVICE_COUNT: Record<string, number> = {
   'dal-01': 16, 'aus-01': 11, 'den-01': 11, 'chi-01': 11, 'phx-01': 11,
 };
+
+/** One site of a tenant's estate: where it is, what it was built with, how big. */
+type SiteLayout = {
+  site: Omit<Site, 'tenantId'>;
+  vendor: VendorId;
+  platform: PlatformId;
+  devices: number;
+};
+
+const ACME_LAYOUT: SiteLayout[] = SITES.map((site) => ({
+  site, ...SITE_VENDOR[site.siteId], devices: SITE_DEVICE_COUNT[site.siteId],
+}));
+
+/**
+ * HHS: the network laid over the SAME facilities the comms sources know -
+ * Houston is LC=1120 on the network side as it is in Entra, Webex, Kurmi and
+ * the Starlink terminal table. That shared code is the knowledge graph's
+ * join (docs/12, Part 3); before this, `hhs-demo` ran Acme's five cities and
+ * no facility with a call-quality problem had a network behind it at all.
+ *
+ * What is KEPT from Acme, and why it is load-bearing:
+ *   - dal-01 FIRST, sixteen Cisco IOS-XE devices. IPs come from site order
+ *     (10.11.x is the first site) and the SolarWinds fixture resolves HHS's
+ *     Orion nodes by exactly those IPs; the Helix mock's changes name
+ *     cor-dal01-01 and dis-dal01-0x; and the scenarios pick Dallas's core,
+ *     distribution and access switches. Dallas Regional (1455) IS an HHS
+ *     facility, so keeping it is not a compromise.
+ *   - aus-01 second, eleven Juniper: the scenarios' Juniper access point.
+ * An Aruba site stays too (El Paso): the scenarios need an Aruba switch.
+ *
+ * Uneven on purpose, like Acme's - and Lubbock is small and remote, which is
+ * why its WAN is a satellite terminal in the Starlink table.
+ */
+const HHS_LAYOUT: SiteLayout[] = [
+  { site: { siteId: 'dal-01', name: 'Dallas Regional Office', region: 'us-south', lon: -96.7970, lat: 32.7767, headcount: 900, facility: '1455' },
+    vendor: 'cisco', platform: 'ios-xe', devices: 16 },
+  { site: { siteId: 'aus-01', name: 'Austin Central Office', region: 'us-south', lon: -97.7431, lat: 30.2672, headcount: 1_400, facility: '0412' },
+    vendor: 'juniper', platform: 'junos', devices: 11 },
+  { site: { siteId: 'hou-01', name: 'Houston Regional Office', region: 'us-south', lon: -95.3698, lat: 29.7604, headcount: 750, facility: '1120' },
+    vendor: 'cisco', platform: 'ios-xe', devices: 11 },
+  { site: { siteId: 'aus-02', name: 'North Austin Campus', region: 'us-south', lon: -97.6890, lat: 30.4015, headcount: 520, facility: '0417' },
+    vendor: 'juniper', platform: 'junos', devices: 9 },
+  { site: { siteId: 'elp-01', name: 'El Paso Field Office', region: 'us-south', lon: -106.4850, lat: 31.7619, headcount: 160, facility: '2031' },
+    vendor: 'aruba', platform: 'aos-cx', devices: 7 },
+  { site: { siteId: 'lbb-01', name: 'Lubbock Field Office', region: 'us-south', lon: -101.8552, lat: 33.5779, headcount: 90, facility: '3308' },
+    vendor: 'aruba', platform: 'aos-cx', devices: 6 },
+];
+
+/** The layout for a tenant. Every tenant but HHS gets Acme's, as before. */
+export function estateLayout(tenantId: TenantId): SiteLayout[] {
+  return tenantId === HHS_DEMO_TENANT ? HHS_LAYOUT : ACME_LAYOUT;
+}
 
 /**
  * Interface naming, per vendor.
@@ -124,15 +177,15 @@ export type Estate = {
  * which `demo.ts` and the test setup both do.
  */
 export function generateEstate(tenantId: TenantId = DEMO_TENANT): Estate {
-  const sites: Site[] = SITES.map((s) => ({ ...s, tenantId }));
+  const layout = estateLayout(tenantId);
+  const sites: Site[] = layout.map((l) => ({ ...l.site, tenantId }));
   const devices: Device[] = [];
   const interfaces: NetworkInterface[] = [];
 
   let octet = 10;
 
-  for (const site of sites) {
-    const { vendor, platform } = SITE_VENDOR[site.siteId];
-    const total = SITE_DEVICE_COUNT[site.siteId];
+  for (const [i, site] of sites.entries()) {
+    const { vendor, platform, devices: total } = layout[i];
     const short = site.siteId.replace('-', '');
 
     const mk = (role: DeviceRole, n: number, uplinkDeviceId?: string): Device => {

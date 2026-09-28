@@ -100,6 +100,27 @@ export function deviceState(principal: Principal, deviceId: DeviceId): DeviceSta
   return allDeviceStates(principal).find((s) => s.deviceId === deviceId);
 }
 
+/**
+ * The facility a device serves: its site's facility code (HHS's LC=NNNN), or
+ * undefined for a tenant with no facility scheme - or a device this caller
+ * cannot see, which has no facility FOR THEM. The network half of the join
+ * between a building's network and its people and calls (docs/12, Part 3).
+ */
+export function facilityOfDevice(principal: Principal, deviceId: DeviceId): string | undefined {
+  const device = deviceState(principal, deviceId);
+  return device ? siteById(principal, device.siteId)?.facility : undefined;
+}
+
+/**
+ * The network in a facility's building, within the caller's scope. A
+ * facility with no site is an empty list, not an error: "we have no network
+ * data for that building" is an answer, and the caller says it as one.
+ */
+export function devicesAtFacility(principal: Principal, facility: string): DeviceState[] {
+  const siteIds = new Set(allSites(principal).filter((s) => s.facility === facility).map((s) => s.siteId));
+  return allDeviceStates(principal).filter((d) => siteIds.has(d.siteId));
+}
+
 /** Overwrite the cached hot state. Called by the pipeline's fold step. */
 export function putDeviceStates(next: DeviceState[]): void {
   for (const s of next) states.set(s.deviceId, s);

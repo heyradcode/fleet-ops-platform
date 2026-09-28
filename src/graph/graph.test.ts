@@ -1,0 +1,106 @@
+/**
+ * The knowledge graph: derived from the sources, stored both ways, rebuilt
+ * cleanly - and never a roster.
+ */
+import { test, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
+
+import type { Principal } from '../platform/types.ts';
+import { setRandom, seededRandom } from '../platform/random.ts';
+import { setClock, fixedClock } from '../platform/clock.ts';
+import { generateEstate } from '../data/estate.ts';
+import { COMMS_CONFIG, HHS_DEMO_TENANT } from '../integrations/comms/config.ts';
+import { OutOfScopeError } from '../platform/tenancy.ts';
+import { mainTable } from '../aws/dynamodb.ts';
+import { deriveGraph } from './derive.ts';
+import { buildGraph, graphNode, neighbours, writeGraph } from './store.ts';
+import type { Graph } from './model.ts';
+
+const who = (tenantId: string, roles: Principal['roles'], scope: Principal['scope']): Principal =>
+  ({ sub: 'g-' + tenantId, email: 'g@x', tenantId, roles, scope, identityProvider: 'cognito' });
+const HHS = who(HHS_DEMO_TENANT, ['admin'], { kind: 'tenant' });
+const HOUSTON_OPERATOR = who(HHS_DEMO_TENANT, ['operator'], { kind: 'site', siteId: 'hou-01' });
+const OTHER = who('graph-other-tenant', ['admin'], { kind: 'tenant' });
+
+beforeEach(() => { setRandom(seededRandom()); setClock(fixedClock()); });
+
+function hhsGraph(people?: Record<string, number>): Graph {
+  const estate = generateEstate(HHS_DEMO_TENANT);
+  return deriveGraph({ sites: estate.sites, devices: estate.devices, config: COMMS_CONFIG[HHS_DEMO_TENANT], peopleByFacility: people });
+}
+
+test('every HHS device is LOCATED_AT its building\'s facility, and the tree is the estate\'s', () => {
+  const estate = generateEstate(HHS_DEMO_TENANT);
+  const g = hhsGraph();
+  const located = g.edges.filter((e) => e.rel === 'LOCATED_AT');
+  assert.equal(located.length, estate.devices.length, 'every device, once');
+  const houston = located.filter((e) => e.to.id === '1120').map((e) => e.from.id);
+  assert.deepEqual(houston.sort(), estate.devices.filter((d) => d.siteId === 'hou-01').map((d) => d.deviceId).sort());
+  const uplinks = g.edges.filter((e) => e.rel === 'UPLINKS_TO');
+  assert.equal(uplinks.length, estate.devices.filter((d) => d.uplinkDeviceId).length);
+});
+
+test('the comms tables become edges: satellite WAN, trunks to SBCs, Helix names for our things', () => {
+  const g = hhsGraph();
+  const has = (from: string, rel: string, to: string) =>
+    g.edges.some((e) => e.from.type + '#' + e.from.id === from && e.rel === rel && e.to.type + '#' + e.to.id === to);
+  assert.ok(has('SatelliteTerminal#ut01000000-00000000-00d4e5f6', 'SERVES', 'Facility#3308'), 'Lubbock\'s WAN');
+  assert.ok(has('Trunk#540101', 'TERMINATES_ON', 'Sbc#sbc1.voice.hhs.texas.example'));
+  assert.ok(has('HelixCi#SBC2-TEAMS-DR', 'IS', 'Sbc#sbc2.voice.hhs.texas.example'));
+  assert.ok(has('HelixSite#Houston Regional Office', 'IS', 'Facility#1120'));
+  // The tables' deliberate absences stay absent: no invented edges.
+  assert.ok(!g.nodes.some((n) => n.id === '540103'), 'the legacy PBX peer has no SBC to terminate on');
+  assert.ok(!g.nodes.some((n) => n.id === 'ut01000000-00000000-00ffee11'), 'the mobile van serves no facility');
+  assert.ok(!g.edges.some((e) => e.rel === 'UPLINKS_TO' && e.to.type !== 'Device'));
+});
+
+test('NO PEOPLE: no person node can exist, and a facility carries a count, never a name', () => {
+  const g = hhsGraph({ '1120': 212 });
+  assert.equal(g.nodes.find((n) => n.type === 'Facility' && n.id === '1120')?.props.people, 212);
+  const everything = JSON.stringify(g);
+  assert.ok(!everything.includes('@'), 'no email address anywhere in the graph');
+  assert.deepEqual([...new Set(g.nodes.map((n) => n.type))].sort(),
+    ['Device', 'Facility', 'HelixCi', 'HelixSite', 'SatelliteTerminal', 'Sbc', 'Trunk']);
+});
+
+test('the same sources give the same graph, byte for byte', () => {
+  assert.equal(JSON.stringify(hhsGraph()), JSON.stringify(hhsGraph()));
+});
+
+test('stored both ways: "what is in this building" and "which building is this box in" are one Query each', async () => {
+  await writeGraph(HHS, hhsGraph());
+  const inHouston = await neighbours(HHS, { type: 'Facility', id: '1120' }, { direction: 'in', rel: 'LOCATED_AT' });
+  assert.ok(inHouston.length > 0 && inHouston.every((n) => n.node.type === 'Device'));
+  const where = await neighbours(HHS, inHouston[0].node, { direction: 'out', rel: 'LOCATED_AT' });
+  assert.deepEqual(where.map((n) => n.node), [{ type: 'Facility', id: '1120' }]);
+  assert.equal((await graphNode(HHS, { type: 'Facility', id: '1120' }))?.label, 'Houston Regional');
+  // A Helix site name has spaces; ids are encoded in keys and come back raw.
+  assert.deepEqual((await neighbours(HHS, { type: 'HelixSite', id: 'Houston Regional Office' })).map((n) => n.node.id), ['1120']);
+});
+
+test('a rebuild is idempotent, and what the sources dropped is gone - node, both edge ends, index', async () => {
+  const full = hhsGraph();
+  await writeGraph(HHS, full);
+  const again = await writeGraph(HHS, full);
+  assert.equal(again.removed, 0, 'the same graph twice removes nothing');
+
+  // Decommission one Houston access point.
+  const gone = full.nodes.find((n) => n.type === 'Device' && n.id.startsWith('dev-wir-hou01'))!;
+  const smaller: Graph = {
+    nodes: full.nodes.filter((n) => n !== gone),
+    edges: full.edges.filter((e) => e.from.id !== gone.id && e.to.id !== gone.id),
+  };
+  const result = await writeGraph(HHS, smaller);
+  assert.ok(result.removed >= 4, 'META, index, and at least one edge seen from each end');
+  assert.equal(await graphNode(HHS, gone), undefined);
+  assert.equal((await mainTable.query({ pk: 'TENANT#hhs-demo#GRAPH#Device#' + encodeURIComponent(gone.id) })).length, 0);
+  const inHouston = await neighbours(HHS, { type: 'Facility', id: '1120' }, { direction: 'in', rel: 'LOCATED_AT' });
+  assert.ok(!inHouston.some((n) => n.node.id === gone.id), 'the facility\'s side of the edge went too');
+});
+
+test('buildGraph wires the real sources; reads are tenant-wide only, and tenants never mix', async () => {
+  const built = await buildGraph(HHS);
+  assert.ok(built.nodes > 60 && built.edges > 60);
+  await assert.rejects(neighbours(HOUSTON_OPERATOR, { type: 'Facility', id: '1120' }), OutOfScopeError);
+  assert.deepEqual(await neighbours(OTHER, { type: 'Facility', id: '1120' }), [], 'another tenant\'s key space is empty');
+});

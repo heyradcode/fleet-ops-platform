@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 341 tests, no network. Picks up web/ tests too.
+pnpm test                       # 352 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180 - real Cognito sign-in
 pnpm web:env                    # write web/.env.cognito.local from the Terraform outputs
@@ -320,6 +320,20 @@ one, change the test deliberately rather than making it pass.
   a record in the caller's browser is one they can edit. `refused` is
   decided in `runToolAs`, where it is known: from the text alone a refusal
   looks like a failure, and that is the row an access review looks for.
+- **The knowledge graph is STRUCTURE, never events and never people.**
+  `src/graph/`: what serves what (Device LOCATED_AT Facility, UPLINKS_TO,
+  satellite SERVES, Trunk TERMINATES_ON Sbc, Helix names IS ours). Incidents
+  and changes stay in their stores and are joined at query time - a graph
+  copy would be a second truth to keep in step. There is NO Person type;
+  facilities carry a people COUNT. An edge with no real source is NOT
+  invented (Sbc RUNS_ON Device waits for one): a guessed edge plants a
+  candidate cause that is not there. Rebuilt after the poll by `buildGraph`:
+  write all, delete what the build did not write, trim the index LAST.
+  Reads need TENANT scope until a facility scope exists. The join is
+  `Site.facility`: HHS's estate (`estateLayout`) is over its own facilities,
+  with Acme's `dal-01` FIRST and `aus-01` second kept intact - the SolarWinds
+  fixture resolves by IP (site order), Helix names Dallas devices, and the
+  scenarios pick Dallas switches.
 - **Scope comes from the token, not the request.** Repository and resolver
   functions take a `Principal` and derive keys from it. An operator with no site
   claim gets *device* scope, not the whole estate — widening access is a
@@ -559,6 +573,7 @@ src/ai/          RAG, agent loop, guardrails; tool-provider.ts is the seam
                  between the loop and where tools run
 src/ai/mcp/      the MCP tool server (server, http) and the agent's client
 src/reporting/   the executive daily brief - every source, one page
+src/graph/       the knowledge graph: derive (pure), store (adjacency list)
 src/aws/         local stand-ins for 6 AWS services; dynamodb.sdk.ts is the
                  REAL table adapter (Node only - paging, batch retries)
 src/data/        estate generator, scenarios, health trace, runbooks, schema.sql
