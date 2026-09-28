@@ -17,7 +17,7 @@
 # provider that implements RFC 8693/7523. Cognito user pools do not. Either
 # way the tool would stop knowing who asked, and a Dallas operator's question
 # would be answered with the tenant's reach. It would also sync ONE tools/list
-# for everyone, where ours is per caller (5 tools for an operator, 10 for an
+# for everyone, where ours is per caller (5 tools for an operator, 13 for an
 # HHS admin). A Runtime target forwards the request as it came, token
 # included, so every rule in src/ai/mcp/ holds unchanged behind the gateway.
 # (docs/12, Part 2 - "Behind the AgentCore Gateway".)

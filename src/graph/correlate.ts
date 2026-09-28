@@ -150,6 +150,19 @@ export async function candidateCauses(
   return { status: 'found', causes };
 }
 
+/**
+ * Candidate causes for each of a set of incidents, keyed by incident id - in
+ * parallel, since each is reads only. What the board shows and what the
+ * brief is handed are the same call, so they cannot disagree.
+ */
+export async function causesForIncidents(
+  principal: Principal, incidents: CommsIncident[], network: NetworkDecisions, nowIso: string,
+): Promise<Record<string, CandidateCauses>> {
+  return Object.fromEntries(await Promise.all(
+    incidents.map(async (i) => [i.incidentId, await candidateCauses(principal, i, network, nowIso)] as const),
+  ));
+}
+
 const KIND_LABEL: Partial<Record<Alarm['kind'], string>> = {
   'link-down': 'Link down',
   'device-unreachable': 'Device unreachable',

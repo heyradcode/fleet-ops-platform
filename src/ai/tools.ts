@@ -34,6 +34,7 @@ import { isEvent, isMetric } from '../platform/types.ts';
 import { runSearch, splunkConfigured, type SearchName } from '../integrations/splunk/search.ts';
 import { COMMS_TOOLS, commsToolsFor } from './comms-tools.ts';
 import { ITSM_TOOLS, itsmToolsFor } from './itsm-tools.ts';
+import { GRAPH_TOOLS, graphToolsFor } from './graph-tools.ts';
 
 export type ToolExecutor = (
   input: Record<string, unknown>,
@@ -369,7 +370,8 @@ export const TOOL_SPECS: ToolSpec[] = TOOLS.map((t) => t.spec);
 export function toolByName(name: string): Tool | undefined {
   return TOOLS.find((t) => t.spec.name === name)
     ?? COMMS_TOOLS.find((t) => t.spec.name === name)
-    ?? ITSM_TOOLS.find((t) => t.spec.name === name);
+    ?? ITSM_TOOLS.find((t) => t.spec.name === name)
+    ?? GRAPH_TOOLS.find((t) => t.spec.name === name);
 }
 
 /** Read-only subset, for an "explain but do not act" agent profile. */
@@ -386,5 +388,8 @@ export const READ_ONLY_TOOL_SPECS: ToolSpec[] = TOOLS
  * does not have would spend a turn learning nothing.
  */
 export function toolSpecsFor(principal: Principal, opts: { readOnly: boolean }): ToolSpec[] {
-  return [...(opts.readOnly ? READ_ONLY_TOOL_SPECS : TOOL_SPECS), ...commsToolsFor(principal), ...itsmToolsFor(principal)];
+  return [
+    ...(opts.readOnly ? READ_ONLY_TOOL_SPECS : TOOL_SPECS),
+    ...commsToolsFor(principal), ...itsmToolsFor(principal), ...graphToolsFor(principal),
+  ];
 }

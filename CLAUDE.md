@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 358 tests, no network. Picks up web/ tests too.
+pnpm test                       # 367 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180 - real Cognito sign-in
 pnpm web:env                    # write web/.env.cognito.local from the Terraform outputs
@@ -341,6 +341,12 @@ one, change the test deliberately rather than making it pass.
   both sets of rules decide, changing none of it (the planted Houston WAN
   alarm stays held back; a test pins it). Four answers, never two: found /
   none (says what it searched) / no-path (trunk, queue) / unknown (no graph).
+  The board computes causes ONCE and hands the same ones to the brief. The
+  agent's graph tools (`ai/graph-tools.ts`) are a FIXED catalogue - the SPL
+  rule, never a graph query language - with depth <= 2 and 40 nodes enforced
+  by the tool; they take facility names as well as codes, and say
+  "CANDIDATE (not evidence)" in their own text, because a model repeats a
+  tool with the confidence the tool used.
 - **Scope comes from the token, not the request.** Repository and resolver
   functions take a `Principal` and derive keys from it. An operator with no site
   claim gets *device* scope, not the whole estate — widening access is a

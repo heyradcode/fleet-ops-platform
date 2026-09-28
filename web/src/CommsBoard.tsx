@@ -229,6 +229,7 @@ function BriefPanel({ brief }: { brief: Brief }) {
                   {i.where && <div>Where: {i.where}</div>}
                   {i.status && <div>Status: {i.status}</div>}
                   {i.candidate && <div>{i.candidate} - a candidate, not a confirmed cause</div>}
+                  {i.networkCandidate && <div>{i.networkCandidate} - a candidate, not a confirmed cause</div>}
                   {i.ticket && <div>{i.ticket}</div>}
                   {i.normally && <div className="dim">{i.normally}</div>}
                 </li>

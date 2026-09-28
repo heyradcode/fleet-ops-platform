@@ -10,37 +10,19 @@ import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 
 import type { Alarm, Incident, Principal } from '../platform/types.ts';
-import { setClock, fixedClock, now } from '../platform/clock.ts';
-import {
-  DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS, DEMO_WEBEX_TOKEN,
-  directory, mockFetch, resetMockState,
-} from '../integrations/comms/mock/index.ts';
-import { createCommsClient } from '../integrations/comms/client.ts';
-import { COMMS_CONFIG, HHS_DEMO_TENANT } from '../integrations/comms/config.ts';
-import { runCommsPoll } from '../integrations/comms/poll.ts';
+import { HHS_DEMO_TENANT } from '../integrations/comms/config.ts';
 import type { CommsIncident } from '../integrations/comms/incidents.ts';
 import { commsSnapshot, tenantScenarios, type CommsSnapshot } from '../api/board-api.ts';
-import { buildGraph } from './store.ts';
 import { candidateCauses, type CandidateCauses } from './correlate.ts';
+import { HHS_ADMIN as HHS, pollHhsAndBuildGraph } from './test-world.ts';
 
 const who = (tenantId: string): Principal =>
   ({ sub: 'c-' + tenantId, email: 'c@x', tenantId, roles: ['admin'], scope: { kind: 'tenant' }, identityProvider: 'cognito' });
-const HHS = who(HHS_DEMO_TENANT);
 
 let snap: CommsSnapshot;
 
 before(async () => {
-  resetMockState();
-  setClock(fixedClock());
-  await runCommsPoll(HHS, createCommsClient({
-    tenantId: HHS_DEMO_TENANT, fetch: mockFetch, sleep: async () => {},
-    credentials: {
-      entra: { tenantId: directory().entraTenantId, ...DEMO_CLIENT },
-      genesys: { ...DEMO_CLIENT }, webex: { token: DEMO_WEBEX_TOKEN }, bandwidth: { ...DEMO_BANDWIDTH_USER },
-      helix: { ...DEMO_HELIX_USER }, kurmi: { ...DEMO_KURMI_USER }, starlink: { ...DEMO_STARLINK_ACCOUNTS.prod },
-    },
-  }), COMMS_CONFIG[HHS_DEMO_TENANT], now());
-  await buildGraph(HHS);
+  await pollHhsAndBuildGraph();
   const s = await commsSnapshot(HHS);
   assert.ok(s);
   snap = s;
@@ -137,4 +119,14 @@ test('no graph for the tenant: "unknown", never a quiet "none"', async () => {
   const other = who('correlate-no-graph');
   const c = await candidateCauses(other, { ...houstonIncident(), tenantId: other.tenantId }, { alarms: [], incidents: [], heldBack: [] }, OPENED);
   assert.equal(c.status, 'unknown');
+});
+
+test('the brief the board builds carries the same top candidate, in plain words, and says "candidate"', async () => {
+  const { renderBrief } = await import('../reporting/daily-brief.ts');
+  const houston = snap.brief.open.find((i) => i.id === incidentAt('facility', '1120')?.incidentId);
+  assert.equal(houston?.networkCandidate,
+    'On the building\'s own network: interface errors on its wan edge (wan-hou01-02), reported by the device alone');
+  assert.equal(snap.brief.open.find((i) => i.id === incidentAt('facility', '3308')?.incidentId)?.networkCandidate, undefined,
+    'looked and found nothing: the brief names nothing');
+  assert.match(renderBrief(snap.brief, 'text'), /reported by the device alone - a candidate, not a confirmed cause/);
 });

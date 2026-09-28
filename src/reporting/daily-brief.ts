@@ -41,6 +41,7 @@ import type { CommsIncident } from '../integrations/comms/incidents.ts';
 import { changesAroundDevice } from '../integrations/comms/helix-network.ts';
 import { COMMS_SOURCES } from '../integrations/comms/types.ts';
 import { latestAnomalies, type CommsAnomaly } from '../integrations/comms/anomalies.ts';
+import type { CandidateCauses } from '../graph/correlate.ts';
 
 export type BriefStatus = 'red' | 'amber' | 'green';
 
@@ -57,6 +58,8 @@ export type BriefItem = {
   where?: string;
   /** A Helix change worth checking - always a candidate. */
   candidate?: string;
+  /** The knowledge graph's top candidate on the building's own network - always a candidate. */
+  networkCandidate?: string;
   /** Already on the service desk's radar. */
   ticket?: string;
   /** What this subject normally looks like at this hour of the week, when there is history. */
@@ -167,6 +170,18 @@ function commsItem(i: CommsIncident, at: number, peopleAt: (code: string) => str
   };
 }
 
+/**
+ * The top network candidate, in words for someone who does not read device
+ * names for a living: what, where in the building, and whether it paged -
+ * "reported by the device alone" is the plain way to say held back.
+ */
+function networkCandidateFor(c: CandidateCauses | undefined): string | undefined {
+  if (c?.status !== 'found') return undefined;
+  const top = c.causes[0];
+  return 'On the building\'s own network: ' + top.what.toLowerCase() + ' on its ' + top.role.replace(/-/g, ' ') +
+    ' (' + top.device + ')' + (top.paged ? '' : ', reported by the device alone');
+}
+
 function plainLifecycle(note: string): string {
   const m = /measured healthy (\d+)\/(\d+)/.exec(note);
   if (m) return 'recovering - healthy for ' + m[1] + ' of ' + m[2] + ' checks';
@@ -221,6 +236,12 @@ export async function buildDailyBrief(
      * showing, so the brief and the board cannot disagree.
      */
     networkIncidents?: Incident[];
+    /**
+     * The knowledge graph's candidate causes, per comms incident id - the
+     * SAME ones the board shows, computed by the caller (graph/correlate.ts).
+     * Absent: the brief names no network candidate, rather than guessing.
+     */
+    causes?: Record<string, CandidateCauses>;
   } = {},
 ): Promise<Brief> {
   requireTenantScope(principal);
@@ -258,7 +279,9 @@ export async function buildDailyBrief(
     const a = anomalies.find((x) => subjectKey(x.subject) === subjectKey(i.subject) && !x.metric.endsWith(':volume'));
     return a ? 'Normally ' + normalText(a) + ' for ' + a.when + ' (' + a.normal.samples + ' weeks of history)' : undefined;
   };
-  const commsOpen = openComms.map((i) => ({ ...commsItem(i, at, peopleAt), normally: normallyFor(i) }));
+  const commsOpen = openComms.map((i) => ({
+    ...commsItem(i, at, peopleAt), normally: normallyFor(i), networkCandidate: networkCandidateFor(opts.causes?.[i.incidentId]),
+  }));
   const openSubjects = new Set(openComms.map((i) => subjectKey(i.subject)));
   const unusual = anomalies
     .filter((a) => !openSubjects.has(subjectKey(a.subject)))
@@ -357,6 +380,7 @@ export function renderBrief(b: Brief, format: 'text' | 'markdown'): string {
     if (i.where) lines.push(sub('Where: ' + i.where));
     if (i.status) lines.push(sub('Status: ' + i.status));
     if (i.candidate) lines.push(sub(i.candidate + ' - a candidate, not a confirmed cause'));
+    if (i.networkCandidate) lines.push(sub(i.networkCandidate + ' - a candidate, not a confirmed cause'));
     if (i.ticket) lines.push(sub(i.ticket));
     if (i.normally) lines.push(sub(i.normally));
   };

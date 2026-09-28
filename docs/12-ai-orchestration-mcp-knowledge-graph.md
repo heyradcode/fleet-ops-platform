@@ -8,8 +8,8 @@ Three parts:
    AgentCore Gateway that passes the user's token through, with an audit
    trail and a board view of it.
 3. **The knowledge graph.** Phases 1 to 3 are built: the facility join,
-   the graph, and candidate causes on the comms board. The graph's agent
-   tools are still a design.
+   the graph, candidate causes on the comms board and in the brief, and the
+   graph's agent tools, served through the MCP server.
 
 The designs follow the proposal deck's AI architecture (slides 3, 5, 6, 11
 and 12). The deck is held locally and not in the repository. They are shaped
@@ -288,7 +288,7 @@ put an MCP server behind Gateway, and not of the other.
 | What it is | Aggregates tools from many MCP servers into one virtual server | A governed front door: forwards requests to the runtime unchanged |
 | How it reaches our server | IAM, API key, OAuth client credentials, or on-behalf-of exchange | Can **pass the user's token through** (`JWT_PASSTHROUGH`) |
 | Who the tool thinks asked | The gateway, unless on-behalf-of exchange works, which needs an IdP implementing RFC 8693/7523. Cognito user pools don't. | **The user**, exactly as without the gateway |
-| `tools/list` | Synced by the gateway once, the same for everyone | Our server's, **per caller** (5 tools for a Dallas operator, 10 for an HHS admin) |
+| `tools/list` | Synced by the gateway once, the same for everyone | Our server's, **per caller** (5 tools for a Dallas operator, 13 for an HHS admin) |
 | Semantic tool search | Yes | No |
 | Token check, metrics, AgentCore Policy, interceptors | Yes | Yes |
 
@@ -385,7 +385,7 @@ On startup it prints three demo tokens:
 |---|---|
 | operator, `acme-networks`, Dallas only | 5 network read tools; only Dallas devices |
 | admin, `acme-networks`, tenant-wide | the same 5, over the whole estate |
-| admin, `hhs-demo` | 10: the network tools plus comms and ITSM |
+| admin, `hhs-demo` | 13: the network tools, the comms tools, and the three graph tools |
 
 Connect a client:
 
@@ -466,7 +466,7 @@ Lambda code, plus the TTL if it isn't applied yet.
 
 ---
 
-## Part 3 — The knowledge graph (phases 1 to 3 built)
+## Part 3 — The knowledge graph (built)
 
 ### What it is for
 
@@ -735,11 +735,46 @@ Call quality degraded at LC=1120
 - **`CommsSnapshot.causes`:** served the same in the tab and by `GET /comms`.
 - **The demo:** `pnpm start --only=graph`, section 13.
 
+- **The brief the board builds:** the top candidate, in plain words, on
+  the incident's line ("On the building's own network: interface errors on
+  its wan edge (wan-hou01-02), reported by the device alone - a candidate,
+  not a confirmed cause"). The board computes the causes once and hands the
+  same ones to the brief, so the two can't disagree.
+
 **Not yet:**
-- **The daily brief:** it doesn't carry candidates yet.
+- **The scheduled brief** (`pnpm start --only=brief`, and in production an
+  EventBridge schedule) reads the stored decisions and names no network
+  candidate unless its caller supplies causes. It doesn't guess.
 - **Helix changes as candidates:** they already reach the incident through
   Helix context, so listing them again from the graph would show each
   change twice.
+
+### Built: phase 4, the graph tools
+
+`src/ai/graph-tools.ts` adds three read-only tools, offered with the comms
+tools and to the same callers: a tenant with facilities, and a tenant-wide
+principal. They go through `runTool` like every other tool, so behind the
+MCP server they are scoped and audited with no extra code.
+
+| Tool | Takes | Returns |
+|---|---|---|
+| `whatServes` | a facility code **or name** ("Houston") | the building's devices, its satellite WAN, Helix's names for it, and a people **count** |
+| `explainIncident` | an incident id, or nothing for every open one | candidate causes with paths, each line saying "CANDIDATE (not evidence)" and whether it paged anyone |
+| `graphNeighbours` | `Type#id` or a facility name, an optional relation, a depth | at most 2 hops and 40 nodes; every line past the first hop names the node it hangs off |
+
+Details that matter:
+- **A fixed catalogue with typed arguments** (the SPL rule). The agent never
+  writes a graph query, and the depth and node caps are enforced by the
+  tool, whatever it's asked.
+- **Names as well as codes.** A model is told "Houston", not "1120". The
+  longest name wins, so "North Austin" isn't Austin, and a code the tenant
+  doesn't have isn't a facility.
+- **Unmapped is said as unmapped.** `whatServes` says no source maps SBCs to
+  buildings ("not 'none exist'"), and a wrong incident id returns the open
+  ones, so the model can correct itself.
+
+With these, an HHS admin is offered 13 read tools. The agent's step budget
+grows with the tools offered, so the offline model still reaches an answer.
 
 ---
 

@@ -62,7 +62,7 @@ import type { ApiGatewayEvent, ApiGatewayResult } from './rest-handler.ts';
 import {
   recentAudit, summariseAudit, AUDIT_RETENTION_DAYS, type AuditEntry, type AuditSummary,
 } from '../ai/audit.ts';
-import { candidateCauses, type CandidateCauses } from '../graph/correlate.ts';
+import { causesForIncidents, type CandidateCauses } from '../graph/correlate.ts';
 
 // ---------------------------------------------------------------------------
 // The snapshots - the contract the board renders
@@ -230,26 +230,23 @@ export async function commsSnapshot(caller: Principal): Promise<CommsSnapshot | 
   // What the network rules decided, ONCE: the brief and the candidate causes
   // read the same decisions, so they cannot disagree about the network.
   const network = tenantScenarios(caller);
-  const [workforce, incidents, alarms, health, resolved, phones, brief, anomalies] = await Promise.all([
+  const [workforce, incidents, alarms, health, resolved, phones, anomalies] = await Promise.all([
     commsWorkforce(caller),
     commsIncidents(caller),
     commsAlarms(caller),
     loadHealth(caller),
     commsResolvedIncidents(caller),
     commsPhones(caller),
-    // The network incidents the board's network view shows, so the brief and
-    // the board cannot disagree about what is open.
-    buildDailyBrief(caller, now(), { networkIncidents: network.incidents }),
     latestAnomalies(caller),
   ]);
   // Nothing polled yet: no view rather than a snapshot with holes in it.
   if (!workforce) return null;
-  // In parallel: reads only, one incident each - a loop of awaits here is a
-  // round trip per incident per board load, deployed.
-  const at = new Date(now()).toISOString();
-  const causes: Record<string, CandidateCauses> = Object.fromEntries(await Promise.all(
-    incidents.map(async (i) => [i.incidentId, await candidateCauses(caller, i, network, at)] as const),
-  ));
+  // The candidates BEFORE the brief, and handed to it: the board and the
+  // brief show the same ones because they are the same call.
+  const causes = await causesForIncidents(caller, incidents, network, new Date(now()).toISOString());
+  // The network incidents the board's network view shows, so the brief and
+  // the board cannot disagree about what is open either.
+  const brief = await buildDailyBrief(caller, now(), { networkIncidents: network.incidents, causes });
   return {
     workforce,
     incidents,
