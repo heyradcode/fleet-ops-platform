@@ -33,6 +33,11 @@ test('the token summary says who you are - and never contains the token', () => 
   const printed = JSON.stringify(s);
   for (const part of token.split('.')) assert.ok(!printed.includes(part), 'no segment of the token in the report');
   assert.throws(() => tokenSummary('not-a-jwt', now()), /not a JWT/);
+  // A line break still DECODES - and would make fetch throw an error quoting
+  // the whole token. Refused before any request, without quoting it.
+  const wrapped = token.slice(0, 20) + '\n' + token.slice(20);
+  assert.throws(() => tokenSummary(wrapped, now()), (e: unknown) =>
+    e instanceof Error && /not a JWT/.test(e.message) && !token.split('.').some((p) => e.message.includes(p)));
 });
 
 test('the env file, as pnpm web:env writes it', () => {
@@ -57,23 +62,39 @@ test('comms: Houston\'s candidate passes; no causes field, or an unbuilt graph, 
   const unbuilt = { ...comms, causes: Object.fromEntries(Object.keys(comms.causes).map((id) => [id, { status: 'unknown', reason: 'no graph' }])) };
   assert.match(judgeComms(200, wire(unbuilt)).fix ?? '', /seed:aws/, 'the graph is not in DynamoDB');
   assert.equal(judgeComms(200, null).status, 'skip');
+  assert.match(judgeComms(401, undefined).fix ?? '', /sign in/, 'a 401 is the token, not the deploy');
 });
 
 test('audit: 404 is an undeployed route, null is "not an admin", rows are counted by who recorded them', () => {
   assert.equal(judgeAudit(404, undefined).status, 'fail');
   assert.equal(judgeAudit(200, null).status, 'skip');
-  assert.match(judgeAudit(200, { entries: [{ via: 'mcp' }, { via: 'mcp' }, { via: 'tab' }] }).detail, /3 recent calls, 2 recorded by the MCP server/);
+  const rows = [{ via: 'mcp', sub: 'me', at: '2026-09-28T10:05:00Z' }, { via: 'mcp', sub: 'someone', at: '2026-09-28T10:06:00Z' },
+    { via: 'tab', sub: 'me', at: '2026-09-28T10:07:00Z' }];
+  assert.match(judgeAudit(200, { entries: rows }).detail, /3 recent calls, 2 recorded by the MCP server/);
+});
+
+test('audit: after this run called a tool, a trail with no row for it FAILS - audit writes fail silently by design', () => {
+  const rows = [{ via: 'mcp', sub: 'me', at: '2026-09-28T10:05:00Z' }];
+  assert.equal(judgeAudit(200, { entries: rows }, { sub: 'me', since: '2026-09-28T10:00:00Z' }).status, 'pass');
+  const missing = judgeAudit(200, { entries: rows }, { sub: 'me', since: '2026-09-28T11:00:00Z' });
+  assert.equal(missing.status, 'fail', 'an older row of mine is not this run');
+  assert.match(missing.fix ?? '', /LeadingKeys/);
+  assert.equal(judgeAudit(200, { entries: rows }, { sub: 'someone-else', since: '2026-09-28T10:00:00Z' }).status, 'fail', 'nor is someone else\'s');
 });
 
 test('the Gateway, and the lock: a direct call that SUCCEEDS is the failure', () => {
   const listed = judgeGatewayList({ tools: ['searchRunbooks', 'whatServes', 'explainIncident', 'graphNeighbours'], sessionId: 's' });
   assert.equal(listed.status, 'pass');
   assert.match(listed.detail, /\(3\/3 graph tools\); Mcp-Session-Id came back/);
-  assert.match(judgeGatewayList({ tools: [] }).detail, /did NOT come back/, 'a dropped session header is reported, not failed');
+  assert.match(judgeGatewayList({ tools: ['searchRunbooks'] }).detail, /did NOT come back/, 'a dropped session header is reported, not failed');
+  assert.equal(judgeGatewayList({ tools: [] }).status, 'fail', 'a server that lists nothing is not working');
+  assert.equal(judgeGatewayList({ tools: ['searchRunbooks'] }, true).status, 'fail', 'an HHS admin must see the graph tools');
   assert.equal(judgeGatewayList({ error: 'HTTP 401: MCP server answered 401' }).status, 'fail');
-  assert.equal(judgeGatewayCall({ text: 'INCIDENT x\n  CANDIDATE (not evidence) wan-hou01-02 ...' }).status, 'pass');
+  assert.equal(judgeGatewayCall({ tool: 'explainIncident', text: 'INCIDENT x\n  CANDIDATE (not evidence) wan-hou01-02 ...' }).status, 'pass');
   assert.equal(judgeDirectRefused({ ok: true }).status, 'fail');
-  assert.equal(judgeDirectRefused({ ok: false, error: 'HTTP 403: MCP server answered 403' }).status, 'pass');
+  assert.equal(judgeDirectRefused({ ok: false, status: 403, error: 'HTTP 403: MCP server answered 403' }).status, 'pass');
+  assert.equal(judgeDirectRefused({ ok: false, status: 500, error: 'HTTP 500: {"requestId":"7c1e4031-..."}' }).status, 'fail',
+    'judged on the status: a 500 whose body contains "403" is not a refusal');
   assert.equal(judgeDirectRefused({ ok: false, error: 'ECONNRESET' }).status, 'fail', 'a network error is not a refusal');
 });
 
@@ -84,4 +105,6 @@ test('the agent: only "tools over MCP via Gateway" passes', () => {
   assert.match(judgeAgent(200, served('mcp', 'direct')).detail, /not pointed at the gateway/);
   assert.match(judgeAgent(200, served('in-process')).detail, /not using the MCP server/);
   assert.equal(judgeAgent(403, undefined).status, 'fail');
+  assert.match(judgeAgent(0, undefined, 'The operation was aborted due to timeout').detail, /no answer: .*timeout/, 'a timeout says so');
+  assert.match(judgeAgent(401, undefined).fix ?? '', /sign in/);
 });

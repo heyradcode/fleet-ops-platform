@@ -301,8 +301,13 @@ export const inProcessTransport: Transport = {
     // Dallas traffic, for cost and for confidentiality.
     let cancelled = false;
 
-    const { alarms } = tenantScenarios(caller());
-    const queue = alarms.filter((a) => !siteId || a.siteId === siteId);
+    // The token's scope is the BOUNDARY, the site is the VIEW - the same two
+    // steps as boardSnapshot. Filtering by the view alone gave a device-scoped
+    // user, who has no site to view, every alarm in the tenant.
+    const principal = caller();
+    const { alarms } = tenantScenarios(principal);
+    const visible = new Set(withinScope(principal, allDeviceStates(principal)).map((d) => d.deviceId));
+    const queue = alarms.filter((a) => visible.has(a.deviceId) && (!siteId || a.siteId === siteId));
 
     let i = 0;
     const timer = setInterval(() => {

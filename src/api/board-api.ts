@@ -227,6 +227,9 @@ export function boardSnapshot(caller: Principal, siteId?: string): BoardSnapshot
  */
 export async function commsSnapshot(caller: Principal): Promise<CommsSnapshot | null> {
   if (!commsVisibleTo(caller)) return null;
+  // "Now" FIRST: tenantScenarios reseeds the world, which pins the clock
+  // back to the scenario time - read after it, "now" moves backwards.
+  const at = now();
   // What the network rules decided, ONCE: the brief and the candidate causes
   // read the same decisions, so they cannot disagree about the network.
   const network = tenantScenarios(caller);
@@ -243,10 +246,10 @@ export async function commsSnapshot(caller: Principal): Promise<CommsSnapshot | 
   if (!workforce) return null;
   // The candidates BEFORE the brief, and handed to it: the board and the
   // brief show the same ones because they are the same call.
-  const causes = await causesForIncidents(caller, incidents, network, new Date(now()).toISOString());
+  const causes = await causesForIncidents(caller, incidents, network, new Date(at).toISOString());
   // The network incidents the board's network view shows, so the brief and
   // the board cannot disagree about what is open either.
-  const brief = await buildDailyBrief(caller, now(), { networkIncidents: network.incidents, causes });
+  const brief = await buildDailyBrief(caller, at, { networkIncidents: network.incidents, causes });
   return {
     workforce,
     incidents,

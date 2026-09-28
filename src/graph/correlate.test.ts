@@ -130,3 +130,41 @@ test('the brief the board builds carries the same top candidate, in plain words,
     'looked and found nothing: the brief names nothing');
   assert.match(renderBrief(snap.brief, 'text'), /reported by the device alone - a candidate, not a confirmed cause/);
 });
+
+test('a network incident still OPEN counts whenever it opened; a RESOLVED one is over, even inside the window', async () => {
+  const incident = (id: string, openedAt: string, status: Incident['status']): Incident => ({
+    tenantId: HHS_DEMO_TENANT, incidentId: id, title: id, severity: 'critical', status, siteId: 'hou-01',
+    deviceIds: ['dev-wan-hou01-02'], alarmIds: [], rootCauseDeviceId: 'dev-wan-hou01-02', openedAt,
+  });
+  const c = await candidateCauses(HHS, houstonIncident(), {
+    alarms: [], heldBack: [],
+    incidents: [incident('still-going', '2026-09-08T13:30:00.000Z', 'open'), incident('over', '2026-09-08T14:25:00.000Z', 'resolved')],
+  }, '2026-09-08T14:35:00.000Z');
+  assert.equal(c.status, 'found', 'an hour-old outage that is still open was reported as "looked, found nothing"');
+  if (c.status === 'found') assert.deepEqual(c.causes.map((x) => x.id), ['still-going']);
+});
+
+test('the graph is built but the subject is not in it: "no-path", not "the graph has not been built"', async () => {
+  // An unmapped satellite terminal becomes a facility subject with no facility.
+  const c = await candidateCauses(HHS, { ...houstonIncident(), subject: { kind: 'facility', id: 'starlink-terminal:ut01-van', name: 'the mobile van' } },
+    { alarms: [], incidents: [], heldBack: [] }, OPENED);
+  assert.equal(c.status, 'no-path');
+  assert.match((c as { reason: string }).reason, /the mobile van is not a facility in the knowledge graph/);
+});
+
+test('a graph read that fails costs that incident its candidates - never the comms view or the brief', async () => {
+  const { causesForIncidents } = await import('./correlate.ts');
+  const siteScoped: Principal = { ...HHS, scope: { kind: 'site', siteId: 'hou-01' } };   // graph reads refuse it
+  const causes = await causesForIncidents(siteScoped, [houstonIncident()], { alarms: [], incidents: [], heldBack: [] }, OPENED);
+  assert.equal(causes[houstonIncident().incidentId].status, 'unknown');
+});
+
+test('"now" is read BEFORE the scenarios reseed the world - a board read at 15:00 searches to 15:00', async () => {
+  const { setClock, fixedClock } = await import('../platform/clock.ts');
+  setClock(fixedClock('2026-09-08T15:00:00.000Z'));
+  const later = await commsSnapshot(HHS);
+  const lubbock = later?.incidents.find((i) => i.subject.id === '3308');
+  const c = lubbock ? later!.causes[lubbock.incidentId] : undefined;
+  assert.equal(c?.status, 'none');
+  assert.match((c as { searched: string }).searched, /to 15:00Z$/);
+});

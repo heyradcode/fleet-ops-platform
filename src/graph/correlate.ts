@@ -23,13 +23,16 @@
  *   no-path   nothing in the graph connects this subject to the network
  *   unknown   the graph itself is not there (not built for this tenant yet)
  *
- * The window is [opened - 15 min, now]: a WAN edge that started dropping
- * packets ten minutes before the calls went bad is the classic shape, and one
- * that recovered an hour earlier is history, not a candidate.
+ * The window is [opened - 15 min, now] for ALARMS: a WAN edge that started
+ * dropping packets ten minutes before the calls went bad is the classic
+ * shape, and one raised an hour earlier is history. A network INCIDENT that
+ * is still OPEN counts whenever it opened - an outage that began an hour ago
+ * and is still going is the likeliest cause there is - and a RESOLVED one
+ * does not, because it is over.
  */
 import type { Alarm, Incident, Principal, Severity } from '../platform/types.ts';
 import type { CommsIncident } from '../integrations/comms/incidents.ts';
-import { graphNode, neighbours } from './store.ts';
+import { graphBuilt, graphNode, neighbours } from './store.ts';
 import type { NodeRef } from './model.ts';
 
 export const CAUSE_WINDOW_BEFORE_MS = 15 * 60_000;
@@ -86,16 +89,22 @@ export async function candidateCauses(
   const facilityRef: NodeRef = { type: 'Facility', id: subject.id };
   const facility = await graphNode(principal, facilityRef);
   if (!facility) {
-    return { status: 'unknown', reason: 'the knowledge graph has no facility ' + subject.id + ' - it has not been built for this tenant' };
+    // Two different answers. No graph at all is "could not look"; a graph
+    // without this facility - an unmapped satellite terminal, a code the
+    // tenant tables do not name - is "nothing connects it".
+    if (!(await graphBuilt(principal))) {
+      return { status: 'unknown', reason: 'the knowledge graph has not been built for this tenant' };
+    }
+    return { status: 'no-path', reason: subject.name + ' is not a facility in the knowledge graph, so no network is recorded for it' };
   }
 
   // ONE Query: the building's network.
   const located = await neighbours(principal, facilityRef, { direction: 'in', rel: 'LOCATED_AT' });
   const reached = new Set(located.map((n) => n.node.id));
   const from = new Date(Date.parse(incident.openedAt) - CAUSE_WINDOW_BEFORE_MS).toISOString();
+  if (reached.size === 0) return { status: 'no-path', reason: 'no network devices are recorded at ' + facility.label };
   const searched = String(reached.size) + ' network device' + (reached.size === 1 ? '' : 's') +
     ' at ' + facility.label + ', ' + hhmm(from) + 'Z to ' + hhmm(nowIso) + 'Z';
-  if (reached.size === 0) return { status: 'none', searched };
 
   const inWindow = (at: string) => at >= from && at <= nowIso;
   const minutesBefore = (at: string) => Math.round((Date.parse(incident.openedAt) - Date.parse(at)) / 60_000);
@@ -107,7 +116,8 @@ export async function candidateCauses(
   // then not listed again one by one.
   const covered = new Set<string>();
   for (const inc of network.incidents) {
-    if (!inWindow(inc.openedAt)) continue;
+    // Open: whenever it opened. Resolved: over - see the header.
+    if (inc.status === 'resolved' || inc.openedAt > nowIso) continue;
     const here = inc.deviceIds.filter((d) => reached.has(d));
     if (here.length === 0) continue;
     for (const a of inc.alarmIds) covered.add(a);
@@ -158,9 +168,16 @@ export async function candidateCauses(
 export async function causesForIncidents(
   principal: Principal, incidents: CommsIncident[], network: NetworkDecisions, nowIso: string,
 ): Promise<Record<string, CandidateCauses>> {
-  return Object.fromEntries(await Promise.all(
-    incidents.map(async (i) => [i.incidentId, await candidateCauses(principal, i, network, nowIso)] as const),
-  ));
+  return Object.fromEntries(await Promise.all(incidents.map(async (i) => {
+    try {
+      return [i.incidentId, await candidateCauses(principal, i, network, nowIso)] as const;
+    } catch (err) {
+      // Context, and context failing never fails its caller - the Helix
+      // rule. One throttled read must not blank the comms view and the brief.
+      const reason = 'the knowledge graph could not be read (' + (err instanceof Error ? err.message : String(err)) + ')';
+      return [i.incidentId, { status: 'unknown', reason } satisfies CandidateCauses] as const;
+    }
+  })));
 }
 
 const KIND_LABEL: Partial<Record<Alarm['kind'], string>> = {

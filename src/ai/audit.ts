@@ -70,14 +70,20 @@ function suffix(): string {
  * Canonical JSON: keys sorted at every level, so the same arguments in a
  * different order hash the same. A model does not promise key order.
  */
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
+function canonical(value: unknown, depth = 0): string {
+  // Bounded: arguments nested thousands deep would otherwise overflow the
+  // stack HERE, after the tool had run, and the call would leave no row.
+  if (depth > MAX_ARG_DEPTH) return '"<nested too deep>"';
+  if (Array.isArray(value)) return '[' + value.map((v) => canonical(v, depth + 1)).join(',') + ']';
   if (value && typeof value === 'object') {
     const o = value as Record<string, unknown>;
-    return '{' + Object.keys(o).sort().map((k) => JSON.stringify(k) + ':' + canonical(o[k])).join(',') + '}';
+    return '{' + Object.keys(o).sort().map((k) => JSON.stringify(k) + ':' + canonical(o[k], depth + 1)).join(',') + '}';
   }
   return JSON.stringify(value) ?? 'null';
 }
+
+/** Deeper than any real tool's arguments by a wide margin; the MCP server refuses beyond it. */
+export const MAX_ARG_DEPTH = 32;
 
 export function hashArgs(input: Record<string, unknown>): string {
   return sha256(canonical(input));
@@ -89,8 +95,15 @@ export async function recordToolCall(
 ): Promise<void> {
   const nowMs = wallNow();
   const at = new Date(nowMs).toISOString();
+  let argsHash: string;
+  try {
+    argsHash = hashArgs(call.input);
+  } catch {
+    // Still a row: WHO called WHAT is the record; the hash is a convenience.
+    argsHash = 'unhashable';
+  }
   const entry: AuditEntry = {
-    at, sub: principal.sub, tool: call.tool, argsHash: hashArgs(call.input),
+    at, sub: principal.sub, tool: call.tool, argsHash,
     outcome: call.outcome, ms: call.ms, via: call.via ?? 'mcp',
   };
   try {

@@ -62,6 +62,20 @@ function flat(req: IncomingMessage): Record<string, string | undefined> {
   return out;
 }
 
+/**
+ * ONE REQUEST AT A TIME. Every tool call reseeds this process's single demo
+ * world (prepareToolWorld) and computes in it across awaits; two requests
+ * interleaving would each answer from the other's half-set-up world. The
+ * warm-Lambda rule in CLAUDE.md - safe because a container serves one request
+ * at a time - made TRUE here rather than assumed. Tool calls are milliseconds.
+ */
+let queue: Promise<unknown> = Promise.resolve();
+function oneAtATime<T>(run: () => Promise<T>): Promise<T> {
+  const next = queue.then(run, run);
+  queue = next.then(() => undefined, () => undefined);
+  return next;
+}
+
 const server = createServer((req, res) => {
   // Health, as for the agent: `Healthy`, never `HealthyBusy`.
   if (req.method === 'GET' && req.url === '/ping') {
@@ -72,9 +86,9 @@ const server = createServer((req, res) => {
 
   if (req.url === '/mcp' || req.url?.startsWith('/mcp?')) {
     readBody(req)
-      .then((body) => serveMcp({ method: req.method ?? 'GET', headers: flat(req), body }, {
+      .then((body) => oneAtATime(() => serveMcp({ method: req.method ?? 'GET', headers: flat(req), body }, {
         verify: (token) => verifyTokenRs256(token, { issuer, clientId }),
-      }, res))
+      }, res)))
       .catch((err: unknown) => {
         log.error('mcp: request failed', { error: err instanceof Error ? err.message : String(err) });
         if (!res.headersSent) {

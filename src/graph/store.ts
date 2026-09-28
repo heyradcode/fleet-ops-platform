@@ -70,8 +70,12 @@ export async function writeGraph(principal: Principal, graph: Graph): Promise<Gr
   const k = (i: { PK: string; SK: string }) => i.PK + '\u0000' + i.SK;
   const wanted = new Set(items.map(k));
 
-  // 1. Write first.
-  await mainTable.batchPut(items);
+  // 1. Write first - the INDEX before anything it points at. A batch that
+  //    fails half-way must not leave a partition the index does not know:
+  //    step 2 only visits indexed partitions, so that node could never be
+  //    cleaned up. An index entry with nothing behind it is harmless.
+  await mainTable.batchPut(items.filter((i) => i.entity === 'GraphIndex'));
+  await mainTable.batchPut(items.filter((i) => i.entity !== 'GraphIndex'));
 
   // 2. Everything the index knows - the last build's nodes and this one's -
   //    and in each of their partitions, whatever this build did not write.
@@ -113,6 +117,16 @@ export async function buildGraph(principal: Principal): Promise<GraphWrite> {
 // ---------------------------------------------------------------------------
 // Reads - one GetItem or one Query each
 // ---------------------------------------------------------------------------
+
+/**
+ * Has a graph been built for this tenant at all? One Query, one item. The
+ * difference between "the graph is not there" and "this thing is not in the
+ * graph" - which must not be reported alike.
+ */
+export async function graphBuilt(principal: Principal): Promise<boolean> {
+  requireTenantScope(principal);
+  return (await mainTable.query({ pk: indexPk(principal), limit: 1 })).length > 0;
+}
 
 export async function graphNode(principal: Principal, ref: NodeRef): Promise<GraphNode | undefined> {
   requireTenantScope(principal);

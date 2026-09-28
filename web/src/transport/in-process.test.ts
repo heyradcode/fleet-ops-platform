@@ -336,3 +336,21 @@ test('audit: the lead sees the tab assistant\'s calls, recorded AS the tab; an o
   assert.ok(mine.length >= ran);
   assert.ok(mine.every((e) => e.via === 'tab'), 'labelled a demonstration, never passed off as the MCP server\'s');
 });
+
+test('the live channel is bounded by SCOPE, not only the site: a device-scoped user gets no one else\'s alarms', async () => {
+  // Pick a device with no alarms of its own, from what the lead can see.
+  const lead = await signInAs(LEAD);
+  const board = await inProcessTransport.loadBoard();
+  const alarmed = new Set(board.alarms.map((a) => a.deviceId));
+  const quiet = board.devices.find((d) => !alarmed.has(d.deviceId));
+  assert.ok(quiet && board.alarms.length > 0);
+
+  // Device scope has no site to view - the board subscribes with none. The
+  // feed used to filter by that view alone, and so sent the whole tenant.
+  inProcessTransport.setSession({ ...lead.principal, roles: ['operator'], scope: { kind: 'device', deviceId: quiet.deviceId } });
+  const received: string[] = [];
+  const stop = inProcessTransport.subscribeAlarms(undefined, (a) => received.push(a.deviceId));
+  await new Promise((r) => setTimeout(r, 2600));
+  stop();
+  assert.deepEqual(received, []);
+});

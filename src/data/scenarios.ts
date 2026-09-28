@@ -329,8 +329,9 @@ function wanDegraded(estate: Estate): Scenario {
         InterfaceID: 71001, NodeID: 2101,
         NodeCaption: alias('snmp-sysname'), NodeIPAddress: alias('mgmt-ip'),
         Name: port.name, OperStatus: 1, AdminStatus: 1,
-        // Up, and erroring: thousands an hour against a critical line of 1,000.
-        InErrorsThisHour: 4_120, OutErrorsThisHour: 38,
+        // Up, and erroring: at 14:30, half an hour's total that averages
+        // ~1,300 per five-minute poll against a critical line of 1,000.
+        InErrorsThisHour: 7_900, OutErrorsThisHour: 60,
         LastSync: '2026-09-08T09:29:40.0000000',
       }],
     }],

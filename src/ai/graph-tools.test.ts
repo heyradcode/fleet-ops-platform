@@ -96,3 +96,16 @@ test('the assistant asks the graph and gets an answer - no tool error on the way
     assert.ok(!step.detail.endsWith('-> error'), step.detail);
   }
 });
+
+test('graphNeighbours returns EXACTLY the node cap, and says it stopped', async () => {
+  const { writeGraph } = await import('../graph/store.ts');
+  const hub: Principal = { ...HHS_ADMIN, tenantId: 'graph-cap-tenant' };
+  const spokes = Array.from({ length: 60 }, (_, i) => ({ type: 'Device' as const, id: 'd' + String(i).padStart(2, '0'), label: 'd' + i, props: {} }));
+  await writeGraph(hub, {
+    nodes: [{ type: 'Facility', id: 'HUB', label: 'Hub', props: {} }, ...spokes],
+    edges: spokes.map((s) => ({ from: { type: 'Device' as const, id: s.id }, rel: 'LOCATED_AT' as const, to: { type: 'Facility' as const, id: 'HUB' } })),
+  });
+  const out = await runTool('graphNeighbours', { node: 'Facility#HUB', depth: 2 }, hub);
+  assert.equal(out.split('\n').filter((l) => l.includes('hop ')).length, MAX_NODES, 'not MAX_NODES + 1');
+  assert.match(out, /stopped at 40 nodes/);
+});

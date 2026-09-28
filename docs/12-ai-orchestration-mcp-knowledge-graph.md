@@ -671,9 +671,12 @@ What it holds for HHS: 80 nodes and 126 edges.
 
 It's rebuilt by `pnpm seed:aws` (and therefore by `pnpm mcp`) after the
 poll. A rebuild is idempotent, and stale items are found through an index
-partition rather than a Scan. The order survives a crash anywhere: write
-everything, then delete what the build didn't write, then trim the index
-**last**. Reads need **tenant** scope, as comms reads do: a scoped view of a
+partition rather than a Scan. The order survives a crash anywhere:
+1. write the **index** entries first, so no partition can exist that the
+   index doesn't know;
+2. write everything else;
+3. delete what the build didn't write;
+4. trim the index **last**. Reads need **tenant** scope, as comms reads do: a scoped view of a
 graph that spans sites and facilities needs a facility scope that doesn't
 exist yet.
 
@@ -699,8 +702,10 @@ the network that serves it:
 - **a trunk:** would follow `Sbc RUNS_ON Device`, which has no source yet;
 - **a queue:** isn't a place on the network.
 
-On the devices it reaches, it lists the network incidents and alarms the
-rules decided within **[opened − 15 min, now]**. It ranks them worst first,
+On the devices it reaches, it lists the network alarms raised within
+**[opened − 15 min, now]**, and the network incidents that are **still
+open**, whenever they opened. An outage that began an hour ago and is still
+going is the likeliest cause there is; a resolved one is over. It ranks them worst first,
 then what paged over what didn't, then nearest in time, and keeps at most
 five. A network incident is listed once, not once per alarm inside it.
 
@@ -709,8 +714,10 @@ It gives **four answers**, because "found nothing" must never look like
 - `found`: the candidates, each with its path;
 - `none`: it looked, and says what it searched ("6 network devices at
   Lubbock Field Office, 14:15Z to 14:30Z");
-- `no-path`: it says why (trunk, queue);
-- `unknown`: the graph isn't built.
+- `no-path`: it says why: a trunk, a queue, a facility with no network
+  recorded, or a subject that isn't in the graph (the unmapped Starlink van);
+- `unknown`: the graph isn't built, or couldn't be read. A failed read costs
+  that incident its candidates, never the comms view or the brief.
 
 **Candidates, never evidence.** It runs after both sets of rules have
 decided and changes none of their decisions. A test pins that the planted
@@ -718,11 +725,14 @@ Houston WAN alarm is still held back afterwards, that no network incident
 was opened for it, and that the comms incident's severity is unchanged.
 
 **The planted pair.** HHS's seventh scenario, `wan-degraded`, exists only
-where the estate has a Houston site. Houston's WAN edge reports 4,158
-interface errors an hour over SNMP, relayed by SolarWinds. For that,
-SolarWinds now reads Orion's `InErrorsThisHour` and `OutErrorsThisHour`,
-and only on an up link where they were measured: absent means "not
-measured", never zero. It has one witness, so it's held back and pages
+where the estate has a Houston site. Houston's WAN edge reports thousands
+of interface errors over SNMP, relayed by SolarWinds. For that, SolarWinds
+now reads Orion's `InErrorsThisHour` and `OutErrorsThisHour`, and only on
+an up link where they were measured: absent means "not measured", never
+zero. Those are running totals for the hour, so they're converted to
+errors per 5-minute poll, averaged over the hour so far. Nothing is judged
+in the hour's first 10 minutes. Judged raw, severity depended on the
+minute: a steady trickle read `ok` at :02 and `critical` at :34. It has one witness, so it's held back and pages
 nobody, exactly like the lone port flap. Beside Houston's call-quality
 incident, it becomes the top candidate:
 

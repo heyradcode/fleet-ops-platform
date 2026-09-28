@@ -49,7 +49,7 @@ export function CommsBoard({ snapshot }: { snapshot: CommsSnapshot }) {
           <span className="mono">{snapshot.incidents.length} · {snapshot.heldBack.length} held</span>
         </div>
         <div className="roster-list">
-          {snapshot.incidents.map((i) => <IncidentRow key={i.incidentId} incident={i} causes={snapshot.causes[i.incidentId]} />)}
+          {snapshot.incidents.map((i) => <IncidentRow key={i.incidentId} incident={i} causes={snapshot.causes?.[i.incidentId]} />)}
           {snapshot.heldBack.map((a) => <HeldRow key={a.alarmId} alarm={a} />)}
           {snapshot.anomalies
             .filter((a) => !snapshot.incidents.some((i) => i.subject.kind === a.subject.kind && i.subject.id === a.subject.id))

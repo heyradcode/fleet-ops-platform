@@ -32,3 +32,8 @@ test('anything that is not an AgentCore gateway is refused - this URL is sent th
   }
   assert.throws(() => gatewayTargetUrl('https://gw-1.gateway.bedrock-agentcore.us-east-1.amazonaws.com', ''), /no gateway target/);
 });
+
+test('a malformed region cannot choose the host - it would be sent the token', () => {
+  assert.throws(() => runtimeInvocationUrl('arn:aws:bedrock-agentcore:attacker.example/x?:1:runtime/r'), /not an AgentCore runtime ARN/);
+  assert.throws(() => runtimeInvocationUrl('arn:aws:bedrock-agentcore::1:runtime/r'), /not an AgentCore runtime ARN/);
+});

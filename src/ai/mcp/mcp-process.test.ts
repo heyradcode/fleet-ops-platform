@@ -96,3 +96,19 @@ test('the child verifies every token itself: a valid one is listed read tools, a
   const forged = good.slice(0, good.lastIndexOf('.') + 1) + 'AAAA';
   await assert.rejects(createMcpToolProvider({ url, token: forged }).list(), /answered 401/);
 });
+
+test('DNS rebinding: a request addressed to, or sent from, a non-loopback name is refused before anything else', async () => {
+  const { request } = await import('node:http');
+  const port = Number(new URL(url).port);
+  const send = (headers: Record<string, string>) => new Promise<number>((resolve, reject) => {
+    const req = request({ host: '127.0.0.1', port, path: '/mcp', method: 'POST', headers }, (res) => { res.resume(); resolve(res.statusCode ?? 0); });
+    req.on('error', reject);
+    req.end('{}');
+  });
+  // A page whose own name was re-pointed at 127.0.0.1: the browser sends ITS host.
+  assert.equal(await send({ host: 'rebound.attacker.example:' + port }), 403);
+  // A loopback host, but a page elsewhere made the request.
+  assert.equal(await send({ host: '127.0.0.1:' + port, origin: 'https://attacker.example' }), 403);
+  // A CLI client - loopback host, no Origin - gets past this check (and to the 401).
+  assert.equal(await send({ host: '127.0.0.1:' + port }), 401);
+});

@@ -90,3 +90,25 @@ test('a dead distribution switch, with no cloud at all: one incident, anchored a
   assert.deepEqual([...incidents[0].deviceIds].sort(),
     ['dev-acc-dal01-06', 'dev-acc-dal01-08', 'dev-acc-dal01-10', 'dev-dis-dal01-04']);
 });
+
+test('interface errors are judged per poll interval, never as Orion\'s running hourly total', () => {
+  loadEstate('hhs-demo');
+  const inventory = getInventory(HHS);
+  const resource = solarwinds.resources.find((r) => r.name === 'interfaces')!;
+  const at = (receivedAt: string, thisHour: number) => solarwinds.normalise({
+    tenantId: 'hhs-demo', encoding: 'rest-json', receivedAt,
+    source: { collector: 'test', resource: 'interfaces' },
+    records: [{ InterfaceID: 1, NodeID: 1, NodeCaption: 'cor-dal01-01.acme.internal', NodeIPAddress: '10.11.0.1',
+      Name: 'GigabitEthernet1/0/1', OperStatus: 1, AdminStatus: 1, InErrorsThisHour: thisHour, OutErrorsThisHour: 0, LastSync: 'x' }],
+  }, inventory, resource).flatMap((o) => (isMetric(o) && o.kind === 'interface-errors' ? [o] : []));
+
+  // A STEADY 30 errors a minute reads the same all hour: 150 per five-minute poll.
+  const early = at('2026-09-08T14:15:00.000Z', 30 * 15);
+  const late = at('2026-09-08T14:45:00.000Z', 30 * 45);
+  assert.deepEqual([early[0].value, late[0].value], [150, 150]);
+  assert.equal(early[0].severity, late[0].severity, 'severity does not depend on the minute of the hour');
+  // One burst of 150 at :01, nothing since: by :40 it is history, not a warning.
+  assert.equal(at('2026-09-08T14:40:00.000Z', 150)[0].severity, 'ok');
+  // In the hour's first minutes a burst IS the average - so nothing is judged.
+  assert.deepEqual(at('2026-09-08T14:04:00.000Z', 150), []);
+});

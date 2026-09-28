@@ -10,7 +10,11 @@
  */
 export function runtimeInvocationUrl(arn: string): string {
   const region = arn.split(':')[3];
-  if (!arn.startsWith('arn:aws:bedrock-agentcore:') || !region) {
+  // The region becomes part of the HOST, and this URL is sent a bearer
+  // token: "attacker.example/x?" in that field would have built
+  // https://bedrock-agentcore.attacker.example/... A region is letters,
+  // digits and hyphens, and nothing else gets through.
+  if (!arn.startsWith('arn:aws:bedrock-agentcore:') || !region || !/^[a-z]{2}(-[a-z]+)+-\d+$/.test(region)) {
     throw new Error('not an AgentCore runtime ARN: ' + arn);
   }
   return 'https://bedrock-agentcore.' + region + '.amazonaws.com/runtimes/' +

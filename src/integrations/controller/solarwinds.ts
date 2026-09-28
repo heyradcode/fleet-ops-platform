@@ -145,6 +145,22 @@ const STATUS_UNREACHABLE = 12;
 const IF_UP = 1;
 const IF_DOWN = 2;
 
+/**
+ * Interface errors are judged per POLL INTERVAL - what the `interface-errors`
+ * threshold means ("errors in the sample interval") - but Orion hands over a
+ * RUNNING TOTAL for the current hour, reset at the top of it. Compared raw, a
+ * steady 30 errors a minute read ok at :02 and critical at :34, and a single
+ * burst stayed warning for the rest of the hour after it stopped: severity by
+ * minute of the hour. So the total becomes errors per interval, averaged over
+ * the hour so far - and is not judged at all in the hour's first minutes, when
+ * one burst IS the average. A delta between polls would be exact but needs
+ * the last poll's counters stored per interface; this needs nothing.
+ * ASSUMES the Orion server's UTC offset is whole hours, so its hour and ours
+ * turn over together - true for Texas; wrong by the half for a :30 zone.
+ */
+const POLL_INTERVAL_MIN = 5;
+const MIN_MINUTES_INTO_HOUR = 10;
+
 export const solarwinds: Connector = {
   controller: 'solarwinds',
   // One connector, every vendor. Each observation carries the DEVICE's real
@@ -198,17 +214,26 @@ export const solarwinds: Connector = {
 
         // Errors, only on a link that is UP and only when MEASURED: a down
         // link's counters are frozen, and a missing counter read as 0 would
-        // report "clean" for a port nobody is polling.
-        if (state === 'up' && typeof r.InErrorsThisHour === 'number' && typeof r.OutErrorsThisHour === 'number') {
+        // report "clean" for a port nobody is polling. Per interval - see
+        // POLL_INTERVAL_MIN for why a running hourly total cannot be judged.
+        const received = new Date(raw.receivedAt);
+        const minutesIntoHour = received.getUTCMinutes() + received.getUTCSeconds() / 60;
+        if (state === 'up' && typeof r.InErrorsThisHour === 'number' && typeof r.OutErrorsThisHour === 'number'
+            && minutesIntoHour >= MIN_MINUTES_INTO_HOUR) {
+          const thisHour = r.InErrorsThisHour + r.OutErrorsThisHour;
           out.push({
             ...controllerMetric({
               identity, plane: resource.plane, encoding: raw.encoding,
               deviceId, siteId: inventory.siteOf(deviceId),
               sourceRef: 'I:' + r.InterfaceID + ':errors',
-              kind: 'interface-errors', value: r.InErrorsThisHour + r.OutErrorsThisHour, unit: 'count',
+              kind: 'interface-errors', value: Math.round((thisHour / minutesIntoHour) * POLL_INTERVAL_MIN), unit: 'count',
               observedAt: raw.receivedAt,
               receivedAt: raw.receivedAt,
-              attributes: { orionInterfaceId: r.InterfaceID, orionNodeId: r.NodeID, inErrors: r.InErrorsThisHour, outErrors: r.OutErrorsThisHour },
+              attributes: {
+                orionInterfaceId: r.InterfaceID, orionNodeId: r.NodeID,
+                inErrorsThisHour: r.InErrorsThisHour, outErrorsThisHour: r.OutErrorsThisHour,
+                minutesIntoHour: Math.round(minutesIntoHour),
+              },
             }),
             interfaceId,
           });

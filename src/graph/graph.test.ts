@@ -104,3 +104,33 @@ test('buildGraph wires the real sources; reads are tenant-wide only, and tenants
   await assert.rejects(neighbours(HOUSTON_OPERATOR, { type: 'Facility', id: '1120' }), OutOfScopeError);
   assert.deepEqual(await neighbours(OTHER, { type: 'Facility', id: '1120' }), [], 'another tenant\'s key space is empty');
 });
+
+test('a rebuild that fails half-way leaves nothing the next rebuild cannot clean - the index is written first', async () => {
+  const { DynamoTable, setTableStore, resetTableStore } = await import('../aws/dynamodb.ts');
+  const inner = new DynamoTable('graph-crash');
+  let failNodes = false;
+  setTableStore({
+    name: inner.name,
+    put: (i) => inner.put(i), get: (p, s) => inner.get(p, s), delete: (p, s) => inner.delete(p, s), query: (o) => inner.query(o),
+    batchPut: async (items) => {
+      if (failNodes && items.some((i) => i.entity !== 'GraphIndex')) throw new Error('throttled');
+      await inner.batchPut(items);
+    },
+  });
+  try {
+    const small: Graph = { nodes: [{ type: 'Facility', id: 'F1', label: 'F1', props: {} }], edges: [] };
+    await writeGraph(HHS, small);
+    // A rebuild with a new node dies after the index batch, before the nodes.
+    failNodes = true;
+    const bigger: Graph = { nodes: [...small.nodes, { type: 'Facility', id: 'F2', label: 'F2', props: {} }], edges: [] };
+    await assert.rejects(writeGraph(HHS, bigger), /throttled/);
+    failNodes = false;
+    // The sources drop F2 again. Whatever of it was written must go.
+    const result = await writeGraph(HHS, small);
+    assert.ok(result.removed >= 1, 'the index entry that got written is cleaned up');
+    assert.equal((await inner.query({ pk: 'TENANT#hhs-demo#GRAPH' })).length, 1, 'only F1 is indexed');
+    assert.equal((await inner.query({ pk: 'TENANT#hhs-demo#GRAPH#Facility#F2' })).length, 0);
+  } finally {
+    resetTableStore();
+  }
+});

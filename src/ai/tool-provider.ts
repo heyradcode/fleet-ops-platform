@@ -42,9 +42,11 @@ export type ToolProvider = {
 
 /**
  * The knowledge base is per process and filled once per tenant. Re-ingesting
- * would duplicate every chunk and double every retrieval score.
+ * would duplicate every chunk and double every retrieval score. The PROMISE
+ * is kept, not a flag set after it: two first requests arriving together both
+ * saw "not yet" and both ingested - 50 chunks where there should be 25.
  */
-const ingested = new Set<string>();
+const ingesting = new Map<string, Promise<void>>();
 
 /**
  * The world the tools compute in - device ids, scenario ids - seeded as the
@@ -55,10 +57,14 @@ const ingested = new Set<string>();
 export async function prepareToolWorld(principal: Principal): Promise<void> {
   seedDemoWorld();
   loadEstate(principal.tenantId);
-  if (!ingested.has(principal.tenantId)) {
-    await knowledgeBase.ingestRunbooks(principal.tenantId);
-    ingested.add(principal.tenantId);
+  let done = ingesting.get(principal.tenantId);
+  if (!done) {
+    done = knowledgeBase.ingestRunbooks(principal.tenantId).then(() => undefined);
+    ingesting.set(principal.tenantId, done);
+    // A failed ingestion is retried by the next request, not cached forever.
+    void done.catch(() => { ingesting.delete(principal.tenantId); });
   }
+  await done;
 }
 
 /** What running a tool produced, and how it went - the audit's outcome, decided HERE. */

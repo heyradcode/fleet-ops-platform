@@ -25,6 +25,16 @@
  *   - a failing tool is a RESULT. `isError: true` comes back as text starting
  *     "ERROR:" for the model to read; only transport failures throw, and the
  *     agent loop turns those into text too.
+ *   - ONE CALL AT A TIME per client. The loop runs a turn's tool calls in
+ *     parallel, but AgentCore serialises a session: the rest get -32005, and
+ *     retrying them in lockstep lets at most one through per round - a real
+ *     model asking for six tools at once got four answers and two errors.
+ *     Queued here, they cost the same wall-clock and all arrive.
+ *   - request ids are never reused within a session. A resumed session gets
+ *     a new client, and a counter restarting at 1 would repeat ids the spec
+ *     says must be unique - so each client prefixes its own.
+ *   - a 404 on a request that carried a session id means the session is gone;
+ *     the spec says start a new one. Once, then the error stands.
  */
 import type { ToolSpec } from '../../aws/bedrock.ts';
 import { parseSse } from '../../platform/sse.ts';
@@ -79,7 +89,17 @@ export function createMcpToolProvider(opts: McpClientOptions): McpToolProvider {
   let protocolVersion: string | undefined;
   let serverInfo: { name: string; version: string } | undefined;
   let nextId = 1;
+  // Unique per client: getRandomValues, not the seeded uuid() - the demo
+  // world reseeds, and every client would get the same prefix.
+  const idPrefix = (() => { const b = new Uint8Array(4); crypto.getRandomValues(b); return [...b].map((x) => x.toString(16).padStart(2, '0')).join(''); })();
   let ready: Promise<void> | undefined;
+  // The queue every list() and call() goes through - see the header.
+  let tail: Promise<unknown> = Promise.resolve();
+  function serial<T>(run: () => Promise<T>): Promise<T> {
+    const next = tail.then(run, run);
+    tail = next.then(() => undefined, () => undefined);
+    return next;
+  }
 
   function headers(): Record<string, string> {
     const h: Record<string, string> = {
@@ -124,9 +144,27 @@ export function createMcpToolProvider(opts: McpClientOptions): McpToolProvider {
   }
 
   /** A request, retried while AgentCore says the session is busy. Throws on any JSON-RPC error. */
-  async function request(method: string, params: Record<string, unknown>): Promise<unknown> {
+  async function request(method: string, params: Record<string, unknown>, restartable = true): Promise<unknown> {
     for (let attempt = 0; ; attempt++) {
-      const out = await post({ jsonrpc: '2.0', id: nextId++, method, params });
+      const sentSession = sessionId;
+      let out: JsonRpcResponse | undefined;
+      try {
+        out = await post({ jsonrpc: '2.0', id: idPrefix + '-' + String(nextId++), method, params });
+      } catch (err) {
+        // The session this client was resuming is gone: start a new one and
+        // try once more. A RESUMED client meets this on its very first
+        // request - initialize, carrying the stale id - so that is retried
+        // bare; anything later re-handshakes first.
+        if (restartable && sentSession && err instanceof McpError && err.status === 404) {
+          sessionId = undefined;
+          if (method === 'initialize') return request(method, params, false);
+          protocolVersion = undefined;
+          ready = undefined;
+          await initialise();
+          return request(method, params, false);
+        }
+        throw err;
+      }
       if (!out) throw new McpError('MCP server sent no response to ' + method);
       if ('result' in out) return out.result;
       if (out.error.code === SESSION_BUSY && attempt < BUSY_RETRIES_MS.length) {
@@ -165,7 +203,7 @@ export function createMcpToolProvider(opts: McpClientOptions): McpToolProvider {
     get sessionId() { return sessionId; },
     get serverInfo() { return serverInfo; },
 
-    async list(): Promise<ToolSpec[]> {
+    list: () => serial(async (): Promise<ToolSpec[]> => {
       await initialise();
       const tools: ToolSpec[] = [];
       let cursor: string | undefined;
@@ -180,9 +218,9 @@ export function createMcpToolProvider(opts: McpClientOptions): McpToolProvider {
       // Stopping quietly would offer the model a partial toolset with no sign
       // of it - the drainPages lesson. Say it.
       throw new McpError('MCP tools/list did not finish in ' + MAX_LIST_PAGES + ' pages');
-    },
+    }),
 
-    async call(name: string, input: Record<string, unknown>): Promise<string> {
+    call: (name: string, input: Record<string, unknown>) => serial(async (): Promise<string> => {
       await initialise();
       let result: { content?: Array<{ type: string; text?: string }>; isError?: boolean };
       try {
@@ -200,6 +238,6 @@ export function createMcpToolProvider(opts: McpClientOptions): McpToolProvider {
         .join('\n');
       if (result.isError && !text.startsWith('ERROR:')) return 'ERROR: ' + text;
       return text;
-    },
+    }),
   };
 }

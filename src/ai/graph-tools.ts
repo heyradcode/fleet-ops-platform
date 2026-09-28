@@ -30,7 +30,7 @@ import { commsConfigFor } from '../integrations/comms/config.ts';
 import { commsIncidents, commsVisibleTo } from '../integrations/comms/store.ts';
 import { tenantScenarios } from '../api/board-api.ts';
 import { graphNode, neighbours, type Neighbour } from '../graph/store.ts';
-import { candidateCauses, type CandidateCauses } from '../graph/correlate.ts';
+import { causesForIncidents, type CandidateCauses } from '../graph/correlate.ts';
 import { refKey, type NodeRef, type NodeType, type Relation } from '../graph/model.ts';
 
 const NODE_TYPES: NodeType[] = ['Facility', 'Device', 'Sbc', 'Trunk', 'SatelliteTerminal', 'HelixCi', 'HelixSite'];
@@ -151,11 +151,12 @@ export const GRAPH_TOOLS: Tool[] = [
       if (chosen.length === 0) {
         return 'ERROR: no open comms incident "' + String(wanted) + '". Open ones: ' + open.map((i) => i.incidentId).join(', ') + '.';
       }
+      // "Now" before tenantScenarios, which pins the clock back (board-api.ts).
+      const at = new Date(now()).toISOString();
       // What the network rules decided - the same function the board serves.
       const network = tenantScenarios(principal);
-      const at = new Date(now()).toISOString();
-      const described = await Promise.all(chosen.map(async (i) => describeCauses(i.title, await candidateCauses(principal, i, network, at))));
-      return described.join('\n\n');
+      const causes = await causesForIncidents(principal, chosen, network, at);
+      return chosen.map((i) => describeCauses(i.title, causes[i.incidentId])).join('\n\n');
     },
   },
 
@@ -197,13 +198,17 @@ export const GRAPH_TOOLS: Tool[] = [
       const lines: string[] = [];
       let frontier: NodeRef[] = [start];
       let truncated = false;
-      for (let hop = 1; hop <= depth && frontier.length > 0; hop++) {
+      // Labelled: reaching the cap stops the WALK - every hop, every node -
+      // not just the node being expanded; a bound on output that still runs
+      // a Query per remaining node is a bound on nothing that costs.
+      walk: for (let hop = 1; hop <= depth && frontier.length > 0; hop++) {
         const next: NodeRef[] = [];
         for (const from of frontier) {
           const edges: Neighbour[] = await neighbours(principal, from, relation ? { rel: relation } : {});
           for (const e of edges) {
             if (seen.has(refKey(e.node))) continue;
-            if (seen.size > MAX_NODES) { truncated = true; break; }
+            // `seen` holds the start too: MAX_NODES found means MAX_NODES + 1.
+            if (seen.size > MAX_NODES) { truncated = true; break walk; }
             seen.add(refKey(e.node));
             next.push(e.node);
             const arrow = e.direction === 'out' ? ' -> ' + e.rel + ' -> ' : ' <- ' + e.rel + ' <- ';

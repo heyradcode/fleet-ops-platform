@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 374 tests, no network. Picks up web/ tests too.
+pnpm test                       # 390 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180 - real Cognito sign-in
 pnpm web:env                    # write web/.env.cognito.local from the Terraform outputs
@@ -154,7 +154,9 @@ one, change the test deliberately rather than making it pass.
   node status is EXTERNAL - the same plane as our probe, so a tenant running
   both has one external witness, not two. The SNMP counters it relays (CPU,
   interfaces, their hourly ERROR counters) are DEVICE - errors only on an
-  up link and only when measured: absent is "not polled", never zero. Its
+  up link and only when measured: absent is "not polled", never zero - and
+  converted from Orion's running hourly TOTAL to per-poll-interval, or
+  severity depends on the minute of the hour. Its
   ALERTS are never ingested: Orion's conclusions from the same polls would
   be one witness twice. Only Up/Down/Unreachable
   are measurements - Warning/Critical are Orion threshold opinions, Unmanaged
@@ -337,11 +339,14 @@ one, change the test deliberately rather than making it pass.
   with Acme's `dal-01` FIRST and `aus-01` second kept intact - the SolarWinds
   fixture resolves by IP (site order), Helix names Dallas devices, and the
   scenarios pick Dallas switches. CANDIDATE CAUSES (`graph/correlate.ts`)
-  walk a comms incident's subject to the building's network and list what
-  the network rules raised there in [opened - 15 min, now] - attached AFTER
+  walk a comms incident's subject to the building's network and list the
+  alarms raised there in [opened - 15 min, now] and the incidents STILL OPEN
+  whenever they opened (a resolved one is over) - attached AFTER
   both sets of rules decide, changing none of it (the planted Houston WAN
   alarm stays held back; a test pins it). Four answers, never two: found /
-  none (says what it searched) / no-path (trunk, queue) / unknown (no graph).
+  none (says what it searched) / no-path (trunk, queue, not in the graph) /
+  unknown (no graph, or unreadable - which costs that incident its
+  candidates, never the view). Graph rebuilds write the INDEX first.
   The board computes causes ONCE and hands the same ones to the brief. The
   agent's graph tools (`ai/graph-tools.ts`) are a FIXED catalogue - the SPL
   rule, never a graph query language - with depth <= 2 and 40 nodes enforced

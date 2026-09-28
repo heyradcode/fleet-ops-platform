@@ -260,3 +260,80 @@ test('the audit trail: per tenant, admins only, arguments hashed and never store
   assert.ok(expiresAt > 1e9 && expiresAt < 1e11, 'epoch SECONDS - TTL ignores milliseconds silently');
   assert.equal(hashArgs({ a: 1, b: { c: 2, d: 3 } }), hashArgs({ b: { d: 3, c: 2 }, a: 1 }), 'key order does not change the hash');
 });
+
+// ---------------------------------------------------------------------------
+// Found in review: concurrency, stale sessions, ids, depth
+// ---------------------------------------------------------------------------
+
+test('six parallel calls through one client all arrive - the session is busy, and the client queues rather than races', async () => {
+  // A server that is busy while a call runs, as AgentCore is per session:
+  // anything arriving meanwhile is -32005.
+  let busy = false;
+  const fetchImpl = serverFetch([], undefined, (body) => {
+    if (body.method !== 'tools/call') return undefined;
+    if (busy) return new Response(JSON.stringify({ jsonrpc: '2.0', id: body.id, error: { code: SESSION_BUSY, message: 'Session operation in progress' } }), { status: 200 });
+    return undefined;
+  });
+  const slow: typeof fetch = async (input, init) => {
+    const isCall = String(init?.body).includes('"tools/call"');
+    if (isCall && !busy) { busy = true; await new Promise((r) => setTimeout(r, 15)); busy = false; }
+    return fetchImpl(input, init);
+  };
+  // Retries that do not wait: without the queue, the losers exhaust them in lockstep.
+  const client = createMcpToolProvider({ url: 'https://mcp.test/mcp', token: 'tok-op', fetch: slow, sleep: async () => {} });
+  const answers = await Promise.all(Array.from({ length: 6 }, () => client.call('listOpenIncidents', {})));
+  assert.ok(answers.every((a) => !a.startsWith('ERROR')), answers.filter((a) => a.startsWith('ERROR')).join(' | '));
+});
+
+test('request ids never repeat within a resumed session: each client prefixes its own', async () => {
+  const sent: Sent[] = [];
+  const a = createMcpToolProvider({ url: 'https://mcp.test/mcp', token: 'tok-op', fetch: serverFetch(sent) });
+  await a.list();
+  const b = createMcpToolProvider({ url: 'https://mcp.test/mcp', token: 'tok-op', fetch: serverFetch(sent), sessionId: a.sessionId });
+  await b.list();
+  const ids = sent.map((s) => s.body.id).filter((id) => id !== undefined);
+  assert.equal(new Set(ids).size, ids.length, 'no id twice: ' + ids.join(', '));
+});
+
+test('a session the server no longer knows (404) is replaced once - including on a resumed client\'s first request', async () => {
+  const seen: string[] = [];
+  const base = serverFetch();
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const sid = (init?.headers as Record<string, string>)['Mcp-Session-Id'];
+    seen.push(sid ?? '(none)');
+    if (sid === 'stale-session') return new Response('session not found', { status: 404 });
+    return base(input, init);
+  };
+  const renewed: string[] = [];
+  const client = createMcpToolProvider({
+    url: 'https://mcp.test/mcp', token: 'tok-op', fetch: fetchImpl, sessionId: 'stale-session', onSession: (id) => renewed.push(id),
+  });
+  assert.ok((await client.list()).length > 0);
+  assert.equal(seen[0], 'stale-session');
+  assert.equal(seen[1], '(none)', 'initialize retried WITHOUT the dead session id');
+  assert.deepEqual(renewed, ['agentcore-assigned-session-0123456789abcdef'], 'and the caller is told the new one');
+});
+
+test('arguments nested deeper than any tool takes are refused before anything runs - and hashing never throws', async () => {
+  let deep: unknown = 'x';
+  for (let i = 0; i < 20_000; i++) deep = [deep];
+  let audited = 0;
+  const out = await handleMcpMessage(rpc(40, 'tools/call', { name: 'searchRunbooks', arguments: { query: deep } }), OPERATOR,
+    { audit: async () => { audited++; } });
+  assert.ok(out && 'error' in out);
+  assert.equal(out.error.code, RPC.invalidParams);
+  assert.equal(audited, 0, 'nothing ran, so nothing to audit');
+  assert.doesNotThrow(() => hashArgs({ q: deep as never }), 'a hash can never overflow the stack');
+});
+
+test('two first requests at once ingest the runbooks ONCE - not 50 chunks where there should be 25', async () => {
+  const { knowledgeBase } = await import('../knowledge-base.ts');
+  const one: Principal = { ...OPERATOR, tenantId: 'ingest-once-a' };
+  const two: Principal = { ...OPERATOR, tenantId: 'ingest-once-b' };
+  let before = knowledgeBase.size;
+  await prepareToolWorld(one);
+  const single = knowledgeBase.size - before;
+  before = knowledgeBase.size;
+  await Promise.all([prepareToolWorld(two), prepareToolWorld(two)]);
+  assert.equal(knowledgeBase.size - before, single);
+});

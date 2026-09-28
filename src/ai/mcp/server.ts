@@ -28,7 +28,7 @@ import type { Principal } from '../../platform/types.ts';
 import type { ToolSpec } from '../../aws/bedrock.ts';
 import { toolSpecsFor } from '../tools.ts';
 import { prepareToolWorld, runAudited } from '../tool-provider.ts';
-import { recordToolCall } from '../audit.ts';
+import { recordToolCall, MAX_ARG_DEPTH } from '../audit.ts';
 
 /** Newest first. `initialize` answers with the client's version if it is here, else the first. */
 export const SUPPORTED_PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26'] as const;
@@ -60,6 +60,20 @@ export const rpcError = (id: JsonRpcId | null, code: number, message: string): J
 
 /** The platform's tool spec, in MCP's shape. The only difference is the schema's key name. */
 export const toMcpTool = (t: ToolSpec): McpTool => ({ name: t.name, description: t.description, inputSchema: t.input_schema });
+
+/** Nesting depth, WITHOUT recursion - the thing being measured is what would overflow a recursive walk. */
+function depthOf(value: unknown): number {
+  let max = 0;
+  const stack: Array<[unknown, number]> = [[value, 1]];
+  while (stack.length > 0) {
+    const [v, d] = stack.pop()!;
+    if (!v || typeof v !== 'object') continue;
+    if (d > max) max = d;
+    if (max > MAX_ARG_DEPTH) return max;
+    for (const child of Object.values(v as Record<string, unknown>)) stack.push([child, d + 1]);
+  }
+  return max;
+}
 
 export type McpServerDeps = {
   /** Where tool calls are recorded. Omitted in tests that are not about it. */
@@ -119,6 +133,9 @@ export async function handleMcpMessage(
       if (typeof name !== 'string') return rpcError(id, RPC.invalidParams, 'params.name must be a string');
       if (typeof args !== 'object' || args === null || Array.isArray(args)) {
         return rpcError(id, RPC.invalidParams, 'params.arguments must be an object');
+      }
+      if (depthOf(args) > MAX_ARG_DEPTH) {
+        return rpcError(id, RPC.invalidParams, 'params.arguments are nested deeper than ' + MAX_ARG_DEPTH + ' levels');
       }
       // Offered to THIS caller, read-only. The same gate as tools/list, so
       // a client cannot call what it was never listed - the agent loop has

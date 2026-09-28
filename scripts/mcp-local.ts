@@ -79,14 +79,55 @@ function readBody(req: IncomingMessage): Promise<string> {
 
 const log = (line: string) => { if (!QUIET) console.log(line); };
 
+/**
+ * ONE REQUEST AT A TIME. Every tool call reseeds this process's single demo
+ * world (prepareToolWorld) and computes in it across awaits; two requests
+ * interleaving would each answer from the other's half-set-up world. The
+ * warm-Lambda rule in CLAUDE.md - safe because a container serves one request
+ * at a time - made TRUE here rather than assumed. Tool calls are milliseconds.
+ */
+let queue: Promise<unknown> = Promise.resolve();
+function oneAtATime<T>(run: () => Promise<T>): Promise<T> {
+  const next = queue.then(run, run);
+  queue = next.then(() => undefined, () => undefined);
+  return next;
+}
+
+/**
+ * DNS REBINDING. Binding to loopback keeps other machines out, but not a web
+ * page in YOUR browser whose hostname has been re-pointed at 127.0.0.1: the
+ * browser then treats this server as that page's own origin, and the page -
+ * which can mint an admin token with the demo secret in this repo - reads
+ * every tool's answer. The MCP spec says servers MUST validate Origin. So a
+ * request is refused unless it is addressed to loopback (Host) and, when a
+ * browser sends one, comes FROM loopback (Origin). CLI clients send no Origin.
+ */
+const LOOPBACK = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/;
+function fromLoopback(req: IncomingMessage): boolean {
+  const host = req.headers.host ?? '';
+  if (!LOOPBACK.test(host)) return false;
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  try {
+    return LOOPBACK.test(new URL(origin).host);
+  } catch {
+    return false;
+  }
+}
+
 const server = createServer((req, res) => {
+  if (!fromLoopback(req)) {
+    res.writeHead(403, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Loopback only: this server accepts forgeable demo tokens.' }));
+    return;
+  }
   if (req.url !== '/mcp' && !req.url?.startsWith('/mcp?')) {
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'The MCP endpoint is /mcp.' }));
     return;
   }
   readBody(req)
-    .then(async (body) => {
+    .then((body) => oneAtATime(async () => {
       let status = 0;
       await serveMcp({ method: req.method ?? 'GET', headers: flat(req), body }, {
         verify: async (token) => verifyToken(token),
@@ -100,7 +141,7 @@ const server = createServer((req, res) => {
         end: () => res.end(),
       });
       log((req.method ?? '?').padEnd(6) + String(status) + '  ' + rpcSummary(body));
-    })
+    }))
     .catch((err: unknown) => {
       console.error('mcp-local: ' + (err instanceof Error ? err.message : String(err)));
       if (!res.headersSent) { res.writeHead(400); res.end(); } else res.end();

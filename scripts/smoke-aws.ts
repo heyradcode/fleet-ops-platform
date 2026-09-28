@@ -5,21 +5,25 @@
  *
  * Every piece that has to be applied in order - the board API, the knowledge
  * graph in DynamoDB, the Gateway, the MCP server behind it, the lock that
- * makes the Gateway the only way in, the agent pointed at it - checked with
- * the same token the board sends, and each FAIL naming the command that
- * fixes it. It replaces "ask the assistant something and tell me what it
- * said" with a list.
+ * makes the Gateway the only way in, the agent pointed at it, the audit
+ * trail - checked with the same token the board sends, and each FAIL naming
+ * the command that fixes it. It replaces "ask the assistant something and
+ * tell me what it said" with a list.
  *
- * YOUR TOKEN IS A CREDENTIAL. It is read from the environment, sent only to
- * the AgentCore and API Gateway hosts that already receive it from the board,
- * and never printed - the report shows who it says you are, decoded locally,
- * and how many minutes it has left. It lives an hour.
+ * YOUR TOKEN IS A CREDENTIAL, and three rules keep it one:
+ *   - it must be a well-formed JWT before anything is sent (smoke-checks.ts:
+ *     a malformed header makes fetch throw an error QUOTING the token);
+ *   - it goes only to https AWS hosts - the board API's execute-api host,
+ *     and the AgentCore hosts the URL helpers refuse to build otherwise;
+ *   - every error text is passed through `redact` before it is printed.
+ * The report shows who the token says you are, decoded locally, and how many
+ * minutes it has left. It lives an hour.
  *
  * Endpoints come from what the deploy already wrote: web/.env.cognito.local
  * (`pnpm web:env`) for the board API and the agent, and the agentcore root's
  * Terraform outputs for the Gateway and the MCP runtime. Nothing here writes
- * anything, anywhere - except the agent question, which the MCP server
- * audits like any other.
+ * anything except what any tool call writes: the MCP server audits this
+ * run's calls like every other - which is the last thing checked.
  *
  * Node only (process, child_process, fs): it lives in scripts/.
  */
@@ -48,17 +52,32 @@ if (!token) {
   process.exit(2);
 }
 
+/** Every message that reaches the report goes through here. */
+const redact = (text: string) => text.split(token).join('<token>');
+const describe = (err: unknown) => redact(
+  (err instanceof McpError && err.status ? 'HTTP ' + err.status + ': ' : '') + (err instanceof Error ? err.message : String(err)),
+);
+
 let me: ReturnType<typeof tokenSummary>;
 try {
   me = tokenSummary(token, Date.now());
 } catch (err) {
-  console.log(err instanceof Error ? err.message : String(err));
+  console.log(describe(err));
   process.exit(2);
 }
 console.log('Token: tenant ' + me.tenant + ', groups [' + me.groups.join(', ') + '], ' + me.tokenUse + ' token, ' +
   (me.minutesLeft > 0 ? me.minutesLeft + ' min left' : 'EXPIRED'));
-if (me.minutesLeft <= 0) { console.log('Sign in to the board again and copy a fresh one.'); process.exit(2); }
+// Five minutes, not zero: the checks take a minute, and a token that dies
+// half-way turns "the lock refused me" into "the token did", which pass alike.
+if (me.minutesLeft < 5) { console.log('Sign in to the board again and copy a fresh one.'); process.exit(2); }
 if (me.tokenUse !== 'access') { console.log('That is an ' + me.tokenUse + ' token - copy the ACCESS token (netpulse.session).'); process.exit(2); }
+
+/**
+ * What this run's own audit rows are recognised by. Two minutes early: the
+ * rows are stamped by AWS's clock and this is yours, and a laptop running a
+ * minute fast would otherwise hide a row that did arrive.
+ */
+const startedAt = new Date(Date.now() - 120_000).toISOString();
 
 // --- Where things are -------------------------------------------------------
 let webEnv: Record<string, string> = {};
@@ -78,56 +97,79 @@ const agentArn = webEnv.VITE_AGENT_RUNTIME_ARN ?? String(agentcore.agent_runtime
 const gatewayUrl = typeof agentcore.mcp_gateway_url === 'string' ? agentcore.mcp_gateway_url : '';
 const mcpArn = typeof agentcore.mcp_runtime_arn === 'string' ? agentcore.mcp_runtime_arn : '';
 
+/** The board API is sent the token too - so only an https AWS host is. */
+function awsHttps(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' && /\.amazonaws\.com$/.test(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/** Every request gives up after 30s: a hanging endpoint is a finding, not a hung script. */
+const timed = (ms = 30_000): typeof fetch => (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(ms) });
+
 const checks: Check[] = [];
 const skipped = (name: string, detail: string) => checks.push({ name, status: 'skip', detail });
 const bearer = { authorization: 'Bearer ' + token };
 
-async function withTimeout<T>(ms: number, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
-  const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), ms);
-  try { return await run(ctl.signal); } finally { clearTimeout(timer); }
-}
-const describe = (err: unknown) => (err instanceof McpError && err.status ? 'HTTP ' + err.status + ': ' : '') +
-  (err instanceof Error ? err.message : String(err));
-
 // --- 1. The board API ---------------------------------------------------------
+async function get(path: string): Promise<{ status: number; body: unknown }> {
+  const res = await timed()(boardApi + path, { headers: bearer });
+  let body: unknown;
+  // A 200 whose body is not JSON (a proxy's HTML page) is reported, not a crash.
+  try { body = res.ok ? await res.json() as unknown : undefined; } catch { body = undefined; }
+  return { status: res.status, body };
+}
+
 if (!boardApi) {
   skipped('board API', 'VITE_BOARD_API_URL is not in web/.env.cognito.local - run pnpm web:env');
+} else if (!awsHttps(boardApi)) {
+  checks.push({ name: 'board API', status: 'fail', detail: 'refusing to send your token to ' + redact(boardApi) + ' - not an https AWS host', fix: 'check VITE_BOARD_API_URL (pnpm web:env)' });
 } else {
-  const get = async (path: string) => {
-    const res = await fetch(boardApi + path, { headers: bearer });
-    return { status: res.status, body: res.ok ? await res.json() as unknown : undefined };
-  };
-  const board = await get('/board');
-  checks.push(judgeBoard(board.status, board.body, me.tenant));
-  const comms = await get('/comms');
-  checks.push(judgeComms(comms.status, comms.body));
-  const audit = await get('/audit');
-  checks.push(judgeAudit(audit.status, audit.body));
+  try {
+    const board = await get('/board');
+    checks.push(judgeBoard(board.status, board.body, me.tenant));
+    const comms = await get('/comms');
+    checks.push(judgeComms(comms.status, comms.body));
+  } catch (err) {
+    checks.push({ name: 'board API', status: 'fail', detail: 'no answer: ' + describe(err), fix: 'check the network, and VITE_BOARD_API_URL' });
+  }
 }
 
 // --- 2. The MCP server through the Gateway, and the lock behind it -----------
+let calledThroughGateway = false;
 if (!gatewayUrl) {
-  skipped('MCP via Gateway', 'no mcp_gateway_url output - the Gateway is not applied yet (docs/13, step 2)');
+  skipped('MCP via Gateway', 'no mcp_gateway_url output - the Gateway is not applied yet (docs/13, step 5)');
 } else {
-  const client = createMcpToolProvider({ url: gatewayTargetUrl(gatewayUrl, 'tools'), token });
   try {
-    const tools = await client.list();
-    checks.push(judgeGatewayList({ tools: tools.map((t) => t.name), sessionId: client.sessionId }));
-    try {
-      checks.push(judgeGatewayCall({ text: await client.call('explainIncident', {}) }));
-    } catch (err) {
-      checks.push(judgeGatewayCall({ error: describe(err) }));
+    const client = createMcpToolProvider({ url: gatewayTargetUrl(gatewayUrl, 'tools'), token, fetch: timed() });
+    const names = (await client.list()).map((t) => t.name);
+    const tenantWide = me.groups.includes('admin') || me.groups.includes('engineer');
+    checks.push(judgeGatewayList({ tools: names, sessionId: client.sessionId }, me.tenant === 'hhs-demo' && tenantWide));
+    // Only a tool the server LISTED for this caller. Calling one it did not
+    // is refused by design - and audited as a refusal under your name.
+    const tool = ['explainIncident', 'listOpenIncidents'].find((t) => names.includes(t));
+    if (!tool) {
+      skipped('MCP via Gateway: tools/call', 'none of explainIncident / listOpenIncidents was listed for you');
+    } else {
+      try {
+        checks.push(judgeGatewayCall({ tool, text: await client.call(tool, {}) }));
+        calledThroughGateway = true;
+      } catch (err) {
+        checks.push(judgeGatewayCall({ tool, error: describe(err) }));
+      }
     }
   } catch (err) {
     checks.push(judgeGatewayList({ error: describe(err) }));
   }
   if (mcpArn) {
     try {
-      await createMcpToolProvider({ url: runtimeInvocationUrl(mcpArn), token }).list();
+      await createMcpToolProvider({ url: runtimeInvocationUrl(mcpArn), token, fetch: timed() }).list();
       checks.push(judgeDirectRefused({ ok: true }));
     } catch (err) {
-      checks.push(judgeDirectRefused({ ok: false, error: describe(err) }));
+      checks.push(judgeDirectRefused({ ok: false, status: err instanceof McpError ? err.status : undefined, error: describe(err) }));
     }
   }
 }
@@ -137,8 +179,8 @@ if (!agentArn) {
   skipped('Agent on AgentCore', 'no agent runtime ARN - VITE_AGENT_RUNTIME_ARN, or the agentcore outputs');
 } else {
   try {
-    const res = await withTimeout(90_000, (signal) => fetch(runtimeInvocationUrl(agentArn), {
-      method: 'POST', signal,
+    const res = await timed(90_000)(runtimeInvocationUrl(agentArn), {
+      method: 'POST',
       headers: {
         ...bearer, 'content-type': 'application/json',
         // AgentCore wants >= 33 characters; a fresh one, so this never lands
@@ -146,10 +188,22 @@ if (!agentArn) {
         'x-amzn-bedrock-agentcore-runtime-session-id': 'smoke-' + crypto.randomUUID(),
       },
       body: JSON.stringify({ question: 'Why is call quality bad in Houston?', newConversation: true }),
-    }));
-    checks.push(judgeAgent(res.status, res.ok ? await res.json() : undefined));
+    });
+    let body: unknown;
+    try { body = res.ok ? await res.json() : undefined; } catch { body = undefined; }
+    checks.push(judgeAgent(res.status, body));
   } catch (err) {
-    checks.push(judgeAgent(0, { error: describe(err) }));
+    checks.push(judgeAgent(0, undefined, describe(err)));
+  }
+}
+
+// --- 4. The audit trail, LAST: this run's own calls must be in it ------------
+if (boardApi && awsHttps(boardApi)) {
+  try {
+    const audit = await get('/audit');
+    checks.push(judgeAudit(audit.status, audit.body, calledThroughGateway ? { sub: me.sub, since: startedAt } : undefined));
+  } catch (err) {
+    checks.push({ name: 'board API: GET /audit', status: 'fail', detail: 'no answer: ' + describe(err), fix: 'check the network' });
   }
 }
 
@@ -157,7 +211,7 @@ if (!agentArn) {
 const mark = { pass: '\x1b[32mPASS\x1b[0m', fail: '\x1b[31mFAIL\x1b[0m', skip: '\x1b[90mSKIP\x1b[0m' };
 console.log('');
 for (const c of checks) {
-  console.log(mark[c.status] + '  ' + c.name + '\n      ' + c.detail + (c.fix ? '\n      fix: ' + c.fix : ''));
+  console.log(mark[c.status] + '  ' + c.name + '\n      ' + redact(c.detail) + (c.fix ? '\n      fix: ' + c.fix : ''));
 }
 const failed = checks.filter((c) => c.status === 'fail').length;
 console.log('\n' + (failed ? failed + ' failed.' : 'Nothing failed.') +
