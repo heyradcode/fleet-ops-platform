@@ -370,7 +370,9 @@ answer cites a runbook proves the tools ran in the other process.
 
 To deploy, run `pnpm build:agent`, then `terraform apply` in `auth/` (for the
 TTL) and in `agentcore/`. After that, an answer on the board reads
-"via AgentCore (…) · tools over MCP".
+"via AgentCore (…) · tools over MCP". Everything built since is deployed in
+one order, set out in `docs/13-deploy-and-verify.md`, with `pnpm smoke:aws`
+to prove each step.
 
 ### Try it locally: `pnpm mcp`
 

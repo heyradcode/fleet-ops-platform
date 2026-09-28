@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 367 tests, no network. Picks up web/ tests too.
+pnpm test                       # 374 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180 - real Cognito sign-in
 pnpm web:env                    # write web/.env.cognito.local from the Terraform outputs
@@ -34,6 +34,7 @@ pnpm mock                       # mock Teams/Genesys/Webex APIs, http://127.0.0.
 pnpm mcp                        # the MCP tool server + demo tokens, http://127.0.0.1:8000/mcp (docs/12)
 pnpm check:promises             # no un-awaited or misused promise, backend and web/
 pnpm seed:aws --dry-run         # fill the REAL table (needs TABLE_NAME); --dry-run needs no AWS
+pnpm smoke:aws                  # after a deploy: the deployed path, as you (NETPULSE_TOKEN; docs/13)
 pnpm verify                     # all five checks, in order
 ```
 
