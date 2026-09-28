@@ -26,6 +26,7 @@
     "web:env": "node scripts/write-web-env.mjs",
     "web:build": "pnpm --filter @netpulse/web build",
     "mock": "node scripts/mock-vendors.ts",
+    "mcp": "node scripts/mcp-local.ts",
     "seed:aws": "node scripts/seed-aws.ts",
     "check:promises": "node scripts/check-floating-promises.mjs",
     "verify": "pnpm typecheck && pnpm check:promises && pnpm test && pnpm start && pnpm web:build",

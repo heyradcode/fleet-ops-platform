@@ -332,9 +332,59 @@ in-process. The test asserts three things:
 - every tool call is audited exactly once;
 - each call is audited **as the person who asked**.
 
+`src/ai/mcp/mcp-process.test.ts` does the same across **two processes**. It
+starts the local server (below) as a child and runs the agent in the test
+process, where nothing has loaded the estate or the runbooks. A single
+process can't show whether the agent quietly relies on state the server's
+side created. The knowledge base staying empty in the test process while the
+answer cites a runbook proves the tools ran in the other process.
+
 To deploy, run `pnpm build:agent`, then `terraform apply` in `auth/` (for the
 TTL) and in `agentcore/`. After that, an answer on the board reads
 "via AgentCore (…) · tools over MCP".
+
+### Try it locally: `pnpm mcp`
+
+`scripts/mcp-local.ts` runs the same server (`src/ai/mcp/http.ts`) on
+`http://127.0.0.1:8000/mcp`. It uses the in-memory table, filled by the same
+code as `pnpm seed:aws` (`scripts/seed-core.ts`), so it answers as the
+deployed tools would. It needs no AWS account and no network.
+
+On startup it prints three demo tokens:
+
+| Persona | Tools listed |
+|---|---|
+| operator, `acme-networks`, Dallas only | 5 network read tools; only Dallas devices |
+| admin, `acme-networks`, tenant-wide | the same 5, over the whole estate |
+| admin, `hhs-demo` | 10: the network tools plus comms and ITSM |
+
+Connect a client:
+
+```bash
+# Claude Code - then ask it about the Dallas core switch
+claude mcp add --transport http netpulse http://127.0.0.1:8000/mcp \
+  --header "Authorization: Bearer <a token it printed>"
+
+# The MCP Inspector - a UI to call each tool by hand
+npx @modelcontextprotocol/inspector     # Streamable HTTP, the URL, the Authorization header
+```
+
+Things worth trying, because they show the tenant boundary from outside:
+- **Out-of-scope data:** as the Dallas operator, call `traceTopology` on
+  `dev-cor-aus01-01`. The error lists only Dallas device ids; Austin doesn't
+  exist for this caller.
+- **A tool you weren't listed:** as the operator, call `listCommsIncidents`.
+  You get JSON-RPC `-32602`, and the refusal is audited.
+- **A different token:** swap in the HHS token. The same server lists
+  different tools.
+
+Every call prints an `audit` line in the server's terminal: tenant, user,
+tool, outcome and duration.
+
+The tokens are HS256, signed with the demo secret that is in this repository,
+so the script **refuses to bind anything but loopback**. Anyone who can reach
+the port could mint an admin token for any tenant. The deployed server
+accepts only RS256 tokens from the real pool.
 
 ### Rules to carry into it
 

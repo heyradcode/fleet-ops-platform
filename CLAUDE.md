@@ -24,13 +24,14 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 330 tests, no network. Picks up web/ tests too.
+pnpm test                       # 332 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180 - real Cognito sign-in
 pnpm web:env                    # write web/.env.cognito.local from the Terraform outputs
 pnpm build:agent                # bundle the AgentCore agent AND the MCP server (docs/11, docs/12)
 pnpm web:build                  # typechecks web/ AND builds it
 pnpm mock                       # mock Teams/Genesys/Webex APIs, http://127.0.0.1:5190
+pnpm mcp                        # the MCP tool server + demo tokens, http://127.0.0.1:8000/mcp (docs/12)
 pnpm check:promises             # no un-awaited or misused promise, backend and web/
 pnpm seed:aws --dry-run         # fill the REAL table (needs TABLE_NAME); --dry-run needs no AWS
 pnpm verify                     # all five checks, in order
@@ -300,7 +301,12 @@ one, change the test deliberately rather than making it pass.
   the demo clock; `expiresAt` in epoch SECONDS (TTL silently ignores ms); an
   audit failure is logged, never fails the call. Its role may PutItem only
   into `TENANT#*#AUDIT` (`LeadingKeys`). `-32005` arrives as HTTP 200 and is
-  retried by the client - status-code retries never see it.
+  retried by the client - status-code retries never see it. `pnpm mcp` runs
+  it locally over the table `seed:aws` would write (`scripts/seed-core.ts` -
+  ONE seed, or local and AWS answer differently), LOOPBACK ONLY: its HS256
+  demo tokens are forgeable by anyone with the repo. `mcp-process.test.ts`
+  runs agent and server in separate processes, as deployed - one process
+  hides any reliance on state the other side loaded.
 - **Scope comes from the token, not the request.** Repository and resolver
   functions take a `Principal` and derive keys from it. An operator with no site
   claim gets *device* scope, not the whole estate — widening access is a
