@@ -41,9 +41,10 @@ const fallbackModel = env('AGENT_FALLBACK_MODEL', '');
 //                               MCP runtime (mcp_via_gateway, gateway.tf)
 //   MCP_RUNTIME_ARN             straight to the MCP runtime
 //   neither                     in this process - a valid deployment
-// The gateway comes FIRST because once it exists the MCP runtime accepts
-// calls from nothing else (allowed_workload_configuration): the direct
-// address would answer 403 to every tool call.
+// The gateway comes FIRST: it is the governed front door, and the answer
+// says which route the tools took. The runtime still accepts direct calls
+// with a valid token - it cannot be locked to the gateway while the gateway
+// passes the user's token through (mcp.tf says why).
 const mcpGatewayUrl = env('MCP_GATEWAY_URL', '');
 const mcpGatewayTarget = env('MCP_GATEWAY_TARGET', '');
 const mcpRuntimeArn = env('MCP_RUNTIME_ARN', '');

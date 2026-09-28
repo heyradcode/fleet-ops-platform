@@ -133,19 +133,22 @@ resource "aws_bedrockagentcore_agent_runtime" "mcp" {
       discovery_url   = "${local.cognito_issuer}/.well-known/openid-configuration"
       allowed_clients = [local.cognito_client]
 
-      # Behind the gateway, ONLY the gateway. A front door that can be walked
-      # around is decoration: without this, anyone holding a valid token
-      # could call the runtime's own address and skip every check the
-      # gateway adds. The gateway stamps its identity on what it forwards;
-      # the runtime rejects requests whose chain does not include it.
-      dynamic "allowed_workload_configuration" {
-        for_each = var.mcp_via_gateway ? [1] : []
-        content {
-          hosting_environment {
-            arn = aws_bedrockagentcore_gateway.mcp[0].gateway_arn
-          }
-        }
-      }
+      # NO allowed_workload_configuration, and it must not come back while
+      # the gateway passes the user's token through. The lock works by the
+      # gateway stamping its workload identity into a "transaction token" -
+      # which it only mints when it fetches its OWN OAuth client-credentials
+      # token for the call. With JWT_PASSTHROUGH it forwards the user's token
+      # unchanged, nothing is stamped, and the runtime refused EVERY call
+      # ("Transaction token required: authorizer has AllowedWorkloadConfiguration
+      # configured") - deployed once, and the assistant went down with it.
+      #
+      # The choice is the user's identity at the tool, or the lock; not both.
+      # Identity wins: it is the tenant boundary. What a direct call skips is
+      # the gateway's own checks - the same token check this authorizer and
+      # the server repeat - not the boundary, which the MCP server enforces
+      # from the token on every call. It WOULD skip anything gateway-only
+      # added later (AgentCore Policy, interceptors); on-behalf-of exchange,
+      # which carries both identities, is the way to have both.
     }
   }
 

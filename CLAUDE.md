@@ -302,10 +302,13 @@ one, change the test deliberately rather than making it pass.
   target with JWT_PASSTHROUGH - NEVER an "MCP server" target, which reaches
   the server as the gateway (or via on-behalf-of exchange, which Cognito
   cannot do) and syncs one tools/list for everyone. Gateway inbound is
-  CUSTOM_JWT (AUTHENTICATE_ONLY is SigV4 and carries no token to pass), and
-  the runtime accepts that gateway ONLY (`allowed_workload_configuration`) -
-  a front door that can be walked around is decoration. The agent prefers
-  `MCP_GATEWAY_URL`, since the direct address is then refused; answers say
+  CUSTOM_JWT (AUTHENTICATE_ONLY is SigV4 and carries no token to pass). The
+  runtime is NOT locked to the gateway, and must not be while it passes the
+  user's token through: `allowed_workload_configuration` needs a transaction
+  token the gateway only mints with its OWN client-credentials token, so
+  with passthrough it refused EVERY call - deployed once, and the assistant
+  went down. Identity at the tool beats the lock; on-behalf-of exchange is
+  how to have both. The agent prefers `MCP_GATEWAY_URL`; answers say
   "tools over MCP via Gateway". `runTool` in `ai/tool-provider.ts` is the ONE implementation
   both routes call, so they cannot disagree. The server lists read tools
   only, re-verifies with all seven checks BEFORE parsing, and audits every

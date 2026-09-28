@@ -22,7 +22,7 @@ deployed path **as you**, using your own token.
 | 2 | Build what ships | `pnpm build:lambda && pnpm build:agent` | nothing yet: this only writes `.build/` |
 | 3 | The board API: `GET /audit`, the HHS estate, candidate causes; and the table's TTL | `terraform -chdir=infra/terraform/auth apply` | `board API: GET /board`, `GET /audit` |
 | 4 | The knowledge graph in DynamoDB | `TABLE_NAME=$(terraform -chdir=infra/terraform/auth output -raw main_table_name) pnpm seed:aws` | `GET /comms + candidate causes` (Houston's top candidate is `wan-hou01-02`) |
-| 5 | The Gateway, the MCP server's graph tools, the gateway-only lock, and the agent pointed at the Gateway | `terraform -chdir=infra/terraform/agentcore apply` | `MCP via Gateway` ×2, `MCP runtime refuses calls that skip the Gateway`, `Agent on AgentCore` |
+| 5 | The Gateway, the MCP server's graph tools, and the agent pointed at the Gateway | `terraform -chdir=infra/terraform/agentcore apply` | `MCP via Gateway` ×2, `Agent on AgentCore` |
 | 6 | Everything, as you | `pnpm smoke:aws` | all PASS |
 
 **Step 1**, the deploy policy (an IAM change, so yours to run):
@@ -41,9 +41,10 @@ reached, delete the oldest non-default version first
 recorded and skipped. The graph rebuild overwrites by key and removes only
 what the sources dropped.
 
-**Step 5 has a short gap.** The MCP runtime may be locked to the Gateway a
-moment before the agent learns the Gateway's address. A question asked in
-that window gets tool errors; ask again once the apply finishes.
+**Step 5: no gateway-only lock.** An earlier version also locked the MCP
+runtime to the Gateway. That can't work while the Gateway passes the user's
+token through, and it took the assistant down ("Transaction token
+required"). `docs/12` explains why.
 
 ## Running the smoke test
 
@@ -77,19 +78,14 @@ PASS  MCP via Gateway: tools/list
       13 tools (3/3 graph tools); Mcp-Session-Id came back through the gateway
 PASS  MCP via Gateway: tools/call explainIncident
       CANDIDATE (not evidence) wan-hou01-02 (wan-edge): Interface errors, ...
-PASS  MCP runtime refuses calls that skip the Gateway
-      refused (403)
 PASS  Agent on AgentCore: tools over MCP via Gateway
       answered (offline), tools over MCP via Gateway
 ```
 
-Two lines settle open questions from `docs/12`:
-- **`Mcp-Session-Id … came back`** answers whether the Gateway forwards the
-  session header to a Runtime target. If it didn't, the check still passes,
-  because our MCP server keeps no session state; every call just starts
-  cold.
-- **`refuses calls that skip the Gateway`** proves the lock. If the runtime
-  answers a direct call, the Gateway can be walked around.
+One line settles an open question from `docs/12`: **`Mcp-Session-Id …
+came back`** says whether the Gateway forwards the session header to a
+Runtime target. If it didn't, the check still passes, because our MCP
+server keeps no session state; every call just starts cold.
 
 ## Undoing it
 

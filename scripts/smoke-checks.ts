@@ -116,7 +116,7 @@ export function judgeAudit(status: number, body: unknown, expect?: { sub: string
 }
 
 // ---------------------------------------------------------------------------
-// MCP through the gateway, and the lock behind it
+// MCP through the gateway
 // ---------------------------------------------------------------------------
 
 export function judgeGatewayList(result: { tools?: string[]; error?: string; sessionId?: string }, expectGraph = false): Check {
@@ -152,18 +152,6 @@ export function judgeGatewayCall(result: { tool: string; text?: string; error?: 
   return pass(name, firstCandidate ? firstCandidate.trim() : text.split('\n')[0]);
 }
 
-/**
- * The direct address MUST refuse once the gateway fronts the runtime - so
- * success here is the failure. Judged on the STATUS, never on text: an error
- * message carries a slice of the response body, and a 500 whose request id
- * happens to contain "403" is not a refusal.
- */
-export function judgeDirectRefused(result: { ok: boolean; status?: number; error?: string }): Check {
-  const name = 'MCP runtime refuses calls that skip the Gateway';
-  if (result.ok) return fail(name, 'the runtime answered a direct call - the gateway-only lock is not applied', FIX.agentcore);
-  if (result.status === 401 || result.status === 403) return pass(name, 'refused (' + result.status + ')');
-  return fail(name, 'unexpected: ' + (result.status ? 'HTTP ' + result.status + ' ' : '') + String(result.error ?? ''), FIX.agentcore);
-}
 
 // ---------------------------------------------------------------------------
 // The agent, end to end

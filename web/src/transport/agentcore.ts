@@ -115,7 +115,11 @@ export function createAgentCoreAsker(
       if (res.status === 401) throw new BoardApiError('Your session has expired - sign in again.', 401);
       if (res.status === 429 || kind.startsWith('Throttling')) throw new BoardApiError('The assistant is busy - try again in a moment.', 429);
       if (res.status === 409) throw new BoardApiError('The assistant is still starting up - ask again in a moment.', 409);
-      if (res.status === 424) throw new BoardApiError('The assistant failed on this question. Try rephrasing it.', 424);
+      // 424 is ANY error inside the agent - a bad question, but equally its
+      // tools being unreachable - and the board cannot tell which: the
+      // reason is in the agent's log, not the response. "Try rephrasing"
+      // blamed the question when the tool server was refusing every call.
+      if (res.status === 424) throw new BoardApiError('The assistant hit an error answering this. Try again - if it keeps happening, the agent\'s log says why.', 424);
       if (res.status === 403) throw new BoardApiError('The assistant refused this account (' + (kind || 'AccessDenied') + ').', 403);
       throw new BoardApiError('The assistant failed (' + res.status + (kind ? ' ' + kind : '') + ').', res.status);
     },

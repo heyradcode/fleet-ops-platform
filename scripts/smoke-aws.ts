@@ -4,9 +4,9 @@
  *   NETPULSE_TOKEN=<your access token> pnpm smoke:aws
  *
  * Every piece that has to be applied in order - the board API, the knowledge
- * graph in DynamoDB, the Gateway, the MCP server behind it, the lock that
- * makes the Gateway the only way in, the agent pointed at it, the audit
- * trail - checked with the same token the board sends, and each FAIL naming
+ * graph in DynamoDB, the Gateway, the MCP server behind it, the agent pointed
+ * at it, the audit trail - checked with the same token the board sends, and
+ * each FAIL naming
  * the command that fixes it. It replaces "ask the assistant something and
  * tell me what it said" with a list.
  *
@@ -32,7 +32,7 @@ import { readFileSync } from 'node:fs';
 import { createMcpToolProvider, McpError } from '../src/ai/mcp/client.ts';
 import { gatewayTargetUrl, runtimeInvocationUrl } from '../src/aws/agentcore-url.ts';
 import {
-  judgeAgent, judgeAudit, judgeBoard, judgeComms, judgeDirectRefused, judgeGatewayCall, judgeGatewayList,
+  judgeAgent, judgeAudit, judgeBoard, judgeComms, judgeGatewayCall, judgeGatewayList,
   parseEnvFile, tokenSummary, type Check,
 } from './smoke-checks.ts';
 
@@ -68,7 +68,7 @@ try {
 console.log('Token: tenant ' + me.tenant + ', groups [' + me.groups.join(', ') + '], ' + me.tokenUse + ' token, ' +
   (me.minutesLeft > 0 ? me.minutesLeft + ' min left' : 'EXPIRED'));
 // Five minutes, not zero: the checks take a minute, and a token that dies
-// half-way turns "the lock refused me" into "the token did", which pass alike.
+// half-way turns every later check into a misleading 401.
 if (me.minutesLeft < 5) { console.log('Sign in to the board again and copy a fresh one.'); process.exit(2); }
 if (me.tokenUse !== 'access') { console.log('That is an ' + me.tokenUse + ' token - copy the ACCESS token (netpulse.session).'); process.exit(2); }
 
@@ -95,7 +95,6 @@ const agentcore = tfOutputs('infra/terraform/agentcore');
 const boardApi = webEnv.VITE_BOARD_API_URL ?? '';
 const agentArn = webEnv.VITE_AGENT_RUNTIME_ARN ?? String(agentcore.agent_runtime_arn ?? '');
 const gatewayUrl = typeof agentcore.mcp_gateway_url === 'string' ? agentcore.mcp_gateway_url : '';
-const mcpArn = typeof agentcore.mcp_runtime_arn === 'string' ? agentcore.mcp_runtime_arn : '';
 
 /** The board API is sent the token too - so only an https AWS host is. */
 function awsHttps(url: string): boolean {
@@ -138,7 +137,7 @@ if (!boardApi) {
   }
 }
 
-// --- 2. The MCP server through the Gateway, and the lock behind it -----------
+// --- 2. The MCP server through the Gateway ----------------------------------
 let calledThroughGateway = false;
 if (!gatewayUrl) {
   skipped('MCP via Gateway', 'no mcp_gateway_url output - the Gateway is not applied yet (docs/13, step 5)');
@@ -164,14 +163,8 @@ if (!gatewayUrl) {
   } catch (err) {
     checks.push(judgeGatewayList({ error: describe(err) }));
   }
-  if (mcpArn) {
-    try {
-      await createMcpToolProvider({ url: runtimeInvocationUrl(mcpArn), token, fetch: timed() }).list();
-      checks.push(judgeDirectRefused({ ok: true }));
-    } catch (err) {
-      checks.push(judgeDirectRefused({ ok: false, status: err instanceof McpError ? err.status : undefined, error: describe(err) }));
-    }
-  }
+  // No "direct call refused" check: the runtime cannot be locked to the
+  // gateway while the gateway passes the user's token through (mcp.tf).
 }
 
 // --- 3. The agent, end to end ------------------------------------------------

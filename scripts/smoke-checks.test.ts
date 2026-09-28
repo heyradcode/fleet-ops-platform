@@ -12,7 +12,7 @@ import { setClock, fixedClock, now } from '../src/platform/clock.ts';
 import { boardSnapshot, commsSnapshot, type CommsSnapshot } from '../src/api/board-api.ts';
 import { HHS_ADMIN, pollHhsAndBuildGraph } from '../src/graph/test-world.ts';
 import {
-  judgeAgent, judgeAudit, judgeBoard, judgeComms, judgeDirectRefused, judgeGatewayCall, judgeGatewayList,
+  judgeAgent, judgeAudit, judgeBoard, judgeComms, judgeGatewayCall, judgeGatewayList,
   parseEnvFile, tokenSummary,
 } from './smoke-checks.ts';
 
@@ -82,7 +82,7 @@ test('audit: after this run called a tool, a trail with no row for it FAILS - au
   assert.equal(judgeAudit(200, { entries: rows }, { sub: 'someone-else', since: '2026-09-28T10:00:00Z' }).status, 'fail', 'nor is someone else\'s');
 });
 
-test('the Gateway, and the lock: a direct call that SUCCEEDS is the failure', () => {
+test('the Gateway: tools listed, graph tools there, and whether the session header came back', () => {
   const listed = judgeGatewayList({ tools: ['searchRunbooks', 'whatServes', 'explainIncident', 'graphNeighbours'], sessionId: 's' });
   assert.equal(listed.status, 'pass');
   assert.match(listed.detail, /\(3\/3 graph tools\); Mcp-Session-Id came back/);
@@ -91,11 +91,6 @@ test('the Gateway, and the lock: a direct call that SUCCEEDS is the failure', ()
   assert.equal(judgeGatewayList({ tools: ['searchRunbooks'] }, true).status, 'fail', 'an HHS admin must see the graph tools');
   assert.equal(judgeGatewayList({ error: 'HTTP 401: MCP server answered 401' }).status, 'fail');
   assert.equal(judgeGatewayCall({ tool: 'explainIncident', text: 'INCIDENT x\n  CANDIDATE (not evidence) wan-hou01-02 ...' }).status, 'pass');
-  assert.equal(judgeDirectRefused({ ok: true }).status, 'fail');
-  assert.equal(judgeDirectRefused({ ok: false, status: 403, error: 'HTTP 403: MCP server answered 403' }).status, 'pass');
-  assert.equal(judgeDirectRefused({ ok: false, status: 500, error: 'HTTP 500: {"requestId":"7c1e4031-..."}' }).status, 'fail',
-    'judged on the status: a 500 whose body contains "403" is not a refusal');
-  assert.equal(judgeDirectRefused({ ok: false, error: 'ECONNRESET' }).status, 'fail', 'a network error is not a refusal');
 });
 
 test('the agent: only "tools over MCP via Gateway" passes', () => {

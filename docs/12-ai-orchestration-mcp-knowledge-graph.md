@@ -301,18 +301,33 @@ board ──JWT──▶ Runtime: AGENT ──same user token──▶ GATEWAY
                                                      │ JWT_PASSTHROUGH: forwards it unchanged
                                                      ▼
                                            Runtime: MCP SERVER
-                                                     │ accepts calls from THIS gateway only
                                                      │ re-verifies (7 checks), scopes, audits - as before
 ```
 
 | Piece | What it does |
 |---|---|
 | `infra/terraform/agentcore/gateway.tf` | The gateway: `CUSTOM_JWT` inbound, the same pool and `allowed_clients`, and **no** `protocol_type` (Runtime targets can't join an MCP-type gateway). One target, `tools`, of type `http.agentcore_runtime`, pointing at the MCP runtime with `jwt_passthrough`. Its role has **no permissions**: with passthrough the gateway signs nothing and fetches no credential. |
-| `mcp.tf`: `allowed_workload_configuration` | The MCP runtime accepts only requests whose identity chain includes this gateway. A front door that can be walked around is decoration: without this, any valid token could call the runtime's own address and skip the gateway. |
 | `gatewayTargetUrl` in `src/aws/agentcore-url.ts` | `https://{id}.gateway.bedrock-agentcore.{region}.amazonaws.com/tools/invocations`. It refuses any host that isn't an AgentCore gateway, because this URL is sent the caller's token. |
-| `agent-entry.ts` | Prefers `MCP_GATEWAY_URL`/`_TARGET`, falls back to `MCP_RUNTIME_ARN`, then to in-process. The gateway comes first because, once it fronts the runtime, the direct address is refused. |
+| `agent-entry.ts` | Prefers `MCP_GATEWAY_URL`/`_TARGET`, falls back to `MCP_RUNTIME_ARN`, then to in-process. |
 | `servedBy.toolsRoute` | The answer says **"tools over MCP via Gateway"**. Seeing that on the board proves the front door is in the path. |
-| `var.mcp_via_gateway` | Default `true`. `false` removes the gateway and the lock, and the agent calls the runtime directly again. |
+| `var.mcp_via_gateway` | Default `true`. `false` removes the gateway, and the agent calls the runtime directly again. |
+
+**The runtime is not locked to the Gateway, and can't be with
+passthrough.** AgentCore can restrict a runtime to one gateway
+(`allowed_workload_configuration`), but it checks a "transaction token" in
+which the gateway stamps its identity. The gateway only mints one when it
+fetches its **own** OAuth client-credentials token for the call. With
+`JWT_PASSTHROUGH` it forwards the user's token unchanged, nothing is
+stamped, and the runtime refused **every** call ("Transaction token
+required"). It was deployed once, and the assistant went down until it was
+removed.
+
+So it's the user's identity at the tool, or the lock. Identity wins, because
+it's the tenant boundary. A direct call with a valid token skips only the
+gateway's own token check, which the runtime's authorizer and the MCP server
+repeat anyway. It would also skip anything added only at the gateway later,
+such as AgentCore Policy or interceptors. On-behalf-of token exchange, which
+carries both identities, is how to have both.
 
 **Why "JWT inbound" and not "authenticate only".** `AUTHENTICATE_ONLY` is
 SigV4-based and carries no bearer token to pass through. `NONE` would leave
