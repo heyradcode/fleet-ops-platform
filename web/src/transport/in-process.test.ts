@@ -318,3 +318,21 @@ test('comms: the HHS lead\'s assistant is offered the comms tools', async () => 
   // and this test - checking only what was offered - never noticed.
   assert.equal(result.stoppedBecause, 'end_turn');
 });
+
+test('audit: the lead sees the tab assistant\'s calls, recorded AS the tab; an operator is offered no trail', async () => {
+  await signInAs(OPERATOR);
+  assert.equal(await inProcessTransport.loadAudit(), null, 'null, not empty: the board then offers no view');
+
+  const lead = await signInAs(LEAD);
+  const before = (await inProcessTransport.loadAudit())?.summary.calls ?? 0;
+  const result = await inProcessTransport.askAgent('Why is the Dallas core switch unreachable?');
+  const ran = result.trace.filter((s) => s.kind === 'tool').length;
+  assert.ok(ran > 0);
+
+  const audit = await inProcessTransport.loadAudit();
+  assert.ok(audit);
+  assert.equal(audit.summary.calls - before, ran, 'one row per tool the assistant ran');
+  const mine = audit.entries.filter((e) => e.sub === lead.principal.sub);
+  assert.ok(mine.length >= ran);
+  assert.ok(mine.every((e) => e.via === 'tab'), 'labelled a demonstration, never passed off as the MCP server\'s');
+});

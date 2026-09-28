@@ -26,6 +26,7 @@ import {
 } from '../../../src/pipeline/steps.ts';
 import { runAgent } from '../../../src/ai/agent-core.ts';
 import { toolSpecsFor } from '../../../src/ai/tools.ts';
+import { runAudited } from '../../../src/ai/tool-provider.ts';
 import { mockHistory, mockFetch, directory as commsDirectory, DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS } from '../../../src/integrations/comms/mock/index.ts';
 import { createCommsClient } from '../../../src/integrations/comms/client.ts';
 import { commsConfigFor } from '../../../src/integrations/comms/config.ts';
@@ -36,7 +37,7 @@ import { knowledgeBase } from '../../../src/ai/knowledge-base.ts';
 import { putObservations, putDeviceStates } from '../../../src/platform/repository.ts';
 import { loadRunbooksFromBundle } from './runbooks.browser.ts';
 import {
-  boardSnapshot, commsSnapshot, seedDemoWorld, tenantScenarios, SCENARIO_AT,
+  auditSnapshot, boardSnapshot, commsSnapshot, seedDemoWorld, tenantScenarios, SCENARIO_AT,
 } from '../../../src/api/board-api.ts';
 
 /**
@@ -205,12 +206,18 @@ export const inProcessTransport: Transport = {
     // The agent runs with the CALLER's principal, never a privileged one. An
     // operator scoped to Dallas gets an assistant scoped to Dallas, and the
     // tools enforce that themselves rather than trusting the prompt.
+    const principal = caller();
     const result = await runAgent({
       question,
-      principal: caller(),
+      principal,
       // Per caller: a comms tenant's assistant also gets the comms tools.
       // For every network-only tenant this is exactly TOOL_SPECS, as before.
-      tools: toolSpecsFor(caller(), { readOnly: false }),
+      tools: toolSpecsFor(principal, { readOnly: false }),
+      // Recorded, so the audit view has something to show offline. A
+      // DEMONSTRATION of the trail, labelled 'tab': a record kept in the
+      // caller's own browser is one they could edit. The trail that counts
+      // is the MCP server's, on AWS.
+      callTool: async (name, input) => (await runAudited(name, input, principal, 'tab')).text,
       onStep,
     });
     return { ...result, servedBy: { host: 'tab', model: 'offline', turn: 1 } };
@@ -225,6 +232,11 @@ export const inProcessTransport: Transport = {
     // commsVisibleTo admits - so there is no privileged principal involved.
     await ensureCommsPolled(principal);
     return commsSnapshot(principal);
+  },
+
+  async loadAudit() {
+    ensureSeeded();
+    return auditSnapshot(caller());
   },
 
   subscribeHealth(siteId, onTick) {

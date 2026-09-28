@@ -7,7 +7,9 @@ import assert from 'node:assert/strict';
 
 import { setClock, fixedClock, now } from '../platform/clock.ts';
 import type { Principal } from '../platform/types.ts';
-import { commsSnapshot, handleBoardApi, seedDemoWorld, type BoardSnapshot, type CommsSnapshot } from './board-api.ts';
+import {
+  auditSnapshot, commsSnapshot, handleBoardApi, seedDemoWorld, type AuditSnapshot, type BoardSnapshot, type CommsSnapshot,
+} from './board-api.ts';
 import type { ApiGatewayEvent } from './rest-handler.ts';
 import {
   DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS, DEMO_WEBEX_TOKEN,
@@ -120,4 +122,26 @@ test('unknown routes are 404, and per-caller responses are never cached', async 
   const r = await call('/devices', 'tok-acme');
   assert.equal(r.status, 404);
   assert.equal((await call('/board', 'tok-acme')).headers['cache-control'], 'no-store');
+});
+
+test('audit: an admin reads their own tenant\'s trail; an operator gets null; tenants never mix', async () => {
+  const { recordToolCall } = await import('../ai/audit.ts');
+  await recordToolCall(DALLAS_OPERATOR, { tool: 'traceTopology', input: { deviceId: 'x' }, outcome: 'ok', ms: 30 });
+  await recordToolCall(DALLAS_OPERATOR, { tool: 'traceTopology', input: { deviceId: 'y' }, outcome: 'error', ms: 10 });
+  await recordToolCall(ACME_ADMIN, { tool: 'openIncident', input: {}, outcome: 'refused', ms: 0 });
+  await recordToolCall(HHS_LEAD, { tool: 'listCommsIncidents', input: {}, outcome: 'ok', ms: 5 });
+
+  const acme = await call<AuditSnapshot>('/audit', 'tok-acme');
+  assert.equal(acme.status, 200);
+  assert.deepEqual(new Set(acme.body.entries.map((e) => e.sub)), new Set([DALLAS_OPERATOR.sub, ACME_ADMIN.sub]),
+    'the admin sees their colleagues\' calls - that is what the trail is for');
+  assert.ok(!acme.body.entries.some((e) => e.tool === 'listCommsIncidents'), 'and never another tenant\'s');
+  assert.deepEqual(
+    { calls: acme.body.summary.calls, ok: acme.body.summary.ok, error: acme.body.summary.error, refused: acme.body.summary.refused },
+    { calls: 3, ok: 1, error: 1, refused: 1 },
+  );
+  assert.deepEqual(acme.body, JSON.parse(JSON.stringify(await auditSnapshot(ACME_ADMIN))), 'the API serves what the tab computes');
+
+  assert.equal((await call('/audit', 'tok-dallas')).body, null, 'an operator is not offered the trail at all');
+  assert.equal((await call<AuditSnapshot>('/audit', 'tok-hhs')).body.summary.calls, 1);
 });

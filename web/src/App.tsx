@@ -16,6 +16,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { BasemapMode } from './SiteMap.tsx';
 import { DevicePanel } from './DevicePanel.tsx';
 import { CommsBoard } from './CommsBoard.tsx';
+import { AuditBoard } from './AuditBoard.tsx';
 import { transport } from './transport/select.ts';
 import { BoardApiError } from './transport/api.ts';
 import { CognitoNotConfigured, SignIn } from './SignIn.tsx';
@@ -95,7 +96,11 @@ function Board({ session, onSignOut, onExpired }: {
   // transport means "not yours", and the switch is then never rendered - the
   // same rule as the site tabs: do not offer what the token forbids.
   const [comms, setComms] = useState<CommsSnapshot | null>(null);
-  const [view, setView] = useState<'network' | 'comms'>('network');
+  const [view, setView] = useState<'network' | 'comms' | 'audit'>('network');
+  // The audit view names who asked what, so it is an admin's alone - and the
+  // API answers null to anyone else. Decided from the VERIFIED principal's
+  // role, so no request is made just to find out it will be refused.
+  const isAdmin = session.principal.roles.includes('admin');
   useEffect(() => {
     let stale = false;
     // A failure is reported, not turned into `null`: null means "not yours",
@@ -106,6 +111,8 @@ function Board({ session, onSignOut, onExpired }: {
     return () => { stale = true; };
   }, []);
   const showComms = view === 'comms' && comms !== null;
+  const showAudit = view === 'audit' && isAdmin;
+  const showNetwork = !showComms && !showAudit;
 
   // --- Snapshot ------------------------------------------------------------
   useEffect(() => {
@@ -219,19 +226,27 @@ function Board({ session, onSignOut, onExpired }: {
           <span className="brand-rule" />
         </div>
 
-        {comms && (
+        {(comms || isAdmin) && (
           <nav className="sites view-switch" aria-label="View">
-            <button className="site" aria-pressed={view === 'network'} onClick={() => setView('network')}>
+            <button className="site" aria-pressed={showNetwork} onClick={() => setView('network')}>
               network
             </button>
-            <button className="site" aria-pressed={view === 'comms'} onClick={() => setView('comms')}>
-              comms
-              {comms.incidents.length > 0 && <span className="count">{comms.incidents.length}</span>}
-            </button>
+            {comms && (
+              <button className="site" aria-pressed={view === 'comms'} onClick={() => setView('comms')}>
+                comms
+                {comms.incidents.length > 0 && <span className="count">{comms.incidents.length}</span>}
+              </button>
+            )}
+            {isAdmin && (
+              <button className="site" aria-pressed={view === 'audit'} onClick={() => setView('audit')}
+                title="The assistant's tool calls - admins only">
+                audit
+              </button>
+            )}
           </nav>
         )}
 
-        {!showComms && <nav className="sites" aria-label="Site">
+        {showNetwork && <nav className="sites" aria-label="Site">
           {visibleSites.map((s) => (
             <button
               key={s.siteId}
@@ -262,7 +277,7 @@ function Board({ session, onSignOut, onExpired }: {
 
         {/* The tallies follow the view, so the number in the corner is always
             about the thing on the screen. */}
-        {showComms ? (
+        {showAudit ? null : showComms ? (
           <>
             <div className={`tally ${comms.incidents.some((i) => i.severity === 'critical') ? 'is-critical' : ''}`}>
               <span className="n">{comms.incidents.length}</span> incidents
@@ -303,7 +318,7 @@ function Board({ session, onSignOut, onExpired }: {
         <button className="signout" onClick={onSignOut}>Sign out</button>
       </header>
 
-      {showComms ? <CommsBoard snapshot={comms} /> : <div className={`body ${selectedDevice ? 'has-panel' : ''}`}>
+      {showComms ? <CommsBoard snapshot={comms} /> : showAudit ? <AuditBoard me={session.principal.sub} onExpired={onExpired} /> : <div className={`body ${selectedDevice ? 'has-panel' : ''}`}>
         <aside className="roster">
           <div className="pane-head">
             <span>Estate</span>

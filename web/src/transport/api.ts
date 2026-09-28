@@ -1,9 +1,10 @@
 /**
- * The API transport: the board's two data views over HTTP, from the real
+ * The API transport: the board's data views over HTTP, from the real
  * table, with the Cognito access token on every request.
  *
  *   GET {VITE_BOARD_API_URL}/board?siteId=   the network view
  *   GET {VITE_BOARD_API_URL}/comms           the comms view
+ *   GET {VITE_BOARD_API_URL}/audit           the MCP server's audit trail (admins)
  *
  * Served by src/api/board-api.ts in Lambda - the SAME functions the
  * in-process transport calls in the tab, so switching transports changes
@@ -85,6 +86,10 @@ export function createApiTransport(base: string | undefined, fetchImpl: typeof f
 
     loadComms() {
       return get('/comms');
+    },
+
+    loadAudit() {
+      return get('/audit');
     },
 
     subscribeHealth: (siteId, onTick) => inProcessTransport.subscribeHealth(siteId, onTick),

@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 332 tests, no network. Picks up web/ tests too.
+pnpm test                       # 338 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180 - real Cognito sign-in
 pnpm web:env                    # write web/.env.cognito.local from the Terraform outputs
@@ -306,7 +306,13 @@ one, change the test deliberately rather than making it pass.
   ONE seed, or local and AWS answer differently), LOOPBACK ONLY: its HS256
   demo tokens are forgeable by anyone with the repo. `mcp-process.test.ts`
   runs agent and server in separate processes, as deployed - one process
-  hides any reliance on state the other side loaded.
+  hides any reliance on state the other side loaded. The board's AUDIT view
+  (`auditSnapshot`, `GET /audit`) is ADMINS ONLY - null otherwise, as for
+  comms - and says its source: the MCP server's rows over the API, or the
+  tab assistant's own rows (`via: 'tab'`), a DEMONSTRATION never a control -
+  a record in the caller's browser is one they can edit. `refused` is
+  decided in `runToolAs`, where it is known: from the text alone a refusal
+  looks like a failure, and that is the row an access review looks for.
 - **Scope comes from the token, not the request.** Repository and resolver
   functions take a `Principal` and derive keys from it. An operator with no site
   claim gets *device* scope, not the whole estate — widening access is a
@@ -550,11 +556,11 @@ src/aws/         local stand-ins for 6 AWS services; dynamodb.sdk.ts is the
                  REAL table adapter (Node only - paging, batch retries)
 src/data/        estate generator, scenarios, health trace, runbooks, schema.sql
 web/src/transport/  the boundary that lets the backend run in the browser;
-                 api.ts reads the two data views over HTTP, select.ts picks
+                 api.ts reads the data views over HTTP, select.ts picks
 src/ai/agent-invocation.ts  one AgentCore invocation: token -> answer
 infra/terraform/agentcore/  the assistant on Bedrock AgentCore Runtime
-src/api/board-api.ts  GET /board and GET /comms - the one implementation of
-                 both views, served from Lambda (infra/terraform/auth/api.tf)
+src/api/board-api.ts  GET /board, /comms and /audit - the one implementation
+                 of each view, served from Lambda (infra/terraform/auth/api.tf)
 web/src/auth/    sign-in: the real pool only (provider.ts); local.ts is the
                  offline issuer, kept as a TEST fixture, never on the page
 src/platform/membership.ts  which customer an email domain belongs to; a

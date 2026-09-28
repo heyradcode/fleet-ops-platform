@@ -7,9 +7,10 @@ fact about a signed credential — and the platform's DynamoDB table, which
 `pnpm seed:aws` fills from the same code the offline board runs.
 
 It also creates the board API - an HTTP API and one read-only Lambda
-serving `GET /board` and `GET /comms` from that table. With
-`VITE_BOARD_API_URL` set the board reads those two views from it; without,
-it computes them in the tab, which is the offline default. Either way the
+serving `GET /board`, `GET /comms` and `GET /audit` (the MCP server's audit
+trail, admins only) from that table. With `VITE_BOARD_API_URL` set the board
+reads those views from it; without, it computes them in the tab, which is
+the offline default. Either way the
 answer is the same, because both call the same functions
 (`src/api/board-api.ts`).
 

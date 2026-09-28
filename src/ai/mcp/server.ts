@@ -26,10 +26,9 @@
  */
 import type { Principal } from '../../platform/types.ts';
 import type { ToolSpec } from '../../aws/bedrock.ts';
-import { wallNow } from '../../platform/clock.ts';
 import { toolSpecsFor } from '../tools.ts';
-import { prepareToolWorld, runTool } from '../tool-provider.ts';
-import { recordToolCall, type AuditOutcome } from '../audit.ts';
+import { prepareToolWorld, runAudited } from '../tool-provider.ts';
+import { recordToolCall } from '../audit.ts';
 
 /** Newest first. `initialize` answers with the client's version if it is here, else the first. */
 export const SUPPORTED_PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26'] as const;
@@ -126,19 +125,13 @@ export async function handleMcpMessage(
       // the same rule, and this is the side a hostile client cannot skip.
       const offered = toolSpecsFor(principal, { readOnly: true });
       if (!offered.some((t) => t.name === name)) {
-        await (deps.audit ?? recordToolCall)(principal, { tool: name, input: args as Record<string, unknown>, outcome: 'refused', ms: 0 });
+        await (deps.audit ?? recordToolCall)(principal, { tool: name, input: args as Record<string, unknown>, outcome: 'refused', ms: 0, via: 'mcp' });
         return rpcError(id, RPC.invalidParams, 'Unknown tool: ' + name);
       }
 
       await prepareToolWorld(principal);
-      const started = wallNow();
-      const text = await runTool(name, args as Record<string, unknown>, principal);
-      const isError = text.startsWith('ERROR:');
-      const outcome: AuditOutcome = isError ? 'error' : 'ok';
-      await (deps.audit ?? recordToolCall)(principal, {
-        tool: name, input: args as Record<string, unknown>, outcome, ms: wallNow() - started,
-      });
-      return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text }], isError } };
+      const run = await runAudited(name, args as Record<string, unknown>, principal, 'mcp', deps.audit);
+      return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: run.text }], isError: run.outcome !== 'ok' } };
     }
 
     default:

@@ -1,9 +1,10 @@
 /**
  * ---------------------------------------------------------------------------
- * The board's API: the two views that read real data, over HTTP
+ * The board's API: the views that read real data, over HTTP
  * ---------------------------------------------------------------------------
  *   GET /board?siteId=   the network view - what the RULES decided, scoped
  *   GET /comms           the voice and contact-centre view, from the store
+ *   GET /audit           the assistant's tool calls - admins only
  *
  * ONE IMPLEMENTATION, TWO CALLERS. `boardSnapshot` and `commsSnapshot` are
  * what the in-process transport calls in the tab AND what this handler calls
@@ -58,6 +59,9 @@ import type { PhoneInventory } from '../integrations/comms/kurmi.ts';
 import { latestAnomalies, type CommsAnomaly } from '../integrations/comms/anomalies.ts';
 import { buildDailyBrief, type Brief } from '../reporting/daily-brief.ts';
 import type { ApiGatewayEvent, ApiGatewayResult } from './rest-handler.ts';
+import {
+  recentAudit, summariseAudit, AUDIT_RETENTION_DAYS, type AuditEntry, type AuditSummary,
+} from '../ai/audit.ts';
 
 // ---------------------------------------------------------------------------
 // The snapshots - the contract the board renders
@@ -242,6 +246,34 @@ export async function commsSnapshot(caller: Principal): Promise<CommsSnapshot | 
   };
 }
 
+/** The newest this many. A page, not a report: the tallies say which window they cover. */
+export const AUDIT_VIEW_LIMIT = 100;
+
+export type AuditSnapshot = {
+  /** Newest first. */
+  entries: AuditEntry[];
+  /** Over `entries` only - see summariseAudit. */
+  summary: AuditSummary;
+  limit: number;
+  retentionDays: number;
+};
+
+/**
+ * The audit view: what the assistant's tools were asked, by whom, and how it
+ * went - or null for anyone but an admin. It names who asked what, which is
+ * not an operator's business about their colleagues; null rather than a 403,
+ * as for comms, so the board simply does not offer the view.
+ *
+ * Read from the STORE, so what it shows depends on who wrote there: over the
+ * board API, the MCP server's rows in DynamoDB; in the tab, the tab
+ * assistant's own demonstration rows. The board says which.
+ */
+export async function auditSnapshot(caller: Principal): Promise<AuditSnapshot | null> {
+  if (!caller.roles.includes('admin')) return null;
+  const entries = await recentAudit(caller, AUDIT_VIEW_LIMIT);
+  return { entries, summary: summariseAudit(entries), limit: AUDIT_VIEW_LIMIT, retentionDays: AUDIT_RETENTION_DAYS };
+}
+
 // ---------------------------------------------------------------------------
 // The handler
 // ---------------------------------------------------------------------------
@@ -276,6 +308,8 @@ export async function handleBoardApi(event: ApiGatewayEvent, deps: BoardApiDeps)
         return json(200, boardSnapshot(caller, event.queryStringParameters?.siteId || undefined));
       case 'GET /comms':
         return json(200, await commsSnapshot(caller));
+      case 'GET /audit':
+        return json(200, await auditSnapshot(caller));
       default:
         return json(404, { message: 'no route for ' + route });
     }

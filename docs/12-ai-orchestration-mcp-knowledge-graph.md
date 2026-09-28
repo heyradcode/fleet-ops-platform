@@ -318,7 +318,7 @@ in `src/`, which the board also bundles.
 | `src/ai/mcp/server.ts` | `handleMcpMessage(msg, principal)`. `initialize` negotiates `2025-06-18` or `2025-03-26`. `tools/list` is `toolSpecsFor(principal, { readOnly: true })`: read tools only, whoever asks. For `tools/call`, a tool that was not listed is JSON-RPC `-32602` (and audited as `refused`), and a failing tool is `isError: true`. Stateless: the principal comes from each request's token. |
 | `src/ai/mcp/http.ts` | Streamable HTTP over the same `ResponseSink` as the agent. Order: authenticate, then check `Accept` (406), then `MCP-Protocol-Version` (400), and only then parse. Batches get 400, notifications get 202, requests get 200 JSON, and GET/DELETE get 405. |
 | `src/ai/mcp/client.ts` | `createMcpToolProvider({ url, token })`. It does the handshake once and lazily, reuses `Mcp-Session-Id`, and sends `MCP-Protocol-Version`. It reads JSON or SSE responses and retries `-32005` (which arrives as a 200). An `isError` result becomes `ERROR:` text. |
-| `src/ai/audit.ts` | One row per call under `TENANT#t#AUDIT`. The row holds `sub`, tool, a **sha256 of the canonical arguments** (never the arguments), outcome, ms and real time (`wallNow`), with `expiresAt` 90 days out (TTL in `auth/main-table.tf`). `recentAudit` is admin-only and tenant-scoped. An audit write failure is logged loudly and never fails the call. |
+| `src/ai/audit.ts` | One row per call under `TENANT#t#AUDIT`. The row holds `sub`, tool, a **sha256 of the canonical arguments** (never the arguments), outcome, ms, `via` and real time (`wallNow`), with `expiresAt` 90 days out (TTL in `auth/main-table.tf`). `recentAudit` is admin-only and tenant-scoped. An audit write failure is logged loudly and never fails the call. The board reads it through the audit view (below). |
 | `src/ai/agent-invocation.ts` | `deps.tools(principal, token)` picks the provider. `servedBy.tools` says `mcp` or `in-process`, and the board shows "tools over MCP". |
 | `infra/terraform/agentcore/mcp-entry.ts` | Node, `:8000`, `/mcp` and `/ping`. |
 | `infra/terraform/agentcore/agent-entry.ts` | With `MCP_RUNTIME_ARN` set, the tools go over MCP with the caller's token. It keeps one MCP session per user, so follow-ups reuse a warm microVM. |
@@ -385,6 +385,31 @@ The tokens are HS256, signed with the demo secret that is in this repository,
 so the script **refuses to bind anything but loopback**. Anyone who can reach
 the port could mint an admin token for any tenant. The deployed server
 accepts only RS256 tokens from the real pool.
+
+### Reading the trail: the audit view
+
+An audit trail that only exists in DynamoDB isn't one anybody reads. The
+board has an **audit** view, next to network and comms, **offered to admins
+only**. It names who asked what, which isn't an operator's business about
+their colleagues.
+
+| Piece | What it does |
+|---|---|
+| `auditSnapshot(caller)` in `src/api/board-api.ts` | The view, next to the network and comms views. One implementation, served by the tab and by `GET /audit`. It returns `null` for a non-admin (as comms does for a caller without comms), and the board then offers no tab. |
+| `summariseAudit` in `src/ai/audit.ts` | Tallies per outcome and per tool: calls, errors, refusals and **median** time (one 9-second call doesn't become the typical one). It covers the newest 100 rows and says which window, because a total that looked like "all time" couldn't be reconciled with anything. |
+| `runToolAs` / `runAudited` in `src/ai/tool-provider.ts` | The outcome is decided where it's known. `refused` means the role check or the tool list said no. Holding only the text, a caller couldn't tell that from a failure, and filing refusals under "error" would hide exactly the rows an access review looks for. The MCP server and the tab both record through `runAudited`. |
+| `web/src/AuditBoard.tsx` | Calls newest first: when (real UTC, not the replay's clock), who (you, or the start of the `sub`), tool, outcome, ms, via, and the start of the argument hash. Amber marks `refused` rows only; a tool answering "unknown deviceId" is routine. |
+
+**The source is said out loud.** Over the board API the view reads the MCP
+server's rows from DynamoDB: the control. In the tab, with no server, the
+tab's own assistant records its calls with `via: 'tab'`, so the view has
+something to show offline. That's a **demonstration, never a control**: a
+record kept in the caller's own browser is one they could edit. The view
+labels it that way, and the rows say `tab`.
+
+To deploy it, run `pnpm build:lambda` (the board API's code), then
+`terraform apply` in `auth/`. That adds the `GET /audit` route and the new
+Lambda code, plus the TTL if it isn't applied yet.
 
 ### Rules to carry into it
 

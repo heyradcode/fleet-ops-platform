@@ -1510,3 +1510,56 @@ button.topo-node:hover { border-color: var(--amber); }
 
 /* A load that failed over the API. Amber: it needs someone's attention. */
 .load-error { color: var(--amber); }
+
+/* ==========================================================================
+   Audit view - the assistant's tool calls, admins only
+   ==========================================================================
+   The comms tables' grammar, reused: same captions, same row rhythm. Amber
+   marks `refused` and nothing else - an access review is looking for exactly
+   those rows. A failed call is routine and stays calm. */
+
+.audit-body {
+  display: grid;
+  grid-template-columns: 380px 1fr;
+  min-height: 0;
+}
+
+.audit-side {
+  overflow-y: auto;
+  min-height: 0;
+  padding: 14px 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.audit-source { margin: 0; font-size: 12px; color: var(--dim); }
+.audit-source strong { color: var(--text); font-weight: 600; }
+
+/* Quiet, like sign-out: refreshing is not an attention event. */
+.audit-refresh {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.audit-refresh:hover:not(:disabled) { color: var(--text-strong); }
+.audit-refresh:disabled { color: var(--faint); cursor: default; }
+
+.audit-tools { max-width: none; }
+.audit-tools thead th:not(:first-child) { width: 56px; }
+
+.audit-table { max-width: 980px; }
+.audit-table thead th:not(:first-child) { width: auto; text-align: left; }
+.audit-table td.num { text-align: right; width: 64px; }
+.audit-table tbody th { white-space: nowrap; }
+.audit-table tr.is-attention td { color: var(--amber); }
+.audit-table tr.is-error td { color: var(--text); }
+.audit-hash { color: var(--faint); }
+
+.audit-message { margin: 14px 18px; }
+
+@media (max-width: 880px) {
+  .audit-body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  .audit-body .roster { max-height: 45vh; }
+}

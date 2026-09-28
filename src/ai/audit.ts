@@ -36,6 +36,14 @@ export const AUDIT_RETENTION_DAYS = 90;
 
 export type AuditOutcome = 'ok' | 'error' | 'refused';
 
+/**
+ * Where the call was made. 'mcp' is the control: the server every deployed
+ * tool call passes through. 'tab' is the offline board's assistant recording
+ * its own calls in the browser - a DEMONSTRATION of the trail, never a control,
+ * because a record kept on the caller's own machine is one they can edit.
+ */
+export type AuditVia = 'mcp' | 'tab';
+
 export type AuditEntry = {
   at: string;
   sub: string;
@@ -43,8 +51,7 @@ export type AuditEntry = {
   argsHash: string;
   outcome: AuditOutcome;
   ms: number;
-  /** How the call arrived - only 'mcp' today; the field is for the day a second route exists. */
-  via: 'mcp';
+  via: AuditVia;
 };
 
 /**
@@ -78,13 +85,13 @@ export function hashArgs(input: Record<string, unknown>): string {
 
 export async function recordToolCall(
   principal: Principal,
-  call: { tool: string; input: Record<string, unknown>; outcome: AuditOutcome; ms: number },
+  call: { tool: string; input: Record<string, unknown>; outcome: AuditOutcome; ms: number; via?: AuditVia },
 ): Promise<void> {
   const nowMs = wallNow();
   const at = new Date(nowMs).toISOString();
   const entry: AuditEntry = {
     at, sub: principal.sub, tool: call.tool, argsHash: hashArgs(call.input),
-    outcome: call.outcome, ms: call.ms, via: 'mcp',
+    outcome: call.outcome, ms: call.ms, via: call.via ?? 'mcp',
   };
   try {
     await mainTable.put({
@@ -118,6 +125,51 @@ export async function recentAudit(principal: Principal, limit = 50): Promise<Aud
     .filter((r) => typeof r.expiresAt !== 'number' || r.expiresAt > nowS)
     .map((r) => ({
       at: String(r.at), sub: String(r.sub), tool: String(r.tool), argsHash: String(r.argsHash),
-      outcome: r.outcome as AuditOutcome, ms: Number(r.ms), via: 'mcp',
+      outcome: r.outcome as AuditOutcome, ms: Number(r.ms), via: r.via === 'tab' ? 'tab' : 'mcp',
     }));
+}
+
+export type AuditToolSummary = { tool: string; calls: number; ok: number; error: number; refused: number; medianMs: number };
+
+export type AuditSummary = {
+  calls: number;
+  ok: number;
+  error: number;
+  refused: number;
+  /** Most-called first. A tool that is suddenly called far more is the first thing to look at. */
+  byTool: AuditToolSummary[];
+  /** The span the entries cover - the tallies are over THIS, not over all time. */
+  from?: string;
+  to?: string;
+};
+
+/**
+ * Tallies over a page of entries. Said as a window, because it is one: the
+ * view reads the newest N, and a count that looked like "all time" would be
+ * a number nobody could reconcile with anything.
+ */
+export function summariseAudit(entries: AuditEntry[]): AuditSummary {
+  const tools = new Map<string, { calls: number; ok: number; error: number; refused: number; ms: number[] }>();
+  const out: AuditSummary = { calls: entries.length, ok: 0, error: 0, refused: 0, byTool: [] };
+  for (const e of entries) {
+    out[e.outcome]++;
+    const t = tools.get(e.tool) ?? { calls: 0, ok: 0, error: 0, refused: 0, ms: [] };
+    t.calls++;
+    t[e.outcome]++;
+    t.ms.push(e.ms);
+    tools.set(e.tool, t);
+    if (!out.from || e.at < out.from) out.from = e.at;
+    if (!out.to || e.at > out.to) out.to = e.at;
+  }
+  out.byTool = [...tools.entries()]
+    .map(([tool, t]) => ({ tool, calls: t.calls, ok: t.ok, error: t.error, refused: t.refused, medianMs: median(t.ms) }))
+    .sort((a, b) => b.calls - a.calls || a.tool.localeCompare(b.tool));
+  return out;
+}
+
+function median(xs: number[]): number {
+  const s = [...xs].sort((a, b) => a - b);
+  if (s.length === 0) return 0;
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : Math.round((s[mid - 1] + s[mid]) / 2);
 }

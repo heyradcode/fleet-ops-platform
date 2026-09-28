@@ -1,5 +1,5 @@
 # =============================================================================
-# The board API: GET /board and GET /comms, over the real table
+# The board API: GET /board, GET /comms and GET /audit, over the real table
 # =============================================================================
 # One Lambda (src/api/board-api.ts, entered through api-entry.ts) behind an
 # HTTP API. The board calls it with the Cognito ACCESS token when
@@ -97,7 +97,7 @@ resource "aws_apigatewayv2_integration" "board" {
 # Explicit routes, not $default: a path nobody declared is a 404 from the
 # gateway and never an invocation.
 resource "aws_apigatewayv2_route" "board" {
-  for_each = toset(["GET /board", "GET /comms"])
+  for_each = toset(["GET /board", "GET /comms", "GET /audit"])
 
   api_id             = aws_apigatewayv2_api.board.id
   route_key          = each.value

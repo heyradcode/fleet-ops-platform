@@ -21,6 +21,8 @@ import { seedDemoWorld } from '../api/board-api.ts';
 import { knowledgeBase } from './knowledge-base.ts';
 import { toolByName, toolSpecsFor } from './tools.ts';
 import { canUseTool } from './guardrails.ts';
+import { recordToolCall, type AuditOutcome, type AuditVia } from './audit.ts';
+import { wallNow } from '../platform/clock.ts';
 
 export type ToolProvider = {
   /** Which kind - reported with the answer, so the board can say "tools over MCP". */
@@ -52,26 +54,61 @@ export async function prepareToolWorld(principal: Principal): Promise<void> {
   }
 }
 
+/** What running a tool produced, and how it went - the audit's outcome, decided HERE. */
+export type ToolRun = { text: string; outcome: AuditOutcome };
+
 /**
  * Run one tool as `principal`: the role check, then the tool, with any throw
- * turned into text. The ONE implementation - the in-process provider and the
- * MCP server both call it.
+ * turned into text. The ONE implementation - the in-process provider, the tab
+ * and the MCP server all come through here.
+ *
+ * The outcome is classified at the point that KNOWS: "refused" is the role
+ * check saying no, which a caller holding only the text could not tell apart
+ * from a tool failing - and an audit that files a refusal under "error" hides
+ * the one row an admin reviewing it is looking for.
  */
-export async function runTool(name: string, input: Record<string, unknown>, principal: Principal): Promise<string> {
+export async function runToolAs(name: string, input: Record<string, unknown>, principal: Principal): Promise<ToolRun> {
   const tool = toolByName(name);
-  if (!tool) return 'ERROR: no such tool "' + name + '".';
+  if (!tool) return { text: 'ERROR: no such tool "' + name + '".', outcome: 'refused' };
 
   // Authorisation belongs HERE, not in the prompt and not only in the caller:
   // a viewer cannot page anyone however the model was talked into it.
   const verdict = canUseTool(principal, name);
-  if (!verdict.allowed) return 'ERROR: ' + verdict.reason;
+  if (!verdict.allowed) return { text: 'ERROR: ' + verdict.reason, outcome: 'refused' };
 
   try {
-    return await tool.execute(input, principal);
+    const text = await tool.execute(input, principal);
+    // A tool reports a bad argument ("unknown deviceId") by returning ERROR:
+    // text rather than throwing, so the model can correct itself. Still an error.
+    return { text, outcome: text.startsWith('ERROR:') ? 'error' : 'ok' };
   } catch (err) {
     // Never let a tool exception kill the turn - hand the model the problem.
-    return 'ERROR: ' + (err instanceof Error ? err.message : String(err));
+    return { text: 'ERROR: ' + (err instanceof Error ? err.message : String(err)), outcome: 'error' };
   }
+}
+
+/** `runToolAs`, text only - what the model reads. */
+export async function runTool(name: string, input: Record<string, unknown>, principal: Principal): Promise<string> {
+  return (await runToolAs(name, input, principal)).text;
+}
+
+/**
+ * Run and RECORD. Where a call is audited it goes through here, so the MCP
+ * server and the tab's demonstration trail cannot record different things.
+ * The clock is `wallNow()`, as the audit's is: how long a person waited is a
+ * real duration, whatever the demo's pinned clock says.
+ */
+export async function runAudited(
+  name: string,
+  input: Record<string, unknown>,
+  principal: Principal,
+  via: AuditVia,
+  audit: typeof recordToolCall = recordToolCall,
+): Promise<ToolRun> {
+  const started = wallNow();
+  const run = await runToolAs(name, input, principal);
+  await audit(principal, { tool: name, input, outcome: run.outcome, ms: wallNow() - started, via });
+  return run;
 }
 
 /** The tools in this process, as `principal`. */

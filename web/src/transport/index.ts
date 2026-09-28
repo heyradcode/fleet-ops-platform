@@ -37,8 +37,9 @@ import type { CommsAnomaly } from '../../../src/integrations/comms/anomalies.ts'
  * them over HTTP (src/api/board-api.ts), so the API and every transport share
  * one contract rather than two copies of it.
  */
-export type { BoardSnapshot, CommsSnapshot } from '../../../src/api/board-api.ts';
-import type { BoardSnapshot, CommsSnapshot } from '../../../src/api/board-api.ts';
+export type { AuditSnapshot, BoardSnapshot, CommsSnapshot } from '../../../src/api/board-api.ts';
+import type { AuditSnapshot, BoardSnapshot, CommsSnapshot } from '../../../src/api/board-api.ts';
+export type { AuditEntry } from '../../../src/ai/audit.ts';
 
 /**
  * One frame of the recorded half-hour.
@@ -133,6 +134,14 @@ export type Transport = {
    * "not yours to see" and not offer a view it would have to leave blank.
    */
   loadComms(): Promise<CommsSnapshot | null>;
+
+  /**
+   * The assistant's tool calls, newest first - or null for anyone but an
+   * admin, and the board then offers no audit view. Read from wherever this
+   * transport's store is: DynamoDB over the board API (the MCP server's
+   * rows), the tab's own memory in the tab (a demonstration trail).
+   */
+  loadAudit(): Promise<AuditSnapshot | null>;
 };
 
 export type {

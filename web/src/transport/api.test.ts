@@ -98,3 +98,16 @@ test('a network failure is reported as one', async () => {
   await assert.rejects(down.loadBoard(), (e: unknown) =>
     e instanceof BoardApiError && e.status === undefined && /did not answer/.test(e.message));
 });
+
+test('the audit view: the same over the API as in the tab - and null for an operator, on the wire too', async () => {
+  const lead = await signInAs('lead@netpulse.io');
+  const { recordToolCall } = await import('../../../src/ai/audit.ts');
+  await recordToolCall(lead.principal, { tool: 'searchRunbooks', input: { query: 'link down' }, outcome: 'ok', ms: 3, via: 'tab' });
+  const local = await inProcessTransport.loadAudit();
+  const remote = await api.loadAudit();
+  assert.ok(local && local.entries.length > 0);
+  assert.deepEqual(remote, JSON.parse(JSON.stringify(local)));
+
+  await signInAs('operator@acme-networks.com');
+  assert.equal(await api.loadAudit(), null);
+});
