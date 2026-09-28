@@ -4,11 +4,12 @@
  * is tested without a store, and rebuilding from the same inputs produces
  * byte-identical output (sorted, like everything reported here).
  *
+ * SBC RUNS_ON Device comes from the tenant's `sbcSwitch` table - which
+ * switch each SBC is plugged into, by hostname - and ONLY from it: a hostname
+ * the estate does not have is no edge, never a guess. A guessed edge would
+ * plant a candidate cause that is not there.
+ *
  * What is NOT derived, and why:
- *   - SBC RUNS_ON Device (which network box an SBC sits behind). No source
- *     carries it yet: the SBCs live in the Austin data centre, which is not
- *     a facility and has no site in the estate. Guessing an edge would plant
- *     a candidate cause that is not there; it waits for a real source.
  *   - Queue STAFFED_FROM Facility. The workforce split counts people per
  *     facility and per platform, not per queue.
  *   - Device CIs in Helix. Those arrive with each change and are joined at
@@ -79,6 +80,13 @@ export function deriveGraph(src: GraphSources): Graph {
     }
     for (const [terminal, code] of Object.entries(config.starlink?.terminalFacility ?? {})) {
       edge(node({ type: 'SatelliteTerminal', id: terminal, label: 'Starlink ' + terminal.slice(-8), props: {} }), 'SERVES', facility(code));
+    }
+    // By HOSTNAME - what a CMDB or a network team calls the switch - joined
+    // to the device that carries it. No such device, no edge.
+    const byName = new Map(src.devices.map((d) => [d.name, d.deviceId]));
+    for (const [fqdn, host] of Object.entries(config.sbcSwitch ?? {})) {
+      const deviceId = byName.get(host);
+      if (deviceId) edge(sbc(fqdn), 'RUNS_ON', { type: 'Device', id: deviceId });
     }
   }
 

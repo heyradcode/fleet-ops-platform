@@ -27,9 +27,10 @@ export type NodeType = 'Facility' | 'Device' | 'Sbc' | 'Trunk' | 'SatelliteTermi
  *   Device UPLINKS_TO Device            the topology tree, towards the core
  *   SatelliteTerminal SERVES Facility   a remote building's satellite WAN
  *   Trunk TERMINATES_ON Sbc             a carrier peer's end of an SBC
+ *   Sbc RUNS_ON Device                  the switch an SBC is plugged into
  *   HelixCi IS Sbc | HelixSite IS Facility   Helix's names for our things
  */
-export type Relation = 'LOCATED_AT' | 'UPLINKS_TO' | 'SERVES' | 'TERMINATES_ON' | 'IS';
+export type Relation = 'LOCATED_AT' | 'UPLINKS_TO' | 'SERVES' | 'TERMINATES_ON' | 'RUNS_ON' | 'IS';
 
 export type NodeRef = { type: NodeType; id: string };
 

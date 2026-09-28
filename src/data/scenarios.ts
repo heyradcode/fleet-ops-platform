@@ -294,7 +294,25 @@ export function buildScenarios(estate: Estate): Scenario[] {
   // Only where there IS a Houston - the HHS estate. Acme has none, and its
   // feeds would skip a SolarWinds batch anyway: Acme runs no SolarWinds.
   if (estate.sites.some((s) => s.siteId === 'hou-01')) scenarios.push(wanDegraded(estate));
+  // And only where there IS a data centre with SBCs behind its switches.
+  if (estate.sites.some((s) => s.siteId === 'adc-01')) scenarios.push(sbcPathDegraded(estate));
   return scenarios;
+}
+
+/** SolarWinds interface rows for one device: up, and erroring hard. */
+function erroringPort(estate: Estate, device: Device, ids: { interfaceId: number; nodeId: number }) {
+  const alias = (kind: string) => device.aliases.find((a) => a.kind === kind)?.value ?? '';
+  const port = estate.interfaces.find((i) => i.deviceId === device.deviceId);
+  if (!port) throw new Error('scenario needs an interface on ' + device.name + '. Fix the generator.');
+  return {
+    InterfaceID: ids.interfaceId, NodeID: ids.nodeId,
+    NodeCaption: alias('snmp-sysname'), NodeIPAddress: alias('mgmt-ip'),
+    Name: port.name, OperStatus: 1, AdminStatus: 1,
+    // Up, and erroring: at 14:30, half an hour's total that averages
+    // ~1,300 per five-minute poll against a critical line of 1,000.
+    InErrorsThisHour: 7_900, OutErrorsThisHour: 60,
+    LastSync: '2026-09-08T09:29:40.0000000',
+  };
 }
 
 /**
@@ -311,9 +329,6 @@ export function buildScenarios(estate: Estate): Scenario[] {
  */
 function wanDegraded(estate: Estate): Scenario {
   const wan = pick(estate, 'hou-01', 'wan-edge');
-  const alias = (kind: string) => wan.aliases.find((a) => a.kind === kind)?.value ?? '';
-  const port = estate.interfaces.find((i) => i.deviceId === wan.deviceId);
-  if (!port) throw new Error('scenario needs an interface on ' + wan.name + '. Fix the generator.');
   return {
     id: 'wan-degraded',
     title: 'A WAN edge drops packets, and only the box itself says so',
@@ -325,15 +340,40 @@ function wanDegraded(estate: Estate): Scenario {
     feeds: [{
       controller: 'solarwinds',
       resource: 'interfaces',
-      records: [{
-        InterfaceID: 71001, NodeID: 2101,
-        NodeCaption: alias('snmp-sysname'), NodeIPAddress: alias('mgmt-ip'),
-        Name: port.name, OperStatus: 1, AdminStatus: 1,
-        // Up, and erroring: at 14:30, half an hour's total that averages
-        // ~1,300 per five-minute poll against a critical line of 1,000.
-        InErrorsThisHour: 7_900, OutErrorsThisHour: 60,
-        LastSync: '2026-09-08T09:29:40.0000000',
-      }],
+      records: [erroringPort(estate, wan, { interfaceId: 71001, nodeId: 2101 })],
+    }],
+  };
+}
+
+/**
+ * The switch SBC2 is plugged into drops packets while SBC2 fails calls.
+ *
+ * The eighth situation, and the trunk half of the graph's claim. The comms
+ * half is already planted: most calls through sbc2 fail with 503s, Teams and
+ * Bandwidth agreeing. No building joins them - an SBC is not a facility - so
+ * what joins them is the `sbcSwitch` table: SBC2 RUNS_ON this access switch,
+ * which uplinks to the data centre's core. The switch beside it, SBC1's, is
+ * the same model on the same parent and is NOT on SBC2's path: a fault there
+ * would never be offered as SBC2's cause. Held back, like the WAN edge - one
+ * witness - and a candidate, never evidence.
+ */
+function sbcPathDegraded(estate: Estate): Scenario {
+  // SBC2's switch is the SECOND access switch (`sbcSwitch` in the comms
+  // config names it by hostname). By role and position, never by literal
+  // name: a generator change fails the graph tests loudly instead.
+  const access = pick(estate, 'adc-01', 'access', 1);
+  return {
+    id: 'sbc-path-degraded',
+    title: 'The switch in front of an SBC drops packets, and only the box itself says so',
+    proves:
+      'A failing trunk is not a building, so it is the SBC\'s own path - its ' +
+      'switch, up to the core, out through the WAN edge - that the graph ' +
+      'searches for its candidates. The switch beside it is not on that path.',
+    expect: 'held back on the network board; the top candidate cause on sbc2\'s failing-trunk incident',
+    feeds: [{
+      controller: 'solarwinds',
+      resource: 'interfaces',
+      records: [erroringPort(estate, access, { interfaceId: 71002, nodeId: 2102 })],
     }],
   };
 }

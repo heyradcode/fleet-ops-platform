@@ -1,15 +1,21 @@
 /**
  * Candidate causes, through the real poll and the real rules.
  *
- * The planted pair: poor call quality at Houston Regional (LC=1120), from
+ * The planted pairs: poor call quality at Houston Regional (LC=1120), from
  * Teams and Webex agreeing - and Houston's WAN edge reporting thousands of
  * interface errors an hour over SNMP, one witness, held back. Nothing pages
- * for the second. The graph puts it beside the first, as a candidate.
+ * for the second. The graph puts it beside the first, as a candidate. And
+ * sbc2 failing most of its calls, while the switch it runs on in the data
+ * centre does the same - joined by the SBC's path, not by a building.
  */
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 
 import type { Alarm, Incident, Principal } from '../platform/types.ts';
+import { COMMS_CONFIG } from '../integrations/comms/config.ts';
+import { generateEstate } from '../data/estate.ts';
+import { deriveGraph } from './derive.ts';
+import { writeGraph } from './store.ts';
 import { HHS_DEMO_TENANT } from '../integrations/comms/config.ts';
 import type { CommsIncident } from '../integrations/comms/incidents.ts';
 import { commsSnapshot, tenantScenarios, type CommsSnapshot } from '../api/board-api.ts';
@@ -55,18 +61,30 @@ test('a candidate is never evidence: correlating changes neither the network\'s 
   assert.equal(incidentAt('facility', '1120')?.severity, 'critical', 'the comms incident is as the comms rules left it');
 });
 
-test('"none" says what was searched; trunks and queues say why there is no path', () => {
+test('sbc2 failing calls: the switch it runs on is the top candidate - by the SBC\'s path, not a building', () => {
+  const trunk = incidentAt('trunk', 'sbc2.voice.hhs.texas.example');
+  assert.ok(trunk, 'the planted failing-trunk incident');
+  const c = snap.causes[trunk.incidentId];
+  assert.equal(c.status, 'found');
+  if (c.status !== 'found') return;
+  const top = c.causes[0];
+  assert.equal(top.deviceId, 'dev-acc-adc01-05');
+  assert.equal(top.what, 'Interface errors');
+  assert.equal(top.paged, false, 'one witness: held back, and said so');
+  assert.equal(top.path, 'SBC sbc2.voice.hhs.texas.example -> RUNS_ON -> acc-adc01-05 (access)');
+  // Only the data centre's path; Houston's WAN edge is Houston's candidate.
+  assert.ok(c.causes.every((x) => x.deviceId.includes('adc01')), c.causes.map((x) => x.deviceId).join());
+});
+
+test('"none" says what was searched; queues say why there is no path', () => {
   const lubbock = incidentAt('facility', '3308');
   assert.ok(lubbock);
   const c = snap.causes[lubbock.incidentId];
   assert.equal(c.status, 'none');
   if (c.status === 'none') assert.match(c.searched, /^6 network devices at Lubbock Field Office, 14:15Z to /);
 
-  const trunk = incidentAt('trunk');
   const queue = incidentAt('queue');
-  assert.ok(trunk && queue);
-  assert.equal(snap.causes[trunk.incidentId].status, 'no-path');
-  assert.match((snap.causes[trunk.incidentId] as { reason: string }).reason, /sits behind/);
+  assert.ok(queue);
   assert.equal(snap.causes[queue.incidentId].status, 'no-path');
 });
 
@@ -115,6 +133,73 @@ test('ranked worst first, and an incident that paged lists once - not once per a
   assert.equal(c.causes[0].paged, true);
 });
 
+// --- A trunk's path: up, then out, and never sideways ------------------------
+
+const sbc2Incident = (): CommsIncident => ({ ...incidentAt('trunk', 'sbc2.voice.hhs.texas.example')!, openedAt: OPENED });
+const adcAlarm = (id: string, deviceId: string, severity: Alarm['severity'] = 'warning'): Alarm =>
+  ({ ...alarm(id, deviceId, '2026-09-08T14:29:00.000Z', severity), siteId: 'adc-01' });
+
+test('a trunk\'s path is its switch, up the chain, out through the WAN edge - nearer first, and the sibling never', async () => {
+  const c = await candidateCauses(HHS, sbc2Incident(), {
+    alarms: [
+      adcAlarm('wan', 'dev-wan-adc01-02'),
+      adcAlarm('core', 'dev-cor-adc01-01'),
+      adcAlarm('dist', 'dev-dis-adc01-03'),
+      adcAlarm('switch', 'dev-acc-adc01-05'),
+      // SBC1's switch: the same parent, a worse alarm - and not on sbc2's path.
+      adcAlarm('sibling', 'dev-acc-adc01-04', 'critical'),
+    ],
+    incidents: [], heldBack: [],
+  }, '2026-09-08T14:35:00.000Z');
+  assert.equal(c.status, 'found');
+  if (c.status !== 'found') return;
+  assert.deepEqual(c.causes.map((x) => x.id), ['switch', 'dist', 'core', 'wan'], 'same severity: nearer on the path first');
+  assert.match(c.causes[3].path, /-> UPLINKS_TO -> cor-adc01-01 \(core\) -> out through wan-adc01-02 \(wan-edge\)$/);
+  // Nothing raised on it: "none", naming the path it searched - four devices, not the site's five.
+  const quiet = await candidateCauses(HHS, sbc2Incident(), { alarms: [adcAlarm('sibling', 'dev-acc-adc01-04', 'critical')], incidents: [], heldBack: [] }, '2026-09-08T14:35:00.000Z');
+  assert.equal(quiet.status, 'none');
+  if (quiet.status === 'none') assert.match(quiet.searched, /^4 network devices on the path of sbc2\.voice\.hhs\.texas\.example \(its switch, up to the core, out through the WAN edge\), 14:15Z to 14:35Z$/);
+});
+
+test('a trunk with no path says which link is missing: not an SBC, or an SBC nobody placed', async () => {
+  // An unmapped Bandwidth peer keeps its own name and still pages; it is no SBC.
+  const peer = await candidateCauses(HHS, { ...sbc2Incident(), subject: { kind: 'trunk', id: '540103', name: '540103' } },
+    { alarms: [], incidents: [], heldBack: [] }, OPENED);
+  assert.equal(peer.status, 'no-path');
+  assert.match((peer as { reason: string }).reason, /540103 is not an SBC in the knowledge graph/);
+
+  // A graph built without the sbcSwitch table has the SBC but not its switch.
+  const unplaced = who('correlate-no-switch');
+  const estate = generateEstate(HHS_DEMO_TENANT);
+  await writeGraph(unplaced, deriveGraph({
+    sites: estate.sites, devices: estate.devices, config: { ...COMMS_CONFIG[HHS_DEMO_TENANT], sbcSwitch: undefined },
+  }));
+  const c = await candidateCauses(unplaced, sbc2Incident(), { alarms: [], incidents: [], heldBack: [] }, OPENED);
+  assert.equal(c.status, 'no-path');
+  assert.match((c as { reason: string }).reason, /no source says which network device sbc2\.voice\.hhs\.texas\.example sits behind/);
+});
+
+test('an uplink loop in bad data ends the walk - it does not spin', async () => {
+  const looped = who('correlate-loop');
+  const dev = (id: string) => ({ type: 'Device' as const, id });
+  await writeGraph(looped, {
+    nodes: [
+      { type: 'Sbc', id: 'sbc.x', label: 'sbc.x', props: {} },
+      { ...dev('a'), label: 'a', props: { role: 'access' } },
+      { ...dev('b'), label: 'b', props: { role: 'distribution' } },
+    ],
+    edges: [
+      { from: { type: 'Sbc', id: 'sbc.x' }, rel: 'RUNS_ON', to: dev('a') },
+      { from: dev('a'), rel: 'UPLINKS_TO', to: dev('b') },
+      { from: dev('b'), rel: 'UPLINKS_TO', to: dev('a') },
+    ],
+  });
+  const c = await candidateCauses(looped, { ...sbc2Incident(), subject: { kind: 'trunk', id: 'sbc.x', name: 'sbc.x' } },
+    { alarms: [adcAlarm('on-b', 'b')], incidents: [], heldBack: [] }, '2026-09-08T14:35:00.000Z');
+  assert.equal(c.status, 'found');
+  if (c.status === 'found') assert.deepEqual(c.causes.map((x) => [x.id, x.path]), [['on-b', 'SBC sbc.x -> RUNS_ON -> a (access) -> UPLINKS_TO -> b (distribution)']]);
+});
+
 test('no graph for the tenant: "unknown", never a quiet "none"', async () => {
   const other = who('correlate-no-graph');
   const c = await candidateCauses(other, { ...houstonIncident(), tenantId: other.tenantId }, { alarms: [], incidents: [], heldBack: [] }, OPENED);
@@ -125,7 +210,10 @@ test('the brief the board builds carries the same top candidate, in plain words,
   const { renderBrief } = await import('../reporting/daily-brief.ts');
   const houston = snap.brief.open.find((i) => i.id === incidentAt('facility', '1120')?.incidentId);
   assert.equal(houston?.networkCandidate,
-    'On the building\'s own network: interface errors on its wan edge (wan-hou01-02), reported by the device alone');
+    'On the building\'s own network: interface errors on its WAN edge (wan-hou01-02), reported by the device alone');
+  assert.equal(snap.brief.open.find((i) => i.id === incidentAt('trunk', 'sbc2.voice.hhs.texas.example')?.incidentId)?.networkCandidate,
+    'On the SBC\'s path to the carrier: interface errors on its access switch (acc-adc01-05), reported by the device alone',
+    'a trunk is in no building, and the brief does not say it is');
   assert.equal(snap.brief.open.find((i) => i.id === incidentAt('facility', '3308')?.incidentId)?.networkCandidate, undefined,
     'looked and found nothing: the brief names nothing');
   assert.match(renderBrief(snap.brief, 'text'), /reported by the device alone - a candidate, not a confirmed cause/);

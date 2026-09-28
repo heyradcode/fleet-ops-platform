@@ -46,7 +46,7 @@ test('whatServes: the building\'s network, its satellite WAN, and a people COUNT
   assert.match(out, /^FACILITY 3308 Lubbock Field Office - \d+ people \(a count, never names\)/);
   assert.match(out, /network: 6 devices: .*wan-lbb01-02 \(wan-edge/);
   assert.match(out, /satellite WAN: SatelliteTerminal ut01000000-00000000-00d4e5f6/);
-  assert.match(out, /not "none exist"/, 'an unmapped SBC is said as unmapped');
+  assert.match(out, /SBCs on this network: none runs on a switch here/, 'the SBCs are in the data centre, not Lubbock');
   assert.ok(!out.includes('@'));
   assert.match(await runTool('whatServes', { facility: 'the moon' }, HHS_ADMIN), /^ERROR: .*Known facilities: 0412/);
 });
@@ -56,6 +56,10 @@ test('explainIncident: candidates are called candidates, and a wrong id teaches 
   assert.match(out, /CANDIDATE \(not evidence\) wan-hou01-02 \(wan-edge\): Interface errors, critical, held back - one witness, it paged nobody/);
   assert.match(out, /looked, found nothing: nothing raised on 6 network devices at Lubbock/);
   assert.match(out, /a contact-centre queue is not a place on the network/);
+  // The failing trunk: the switch SBC2 runs on, reached by its own path.
+  assert.match(out, /CANDIDATE \(not evidence\) acc-adc01-05 \(access\): Interface errors, critical, held back/);
+  assert.match(out, /path: SBC sbc2\.voice\.hhs\.texas\.example -> RUNS_ON -> acc-adc01-05 \(access\)/);
+  assert.ok(!out.includes('acc-adc01-04'), 'SBC1\'s switch is beside SBC2\'s, not on its path');
   assert.match(await runTool('explainIncident', { incidentId: 'cinc-nope' }, HHS_ADMIN), /^ERROR: no open comms incident "cinc-nope"\. Open ones: cinc-/);
 });
 
@@ -67,6 +71,8 @@ test('graphNeighbours: depth is capped at 2 whatever is asked, the node count to
   assert.ok(lines.some((l) => /hop 2: Device dis-dal01-0\d .* <- UPLINKS_TO <- Device acc-dal01/.test(l)), 'a hop-2 line says what it hangs off');
   const facility = await runTool('graphNeighbours', { node: 'Houston', relation: 'LOCATED_AT' }, HHS_ADMIN);
   assert.equal(facility.split('\n').filter((l) => l.includes('LOCATED_AT')).length, 11);
+  const sbc = await runTool('graphNeighbours', { node: 'Sbc#sbc2.voice.hhs.texas.example', relation: 'RUNS_ON', depth: 1 }, HHS_ADMIN);
+  assert.match(sbc, /RUNS_ON -> Device acc-adc01-05/);
   assert.match(await runTool('graphNeighbours', { node: 'nothing here' }, HHS_ADMIN), /^ERROR: cannot read a node/);
   assert.match(await runTool('graphNeighbours', { node: 'Device#dev-nope-01' }, HHS_ADMIN), /has no Device#dev-nope-01/);
 });

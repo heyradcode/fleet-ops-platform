@@ -1100,7 +1100,7 @@ async function sectionBrief() {
 // ===========================================================================
 
 async function sectionGraph() {
-  section('13', 'The knowledge graph: the building joins the network to the calls');
+  section('13', 'The knowledge graph: a building, or an SBC\'s switch, joins the network to the calls');
   const lead = verifyToken(signDemoToken({
     sub: 'cognito_hhs_ops', email: 'ops-lead@hhs.texas.example',
     'custom:tenantId': HHS_DEMO_TENANT, 'cognito:groups': ['admin'],
@@ -1112,6 +1112,9 @@ async function sectionGraph() {
   write('   Houston Regional (1120) <- LOCATED_AT <- ' + houston.length + ' network devices' + '\n');
   write('   Lubbock Field Office (3308) <- ' + lubbock.map((n) => n.rel).filter((r, i, a) => a.indexOf(r) === i).join(', ') +
     ' <- ' + lubbock.length + ' nodes ' + dim('(its devices, the satellite terminal that is its WAN, and the Helix site that names it)') + '\n');
+  const sbc2 = await neighbours(lead, { type: 'Sbc', id: 'sbc2.voice.hhs.texas.example' }, { direction: 'out', rel: 'RUNS_ON' });
+  write('   SBC sbc2.voice.hhs.texas.example -> RUNS_ON -> ' + (sbc2.map((n) => n.node.id).join(', ') || 'nothing') +
+    ' ' + dim('(the switch it is plugged into, in the data centre - which is no facility)') + '\n');
 
   const snap = await commsSnapshot(lead);
   if (!snap) {
@@ -1120,7 +1123,7 @@ async function sectionGraph() {
     return;
   }
   note('');
-  note('Beside each open comms incident, what the network rules raised in the same building - CANDIDATES, never evidence:');
+  note('Beside each open comms incident, what the network rules raised in the same building, or on the SBC\'s path - CANDIDATES, never evidence:');
   for (const i of snap.incidents) {
     const c = snap.causes[i.incidentId];
     write('   ' + i.title + '\n');
@@ -1134,7 +1137,7 @@ async function sectionGraph() {
       write('     ' + dim(c.status === 'none' ? 'looked: nothing raised on ' + c.searched : c.reason) + '\n');
     }
   }
-  write('   ' + dim('the WAN edge still pages nobody: the graph promotes nothing, it says where else to look') + '\n');
+  write('   ' + dim('neither switch nor WAN edge pages anybody: the graph promotes nothing, it says where else to look') + '\n');
 }
 
 // ===========================================================================

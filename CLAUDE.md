@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 397 tests, no network. Picks up web/ tests too.
+pnpm test                       # 403 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180 - real Cognito sign-in
 pnpm web:env                    # write web/.env.cognito.local from the Terraform outputs
@@ -336,24 +336,30 @@ one, change the test deliberately rather than making it pass.
   looks like a failure, and that is the row an access review looks for.
 - **The knowledge graph is STRUCTURE, never events and never people.**
   `src/graph/`: what serves what (Device LOCATED_AT Facility, UPLINKS_TO,
-  satellite SERVES, Trunk TERMINATES_ON Sbc, Helix names IS ours). Incidents
+  satellite SERVES, Trunk TERMINATES_ON Sbc, Sbc RUNS_ON Device, Helix names
+  IS ours). Incidents
   and changes stay in their stores and are joined at query time - a graph
   copy would be a second truth to keep in step. There is NO Person type;
   facilities carry a people COUNT. An edge with no real source is NOT
-  invented (Sbc RUNS_ON Device waits for one): a guessed edge plants a
-  candidate cause that is not there. Rebuilt after the poll by `buildGraph`:
+  invented: a guessed edge plants a candidate cause that is not there.
+  Sbc RUNS_ON Device comes ONLY from the tenant's `sbcSwitch` table (SBC
+  FQDN -> switch HOSTNAME); a hostname the estate lacks is no edge. Rebuilt after the poll by `buildGraph`:
   write all, delete what the build did not write, trim the index LAST.
   Reads need TENANT scope until a facility scope exists. The join is
   `Site.facility`: HHS's estate (`estateLayout`) is over its own facilities,
   with Acme's `dal-01` FIRST and `aus-01` second kept intact - the SolarWinds
   fixture resolves by IP (site order), Helix names Dallas devices, and the
   scenarios pick Dallas switches. CANDIDATE CAUSES (`graph/correlate.ts`)
-  walk a comms incident's subject to the building's network and list the
+  walk a comms incident's subject to the network that serves it - a
+  facility's building; a trunk's SBC path: its switch, UP the uplinks, OUT
+  through the WAN edge, never a sibling switch (the recentChanges rule) -
+  and list the
   alarms raised there in [opened - 15 min, now] and the incidents STILL OPEN
   whenever they opened (a resolved one is over) - attached AFTER
   both sets of rules decide, changing none of it (the planted Houston WAN
   alarm stays held back; a test pins it). Four answers, never two: found /
-  none (says what it searched) / no-path (trunk, queue, not in the graph) /
+  none (says what it searched) / no-path (queue, not in the graph, an SBC
+  no table places) /
   unknown (no graph, or unreadable - which costs that incident its
   candidates, never the view). Graph rebuilds write the INDEX first.
   The board computes causes ONCE and hands the same ones to the brief. The
@@ -372,10 +378,14 @@ one, change the test deliberately rather than making it pass.
 All synthetic, all seeded. `src/data/estate.ts` builds 60 devices across 5
 uneven sites (Dallas 16, others 11) in a two-tier topology — core → distribution
 → access → AP, plus a WAN edge. The vendor is per SITE, not per tenant, because
-that is what estates look like after an acquisition.
+that is what estates look like after an acquisition. HHS's estate ends with
+`adc-01`, the Austin Data Center where the SBCs are: LAST so every site above
+keeps its IPs, `wireless: false` so it has no APs, and NO facility - nobody
+works there, and a facility would attach its changes to somebody's calls.
 
-`scenarios.ts` holds six situations (plus a seventh, `wan-degraded`, only
-for an estate with a Houston - HHS's) that each prove one claim and emit
+`scenarios.ts` holds six situations (plus `wan-degraded` and
+`sbc-path-degraded`, only for an estate with a Houston and a data centre -
+HHS's) that each prove one claim and emit
 **vendor-shaped payloads** — the JSON these clouds actually return and POST — so
 they travel the real fetch → normalise → collapse → evaluate → correlate path.
 Devices are selected by role and vendor, never by literal name, so a generator

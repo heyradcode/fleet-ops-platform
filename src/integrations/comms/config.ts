@@ -57,6 +57,12 @@ export const COMMS_CONFIG: Record<string, CommsTenantConfig> = {
       },
     },
     timeZone: 'America/Chicago',
+    // Both SBCs are in the Austin Data Center, each behind its own access
+    // switch - so a problem on one's switch is never a candidate for the other.
+    sbcSwitch: {
+      'sbc1.voice.hhs.texas.example': 'acc-adc01-04',
+      'sbc2.voice.hhs.texas.example': 'acc-adc01-05',
+    },
     starlink: {
       terminalFacility: {
         'ut01000000-00000000-00a1b2c3': '2031',   // El Paso Field Office

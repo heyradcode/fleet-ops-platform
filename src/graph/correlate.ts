@@ -6,8 +6,15 @@
  * it and asks what the network rules raised there, around that time.
  *
  *   facility   Facility <- LOCATED_AT <- Device      (the building's network)
- *   trunk      Sbc -> RUNS_ON -> Device               NOT KNOWN: no source yet
+ *   trunk      Sbc -> RUNS_ON -> switch -> UPLINKS_TO* -> core -> WAN edge
+ *              (the SBC's own path out to the carrier - never a sibling)
  *   queue      -                                     a queue is not a place
+ *
+ * A TRUNK'S PATH IS UP, THEN OUT. Carrier traffic leaves the SBC through its
+ * switch, climbs the uplink chain to the site's core and leaves by the WAN
+ * edge. Those devices can hurt the trunk; the access switch beside the SBC's
+ * own shares a parent with it, not a path - the recentChanges rule, for the
+ * same reason. Nearer on the path ranks higher.
  *
  * CANDIDATES, NEVER EVIDENCE - the Helix rule, and for the same reason. This
  * runs AFTER both sets of rules have decided, reads their decisions, and
@@ -38,6 +45,8 @@ import type { NodeRef } from './model.ts';
 export const CAUSE_WINDOW_BEFORE_MS = 15 * 60_000;
 /** More than this is a list nobody reads; the ranking decides who is on it. */
 export const MAX_CAUSES = 5;
+/** A trunk's uplink walk stops here: a loop in bad data must not walk forever. */
+const MAX_CHAIN = 8;
 
 /** What the network rules decided - tenantScenarios() offline, the same shape deployed. */
 export type NetworkDecisions = { alarms: Alarm[]; incidents: Incident[]; heldBack: Alarm[] };
@@ -69,6 +78,77 @@ export type CandidateCauses =
 const RANK: Record<Severity, number> = { ok: 0, info: 1, warning: 2, critical: 3 };
 const hhmm = (iso: string) => iso.slice(11, 16);
 
+/** The devices a subject can see: hops from the subject, and the path there, device last. */
+type Reach = { devices: Map<string, { hops: number; path: string }>; searched: string };
+type NotReached = Exclude<CandidateCauses, { status: 'found' | 'none' }>;
+
+const named = (label: string, role: unknown) => label + ' (' + String(role ?? 'device') + ')';
+
+async function facilityReach(principal: Principal, id: string, subjectName: string): Promise<Reach | NotReached> {
+  const facilityRef: NodeRef = { type: 'Facility', id };
+  const facility = await graphNode(principal, facilityRef);
+  if (!facility) {
+    // Two different answers. No graph at all is "could not look"; a graph
+    // without this facility - an unmapped satellite terminal, a code the
+    // tenant tables do not name - is "nothing connects it".
+    if (!(await graphBuilt(principal))) {
+      return { status: 'unknown', reason: 'the knowledge graph has not been built for this tenant' };
+    }
+    return { status: 'no-path', reason: subjectName + ' is not a facility in the knowledge graph, so no network is recorded for it' };
+  }
+  // ONE Query: the building's network. Every device is one hop away, and its
+  // name is only fetched if it makes the list (see the ranking below).
+  const located = await neighbours(principal, facilityRef, { direction: 'in', rel: 'LOCATED_AT' });
+  if (located.length === 0) return { status: 'no-path', reason: 'no network devices are recorded at ' + facility.label };
+  const via = facility.label + ' (' + facility.id + ') <- LOCATED_AT <- ';
+  return {
+    devices: new Map(located.map((n) => [n.node.id, { hops: 1, path: via }])),
+    searched: located.length + ' network device' + (located.length === 1 ? '' : 's') + ' at ' + facility.label,
+  };
+}
+
+async function trunkReach(principal: Principal, fqdn: string): Promise<Reach | NotReached> {
+  const sbc: NodeRef = { type: 'Sbc', id: fqdn };
+  if (!(await graphNode(principal, sbc))) {
+    if (!(await graphBuilt(principal))) {
+      return { status: 'unknown', reason: 'the knowledge graph has not been built for this tenant' };
+    }
+    return { status: 'no-path', reason: fqdn + ' is not an SBC in the knowledge graph' };
+  }
+  const plugged = await neighbours(principal, sbc, { direction: 'out', rel: 'RUNS_ON' });
+  if (plugged.length === 0) {
+    return { status: 'no-path', reason: 'no source says which network device ' + fqdn + ' sits behind, so the graph stops at the SBC' };
+  }
+
+  // UP: the switch, then each uplink to the top of the tree.
+  const devices = new Map<string, { hops: number; path: string }>();
+  let via = 'SBC ' + fqdn + ' -> RUNS_ON -> ';
+  let current: NodeRef | undefined = plugged[0].node;
+  let top: { ref: NodeRef; label: string; hops: number; via: string } | undefined;
+  for (let hops = 1; current && hops <= MAX_CHAIN && !devices.has(current.id); hops++) {
+    const node = await graphNode(principal, current);
+    devices.set(current.id, { hops, path: via });
+    top = { ref: current, label: named(node?.label ?? current.id, node?.props.role), hops, via };
+    via = via + top.label + ' -> UPLINKS_TO -> ';
+    current = (await neighbours(principal, current, { direction: 'out', rel: 'UPLINKS_TO' }))[0]?.node;
+  }
+
+  // OUT: the WAN edge that hangs off the top - where carrier traffic leaves.
+  // Only a wan-edge: the top's other children are other branches, not the path.
+  if (top) {
+    for (const child of await neighbours(principal, top.ref, { direction: 'in', rel: 'UPLINKS_TO' })) {
+      const node = await graphNode(principal, child.node);
+      if (node?.props.role === 'wan-edge' && !devices.has(child.node.id)) {
+        devices.set(child.node.id, { hops: top.hops + 1, path: top.via + top.label + ' -> out through ' });
+      }
+    }
+  }
+  return {
+    devices,
+    searched: devices.size + ' network device' + (devices.size === 1 ? '' : 's') + ' on the path of ' + fqdn + ' (its switch, up to the core, out through the WAN edge)',
+  };
+}
+
 export async function candidateCauses(
   principal: Principal,
   incident: CommsIncident,
@@ -79,37 +159,19 @@ export async function candidateCauses(
   if (subject.kind === 'queue') {
     return { status: 'no-path', reason: 'a contact-centre queue is not a place on the network' };
   }
-  if (subject.kind === 'trunk') {
-    return {
-      status: 'no-path',
-      reason: 'no source says which network device ' + subject.id + ' sits behind, so the graph stops at the SBC',
-    };
-  }
+  const reach = subject.kind === 'trunk'
+    ? await trunkReach(principal, subject.id)
+    : await facilityReach(principal, subject.id, subject.name);
+  if ('status' in reach) return reach;
 
-  const facilityRef: NodeRef = { type: 'Facility', id: subject.id };
-  const facility = await graphNode(principal, facilityRef);
-  if (!facility) {
-    // Two different answers. No graph at all is "could not look"; a graph
-    // without this facility - an unmapped satellite terminal, a code the
-    // tenant tables do not name - is "nothing connects it".
-    if (!(await graphBuilt(principal))) {
-      return { status: 'unknown', reason: 'the knowledge graph has not been built for this tenant' };
-    }
-    return { status: 'no-path', reason: subject.name + ' is not a facility in the knowledge graph, so no network is recorded for it' };
-  }
-
-  // ONE Query: the building's network.
-  const located = await neighbours(principal, facilityRef, { direction: 'in', rel: 'LOCATED_AT' });
-  const reached = new Set(located.map((n) => n.node.id));
+  const reached = reach.devices;
   const from = new Date(Date.parse(incident.openedAt) - CAUSE_WINDOW_BEFORE_MS).toISOString();
-  if (reached.size === 0) return { status: 'no-path', reason: 'no network devices are recorded at ' + facility.label };
-  const searched = String(reached.size) + ' network device' + (reached.size === 1 ? '' : 's') +
-    ' at ' + facility.label + ', ' + hhmm(from) + 'Z to ' + hhmm(nowIso) + 'Z';
+  const searched = reach.searched + ', ' + hhmm(from) + 'Z to ' + hhmm(nowIso) + 'Z';
 
   const inWindow = (at: string) => at >= from && at <= nowIso;
   const minutesBefore = (at: string) => Math.round((Date.parse(incident.openedAt) - Date.parse(at)) / 60_000);
 
-  type Hit = Omit<CandidateCause, 'device' | 'role' | 'path'>;
+  type Hit = Omit<CandidateCause, 'device' | 'role' | 'path'> & { hops: number };
   const hits: Hit[] = [];
 
   // A network incident first: it already names its own cause. Its alarms are
@@ -121,9 +183,9 @@ export async function candidateCauses(
     const here = inc.deviceIds.filter((d) => reached.has(d));
     if (here.length === 0) continue;
     for (const a of inc.alarmIds) covered.add(a);
+    const deviceId = inc.rootCauseDeviceId && reached.has(inc.rootCauseDeviceId) ? inc.rootCauseDeviceId : here[0];
     hits.push({
-      kind: 'network-incident', id: inc.incidentId,
-      deviceId: inc.rootCauseDeviceId && reached.has(inc.rootCauseDeviceId) ? inc.rootCauseDeviceId : here[0],
+      kind: 'network-incident', id: inc.incidentId, deviceId, hops: reached.get(deviceId)!.hops,
       what: inc.title, severity: inc.severity, at: inc.openedAt, minutesBefore: minutesBefore(inc.openedAt), paged: true,
     });
   }
@@ -134,7 +196,7 @@ export async function candidateCauses(
   for (const a of alarms.values()) {
     if (covered.has(a.alarmId) || !reached.has(a.deviceId) || !inWindow(a.raisedAt)) continue;
     hits.push({
-      kind: 'network-alarm', id: a.alarmId, deviceId: a.deviceId,
+      kind: 'network-alarm', id: a.alarmId, deviceId: a.deviceId, hops: reached.get(a.deviceId)!.hops,
       what: KIND_LABEL[a.kind] ?? a.kind, severity: a.severity, at: a.raisedAt,
       minutesBefore: minutesBefore(a.raisedAt), paged: !held.has(a.alarmId),
     });
@@ -142,20 +204,22 @@ export async function candidateCauses(
 
   if (hits.length === 0) return { status: 'none', searched };
 
-  // Worst first; then what paged over what did not; then nearest in time.
+  // Worst first; then what paged over what did not; then nearer on the path;
+  // then nearest in time.
   hits.sort((x, y) =>
     RANK[y.severity] - RANK[x.severity]
     || Number(y.paged) - Number(x.paged)
+    || x.hops - y.hops
     || Math.abs(x.minutesBefore) - Math.abs(y.minutesBefore)
     || x.id.localeCompare(y.id));
   const top = hits.slice(0, MAX_CAUSES);
 
   // Names and roles for the few that made the list - one GetItem each.
-  const causes = await Promise.all(top.map(async (h): Promise<CandidateCause> => {
+  const causes = await Promise.all(top.map(async ({ hops: _hops, ...h }): Promise<CandidateCause> => {
     const node = await graphNode(principal, { type: 'Device', id: h.deviceId });
     const device = node?.label ?? h.deviceId;
     const role = String(node?.props.role ?? 'device');
-    return { ...h, device, role, path: facility.label + ' (' + facility.id + ') <- LOCATED_AT <- ' + device + ' (' + role + ')' };
+    return { ...h, device, role, path: reached.get(h.deviceId)!.path + named(device, role) };
   }));
   return { status: 'found', causes };
 }

@@ -58,7 +58,7 @@ export type BriefItem = {
   where?: string;
   /** A Helix change worth checking - always a candidate. */
   candidate?: string;
-  /** The knowledge graph's top candidate on the building's own network - always a candidate. */
+  /** The knowledge graph's top candidate - on the building's network, or on an SBC's path. Always a candidate. */
   networkCandidate?: string;
   /** Already on the service desk's radar. */
   ticket?: string;
@@ -170,15 +170,22 @@ function commsItem(i: CommsIncident, at: number, peopleAt: (code: string) => str
   };
 }
 
+const PLAIN_ROLE: Record<string, string> = {
+  access: 'access switch', distribution: 'distribution switch', core: 'core switch', 'wan-edge': 'WAN edge',
+};
+
 /**
  * The top network candidate, in words for someone who does not read device
- * names for a living: what, where in the building, and whether it paged -
- * "reported by the device alone" is the plain way to say held back.
+ * names for a living: what, where, and whether it paged - "reported by the
+ * device alone" is the plain way to say held back. WHERE depends on what
+ * failed: a building's candidates are on its own network; a trunk's are on
+ * its SBC's path to the carrier, which is in no building at all.
  */
-function networkCandidateFor(c: CandidateCauses | undefined): string | undefined {
+function networkCandidateFor(c: CandidateCauses | undefined, subject: CommsIncident['subject']['kind']): string | undefined {
   if (c?.status !== 'found') return undefined;
   const top = c.causes[0];
-  return 'On the building\'s own network: ' + top.what.toLowerCase() + ' on its ' + top.role.replace(/-/g, ' ') +
+  const where = subject === 'trunk' ? 'On the SBC\'s path to the carrier: ' : 'On the building\'s own network: ';
+  return where + top.what.toLowerCase() + ' on its ' + (PLAIN_ROLE[top.role] ?? top.role.replace(/-/g, ' ')) +
     ' (' + top.device + ')' + (top.paged ? '' : ', reported by the device alone');
 }
 
@@ -280,7 +287,7 @@ export async function buildDailyBrief(
     return a ? 'Normally ' + normalText(a) + ' for ' + a.when + ' (' + a.normal.samples + ' weeks of history)' : undefined;
   };
   const commsOpen = openComms.map((i) => ({
-    ...commsItem(i, at, peopleAt), normally: normallyFor(i), networkCandidate: networkCandidateFor(opts.causes?.[i.incidentId]),
+    ...commsItem(i, at, peopleAt), normally: normallyFor(i), networkCandidate: networkCandidateFor(opts.causes?.[i.incidentId], i.subject.kind),
   }));
   const openSubjects = new Set(openComms.map((i) => subjectKey(i.subject)));
   const unusual = anomalies

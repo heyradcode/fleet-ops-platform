@@ -153,4 +153,13 @@ export type CommsTenantConfig = {
    * signals under its own id, and is reported so someone maps it.
    */
   starlink?: { terminalFacility: Record<string, string> };
+  /**
+   * Which network switch each SBC is plugged into: SBC FQDN -> the switch's
+   * HOSTNAME. What makes a failing trunk's candidate causes reachable - the
+   * graph walks from the SBC to this switch, up to the core and out through
+   * the WAN edge. In production it comes from the Helix CMDB's relationships
+   * or the network team; CONFIRM it against the live CMDB, like every table
+   * here. A hostname the estate does not have is simply no edge.
+   */
+  sbcSwitch?: Record<string, string>;
 };

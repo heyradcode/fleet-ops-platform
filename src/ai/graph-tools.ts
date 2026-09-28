@@ -2,7 +2,8 @@
  * The agent's tools on the knowledge graph (docs/12, Part 3, phase 4).
  *
  *   whatServes        a facility's network, WAN link and names in other systems
- *   explainIncident   candidate causes for an open comms incident, with paths
+ *   explainIncident   candidate causes for an open comms incident, with paths:
+ *                     a facility's building, a trunk's SBC path
  *   graphNeighbours   bounded exploration from one node - depth <= 2
  *
  * A FIXED CATALOGUE WITH TYPED ARGUMENTS, the SPL rule. The agent never
@@ -34,7 +35,7 @@ import { causesForIncidents, type CandidateCauses } from '../graph/correlate.ts'
 import { refKey, type NodeRef, type NodeType, type Relation } from '../graph/model.ts';
 
 const NODE_TYPES: NodeType[] = ['Facility', 'Device', 'Sbc', 'Trunk', 'SatelliteTerminal', 'HelixCi', 'HelixSite'];
-const RELATIONS: Relation[] = ['LOCATED_AT', 'UPLINKS_TO', 'SERVES', 'TERMINATES_ON', 'IS'];
+const RELATIONS: Relation[] = ['LOCATED_AT', 'UPLINKS_TO', 'SERVES', 'TERMINATES_ON', 'RUNS_ON', 'IS'];
 /** Depth 2 reaches "this building's devices, and what they uplink to". Deeper is a walk, not a question. */
 export const MAX_DEPTH = 2;
 /** A cap on what one call returns, whatever the depth. */
@@ -119,12 +120,17 @@ export const GRAPH_TOOLS: Tool[] = [
       }));
       const wan = around.filter((n) => n.rel === 'SERVES').map((n) => n.node.type + ' ' + n.node.id);
       const names = around.filter((n) => n.rel === 'IS').map((n) => n.node.type + ' "' + n.node.id + '"');
+      // An SBC is in a building only through the switch it runs on.
+      const sbcs = (await Promise.all(around.filter((n) => n.rel === 'LOCATED_AT')
+        .map((n) => neighbours(principal, n.node, { direction: 'in', rel: 'RUNS_ON' }))))
+        .flat().map((n) => 'Sbc ' + n.node.id).sort();
       return [
         'FACILITY ' + code + ' ' + facility.label + (facility.props.people !== undefined ? ' - ' + String(facility.props.people) + ' people (a count, never names)' : ''),
         'network: ' + (devices.length ? devices.length + ' devices: ' + devices.join('; ') : 'no network devices recorded here'),
         'satellite WAN: ' + (wan.join('; ') || 'none recorded'),
         'known elsewhere as: ' + (names.join('; ') || 'nothing mapped'),
-        'SBCs: no source maps an SBC to a building yet, so none are listed - not "none exist".',
+        'SBCs on this network: ' + (sbcs.join('; ') ||
+          'none runs on a switch here (a trunk\'s own path is what explainIncident follows)'),
       ].join('\n');
     },
   },
@@ -134,8 +140,8 @@ export const GRAPH_TOOLS: Tool[] = [
       name: 'explainIncident',
       description:
         'Candidate causes for an open voice or contact-centre incident, from the knowledge graph: ' +
-        'what the network rules raised in the same building around the time it opened, with the ' +
-        'path that links them. CANDIDATES, not evidence - say so when you use them. Give an ' +
+        'what the network rules raised around the time it opened - in the same building for a ' +
+        'facility, on the SBC\'s own path to the carrier for a trunk - with the path that links them. CANDIDATES, not evidence - say so when you use them. Give an ' +
         'incidentId from listCommsIncidents, or none to explain every open incident.',
       input_schema: {
         type: 'object',

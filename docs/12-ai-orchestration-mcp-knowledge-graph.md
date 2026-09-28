@@ -590,7 +590,7 @@ correlate(incident):
   reach  = the network nodes that SERVE it:
              Facility ← LOCATED_AT ← Device        (the building's own network)
              Facility ← SERVES ← SatelliteTerminal (its WAN link)
-             Sbc → RUNS_ON → Device → UPLINKS_TO* → …   (UP the chain only)
+             Sbc → RUNS_ON → Device → UPLINKS_TO* → core → WAN edge   (up, then out)
   window = [incident opened − 15 min, now]
   candidates = incidents / alarms AFFECTING any reached node inside the window
              + changes TOUCHING any reached CI inside the window
@@ -676,13 +676,17 @@ cities.
 | `derive.ts` | `deriveGraph(sources)`: a **pure** function of the estate, the tenant's tables and the per-facility people counts, sorted so the same sources give byte-identical output. |
 | `store.ts` | `writeGraph`, `buildGraph`, `graphNode`, `neighbours`: the adjacency list above, every edge stored both ways, one Query per question. |
 
-What it holds for HHS: 80 nodes and 126 edges.
-- Every device `LOCATED_AT` its facility, plus the uplink tree.
+What it holds for HHS: 85 nodes and 132 edges.
+- Every device in a building `LOCATED_AT` its facility, plus the uplink
+  tree. The Austin Data Center's five devices are in the tree but located
+  nowhere: nobody works there, so it isn't a facility.
 - Both Starlink terminals `SERVES` their facility; the mobile van isn't in
   the table, so it gets no edge.
 - The Bandwidth peers `TERMINATES_ON` their SBC; the legacy PBX peer has no
   SBC, so it gets no edge.
 - Helix's CI and site names `IS` our SBCs and facilities.
+- Each SBC `RUNS_ON` the data-centre access switch it's plugged into, from
+  the tenant's `sbcSwitch` table (below).
 
 It's rebuilt by `pnpm seed:aws` (and therefore by `pnpm mcp`) after the
 poll. A rebuild is idempotent, and stale items are found through an index
@@ -699,10 +703,14 @@ exist yet.
 - **Incidents and changes are not graph nodes.** They stay in their own
   stores, and phase 3 joins them at query time. A second, graph-shaped copy
   of every incident would be a consistency bug waiting for its day.
-- **`Sbc RUNS_ON Device` is not built.** The SBCs sit in the Austin data
-  centre, which isn't a facility and has no site; an invented edge would
-  plant a candidate cause that isn't there. It waits for a real source,
-  such as the Helix CMDB's relationships or a tenant table.
+- **`Sbc RUNS_ON Device` comes from a tenant table, and only from it.**
+  `sbcSwitch` in the comms config maps each SBC's FQDN to the **hostname**
+  of its switch: what a CMDB or a network team calls the box. A hostname
+  the estate doesn't have is no edge, never a guess, because an invented
+  edge would plant a candidate cause that isn't there. The HHS values are
+  demo values: **confirm them against the live CMDB**, as with every table
+  in that config. In production the Helix CMDB's relationships could fill
+  the same table.
 - **`Queue STAFFED_FROM Facility` is not built.** The workforce split counts
   people per facility and platform, not per queue.
 - **Device CIs in Helix** are still joined at query time through the
@@ -714,23 +722,29 @@ exist yet.
 `src/graph/correlate.ts` starts from a comms incident's subject and walks to
 the network that serves it:
 - **a facility:** its devices (`Facility ← LOCATED_AT ← Device`), one Query;
-- **a trunk:** would follow `Sbc RUNS_ON Device`, which has no source yet;
+- **a trunk:** its SBC's own path to the carrier. That's the switch it
+  `RUNS_ON`, then `UPLINKS_TO` up to the core (at most 8 hops, so a loop
+  in bad data ends), then **out** through the WAN edge that hangs off the
+  core. **Never sideways:** SBC1's switch shares a parent with SBC2's, not
+  a path, so a fault on it is never offered as SBC2's cause. That's the
+  `recentChanges` rule, for the same reason;
 - **a queue:** isn't a place on the network.
 
 On the devices it reaches, it lists the network alarms raised within
 **[opened − 15 min, now]**, and the network incidents that are **still
 open**, whenever they opened. An outage that began an hour ago and is still
 going is the likeliest cause there is; a resolved one is over. It ranks them worst first,
-then what paged over what didn't, then nearest in time, and keeps at most
-five. A network incident is listed once, not once per alarm inside it.
+then what paged over what didn't, then **nearer on the path** (a trunk's
+switch before its core), then nearest in time, and keeps at most five. A network incident is listed once, not once per alarm inside it.
 
 It gives **four answers**, because "found nothing" must never look like
 "couldn't look":
 - `found`: the candidates, each with its path;
 - `none`: it looked, and says what it searched ("6 network devices at
   Lubbock Field Office, 14:15Z to 14:30Z");
-- `no-path`: it says why: a trunk, a queue, a facility with no network
-  recorded, or a subject that isn't in the graph (the unmapped Starlink van);
+- `no-path`: it says why: a queue, a facility with no network recorded, a
+  subject that isn't in the graph (the unmapped Starlink van, a Bandwidth
+  peer with no SBC), or an SBC that no table places on the network;
 - `unknown`: the graph isn't built, or couldn't be read. A failed read costs
   that incident its candidates, never the comms view or the brief.
 
@@ -757,6 +771,23 @@ Call quality degraded at LC=1120
      path: Houston Regional (1120) <- LOCATED_AT <- wan-hou01-02 (wan-edge)
 ```
 
+**The trunk pair.** The eighth scenario, `sbc-path-degraded`, exists only
+where the estate has the data centre. The switch SBC2 is plugged into
+reports the same kind of interface errors, while SBC2 fails most of its
+calls (Teams and Bandwidth agreeing). No building joins those two, because
+an SBC isn't in a facility. The SBC's path does:
+
+```
+SBC sbc2.voice.hhs.texas.example is failing calls
+  => acc-adc01-05 (access): interface errors, critical, held back - one witness
+     path: SBC sbc2.voice.hhs.texas.example -> RUNS_ON -> acc-adc01-05 (access)
+```
+
+The data centre (`adc-01`) is the **last** site in the HHS layout, so every
+site above it keeps its addresses. It has no access points: a
+`wireless: false` site makes every device below distribution an access
+switch.
+
 **Where it shows:**
 - **Comms board:** under each incident, in the Helix colour, never amber.
 - **`CommsSnapshot.causes`:** served the same in the tab and by `GET /comms`.
@@ -764,9 +795,10 @@ Call quality degraded at LC=1120
 
 - **The brief the board builds:** the top candidate, in plain words, on
   the incident's line ("On the building's own network: interface errors on
-  its wan edge (wan-hou01-02), reported by the device alone - a candidate,
-  not a confirmed cause"). The board computes the causes once and hands the
-  same ones to the brief, so the two can't disagree.
+  its WAN edge (wan-hou01-02), reported by the device alone - a candidate,
+  not a confirmed cause"). A trunk's says "On the SBC's path to the
+  carrier", because it's in no building. The board computes the causes
+  once and hands the same ones to the brief, so the two can't disagree.
 
 **Not yet:**
 - **The scheduled brief** (`pnpm start --only=brief`, and in production an
@@ -785,8 +817,8 @@ MCP server they are scoped and audited with no extra code.
 
 | Tool | Takes | Returns |
 |---|---|---|
-| `whatServes` | a facility code **or name** ("Houston") | the building's devices, its satellite WAN, Helix's names for it, and a people **count** |
-| `explainIncident` | an incident id, or nothing for every open one | candidate causes with paths, each line saying "CANDIDATE (not evidence)" and whether it paged anyone |
+| `whatServes` | a facility code **or name** ("Houston") | the building's devices, its satellite WAN, any SBC running on its switches, Helix's names for it, and a people **count** |
+| `explainIncident` | an incident id, or nothing for every open one | candidate causes with paths (a facility's building, a trunk's SBC path), each line saying "CANDIDATE (not evidence)" and whether it paged anyone |
 | `graphNeighbours` | `Type#id` or a facility name, an optional relation, a depth | at most 2 hops and 40 nodes; every line past the first hop names the node it hangs off |
 
 Details that matter:
@@ -796,9 +828,10 @@ Details that matter:
 - **Names as well as codes.** A model is told "Houston", not "1120". The
   longest name wins, so "North Austin" isn't Austin, and a code the tenant
   doesn't have isn't a facility.
-- **Unmapped is said as unmapped.** `whatServes` says no source maps SBCs to
-  buildings ("not 'none exist'"), and a wrong incident id returns the open
-  ones, so the model can correct itself.
+- **Absent is said precisely.** When no SBC runs on a building's switches,
+  `whatServes` says so and points at `explainIncident` for a trunk's own
+  path. A wrong incident id returns the open ones, so the model can correct
+  itself.
 
 With these, an HHS admin is offered 13 read tools. The agent's step budget
 grows with the tools offered, so the offline model still reaches an answer.
@@ -812,7 +845,7 @@ grows with the tools offered, so the offline model still reaches an answer.
 | **The facility source** on the network side: a SolarWinds custom property, or a tenant table | It depends on what HHS's Orion actually carries. |
 | **Audit retention**, and whether prompts and responses are logged | It's personal data with its own retention and access obligations. |
 | **Token passthrough or on-behalf-of exchange** at the Gateway | Passthrough is built and keeps the user's identity end to end. AWS recommends on-behalf-of exchange for production, which needs an identity provider that supports it (Cognito doesn't). That changes the identity architecture. |
-| **Where the SBCs sit on the network** (`Sbc RUNS_ON Device`) | No source carries it: the Helix CMDB's relationships or a tenant table would. Without it, candidate causes stop at the SBC. |
+| **Where the SBCs sit on the network** (`sbcSwitch`, which becomes `Sbc RUNS_ON Device`) | The table is built and the demo values are placeholders. The real switch hostnames come from HHS's CMDB or network team. A wrong one makes the wrong switch a candidate, and a missing one stops candidate causes at the SBC. |
 | **One agent with tools, or five purpose-built agents** | The deck names five; the tool-based agent already covers the ground. Separate agents mean separate prompts, budgets and costs. |
 
 ## Where to look

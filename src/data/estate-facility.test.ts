@@ -21,7 +21,7 @@ const HOUSTON_OPERATOR = who(HHS_DEMO_TENANT, ['operator'], { kind: 'site', site
 
 beforeEach(() => setRandom(seededRandom()));
 
-test('every HHS site is a facility the comms config knows, and every facility has exactly one site', () => {
+test('every HHS site where people work is a facility the comms config knows, and every facility has exactly one site', () => {
   const hhs = generateEstate(HHS_DEMO_TENANT);
   const known = Object.keys(COMMS_CONFIG[HHS_DEMO_TENANT].facilityNames ?? {}).sort();
   const sited = hhs.sites.map((s) => s.facility).filter((f): f is string => !!f).sort();
@@ -29,7 +29,19 @@ test('every HHS site is a facility the comms config knows, and every facility ha
   // to one side only shows up here as a mismatch, not as a quiet gap.
   assert.deepEqual(sited, known);
   assert.equal(new Set(sited).size, sited.length, 'one site per facility');
-  assert.ok(hhs.sites.every((s) => s.facility), 'no HHS site without a facility');
+  // The one exception is the data centre: nobody works there, and a facility
+  // for it would attach its changes to somebody's call quality.
+  assert.deepEqual(hhs.sites.filter((s) => !s.facility).map((s) => [s.siteId, s.headcount]), [['adc-01', 0]]);
+});
+
+test('the data centre is where the SBCs\' switches are: two access switches, no access points, last in the layout', () => {
+  const hhs = generateEstate(HHS_DEMO_TENANT);
+  assert.equal(hhs.sites.at(-1)?.siteId, 'adc-01', 'LAST, so every site above keeps its addresses');
+  const adc = hhs.devices.filter((d) => d.siteId === 'adc-01');
+  assert.deepEqual(adc.map((d) => d.role).sort(), ['access', 'access', 'core', 'distribution', 'wan-edge']);
+  // The comms config names them by hostname; they must exist, or the graph has no RUNS_ON.
+  const names = new Set(hhs.devices.map((d) => d.name));
+  for (const host of Object.values(COMMS_CONFIG[HHS_DEMO_TENANT].sbcSwitch ?? {})) assert.ok(names.has(host), host);
 });
 
 test('Acme has no facilities - no join where the customer has no such scheme', () => {

@@ -33,7 +33,9 @@ test('every HHS device is LOCATED_AT its building\'s facility, and the tree is t
   const estate = generateEstate(HHS_DEMO_TENANT);
   const g = hhsGraph();
   const located = g.edges.filter((e) => e.rel === 'LOCATED_AT');
-  assert.equal(located.length, estate.devices.length, 'every device, once');
+  const inBuildings = estate.devices.filter((d) => d.siteId !== 'adc-01');
+  assert.equal(located.length, inBuildings.length, 'every device in a facility, once');
+  assert.ok(!located.some((e) => e.from.id.includes('adc01')), 'the data centre is not a facility, so nothing there is LOCATED_AT one');
   const houston = located.filter((e) => e.to.id === '1120').map((e) => e.from.id);
   assert.deepEqual(houston.sort(), estate.devices.filter((d) => d.siteId === 'hou-01').map((d) => d.deviceId).sort());
   const uplinks = g.edges.filter((e) => e.rel === 'UPLINKS_TO');
@@ -48,10 +50,25 @@ test('the comms tables become edges: satellite WAN, trunks to SBCs, Helix names 
   assert.ok(has('Trunk#540101', 'TERMINATES_ON', 'Sbc#sbc1.voice.hhs.texas.example'));
   assert.ok(has('HelixCi#SBC2-TEAMS-DR', 'IS', 'Sbc#sbc2.voice.hhs.texas.example'));
   assert.ok(has('HelixSite#Houston Regional Office', 'IS', 'Facility#1120'));
+  // Which switch each SBC is plugged into, from the tenant's table.
+  assert.ok(has('Sbc#sbc1.voice.hhs.texas.example', 'RUNS_ON', 'Device#dev-acc-adc01-04'));
+  assert.ok(has('Sbc#sbc2.voice.hhs.texas.example', 'RUNS_ON', 'Device#dev-acc-adc01-05'));
   // The tables' deliberate absences stay absent: no invented edges.
   assert.ok(!g.nodes.some((n) => n.id === '540103'), 'the legacy PBX peer has no SBC to terminate on');
   assert.ok(!g.nodes.some((n) => n.id === 'ut01000000-00000000-00ffee11'), 'the mobile van serves no facility');
   assert.ok(!g.edges.some((e) => e.rel === 'UPLINKS_TO' && e.to.type !== 'Device'));
+});
+
+test('RUNS_ON only from the table, only to a switch the estate has: a hostname it lacks is no edge, never a guess', () => {
+  const estate = generateEstate(HHS_DEMO_TENANT);
+  const config = COMMS_CONFIG[HHS_DEMO_TENANT];
+  const g = deriveGraph({
+    sites: estate.sites, devices: estate.devices,
+    config: { ...config, sbcSwitch: { 'sbc1.voice.hhs.texas.example': 'acc-nowhere-99' } },
+  });
+  assert.ok(!g.edges.some((e) => e.rel === 'RUNS_ON'));
+  const none = deriveGraph({ sites: estate.sites, devices: estate.devices, config: { ...config, sbcSwitch: undefined } });
+  assert.ok(!none.edges.some((e) => e.rel === 'RUNS_ON'), 'no table, no edges');
 });
 
 test('NO PEOPLE: no person node can exist, and a facility carries a count, never a name', () => {

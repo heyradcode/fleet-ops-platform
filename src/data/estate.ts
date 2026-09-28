@@ -70,6 +70,12 @@ type SiteLayout = {
   vendor: VendorId;
   platform: PlatformId;
   devices: number;
+  /**
+   * false: every device below the distribution layer is an access SWITCH.
+   * A data centre has no one to connect wirelessly, and access points there
+   * would be devices the estate invented.
+   */
+  wireless?: boolean;
 };
 
 const ACME_LAYOUT: SiteLayout[] = SITES.map((site) => ({
@@ -94,7 +100,8 @@ const ACME_LAYOUT: SiteLayout[] = SITES.map((site) => ({
  * An Aruba site stays too (El Paso): the scenarios need an Aruba switch.
  *
  * Uneven on purpose, like Acme's - and Lubbock is small and remote, which is
- * why its WAN is a satellite terminal in the Starlink table.
+ * why its WAN is a satellite terminal in the Starlink table. The Austin Data
+ * Center, last, is where the SBCs live: a site with no facility.
  */
 const HHS_LAYOUT: SiteLayout[] = [
   { site: { siteId: 'dal-01', name: 'Dallas Regional Office', region: 'us-south', lon: -96.7970, lat: 32.7767, headcount: 900, facility: '1455' },
@@ -109,6 +116,14 @@ const HHS_LAYOUT: SiteLayout[] = [
     vendor: 'aruba', platform: 'aos-cx', devices: 7 },
   { site: { siteId: 'lbb-01', name: 'Lubbock Field Office', region: 'us-south', lon: -101.8552, lat: 33.5779, headcount: 90, facility: '3308' },
     vendor: 'aruba', platform: 'aos-cx', devices: 6 },
+  // The data centre that houses the SBCs. NO FACILITY - nobody works there,
+  // and mapping it to one would attach its changes to that facility's call
+  // quality (the Helix table leaves it out for the same reason). Two access
+  // switches, one SBC behind each (`sbcSwitch` in the comms config), so the
+  // "up the chain, never sideways" rule has a sibling to leave out. LAST:
+  // IPs follow site order, and every site above keeps its addresses.
+  { site: { siteId: 'adc-01', name: 'Austin Data Center', region: 'us-south', lon: -97.7004, lat: 30.3886, headcount: 0 },
+    vendor: 'cisco', platform: 'nx-os', devices: 5, wireless: false },
 ];
 
 /** The layout for a tenant. Every tenant but HHS gets Acme's, as before. */
@@ -185,7 +200,7 @@ export function generateEstate(tenantId: TenantId = DEMO_TENANT): Estate {
   let octet = 10;
 
   for (const [i, site] of sites.entries()) {
-    const { vendor, platform, devices: total } = layout[i];
+    const { vendor, platform, devices: total, wireless = true } = layout[i];
     const short = site.siteId.replace('-', '');
 
     const mk = (role: DeviceRole, n: number, uplinkDeviceId?: string): Device => {
@@ -238,7 +253,7 @@ export function generateEstate(tenantId: TenantId = DEMO_TENANT): Estate {
     // Access switches, spread across the distribution layer, then access points
     // hanging off those switches. The spread is what makes a single
     // distribution failure explain a specific subset rather than the whole site.
-    const accessCount = Math.max(1, Math.floor(remaining / 2));
+    const accessCount = wireless ? Math.max(1, Math.floor(remaining / 2)) : remaining;
     const accesses: Device[] = [];
     for (let a = 0; a < accessCount; a++) {
       const parent = dists[a % dists.length];
