@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 352 tests, no network. Picks up web/ tests too.
+pnpm test                       # 358 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180 - real Cognito sign-in
 pnpm web:env                    # write web/.env.cognito.local from the Terraform outputs
@@ -37,7 +37,7 @@ pnpm seed:aws --dry-run         # fill the REAL table (needs TABLE_NAME); --dry-
 pnpm verify                     # all five checks, in order
 ```
 
-`--only=` takes: `auth ingest scenarios data events graphql rest geo ai comms solarwinds brief`.
+`--only=` takes: `auth ingest scenarios data events graphql rest geo ai comms solarwinds brief graph`.
 Note `pnpm start --only=x` needs no `--` separator; npm did.
 
 `pnpm verify` runs typecheck, the promise check, tests, the demo and the web build in that order.
@@ -152,8 +152,10 @@ one, change the test deliberately rather than making it pass.
 - **SolarWinds is a poller WE run, so it observes from two planes.** Its ICMP
   node status is EXTERNAL - the same plane as our probe, so a tenant running
   both has one external witness, not two. The SNMP counters it relays (CPU,
-  interfaces) are DEVICE. Its ALERTS are never ingested: Orion's conclusions
-  from the same polls would be one witness twice. Only Up/Down/Unreachable
+  interfaces, their hourly ERROR counters) are DEVICE - errors only on an
+  up link and only when measured: absent is "not polled", never zero. Its
+  ALERTS are never ingested: Orion's conclusions from the same polls would
+  be one witness twice. Only Up/Down/Unreachable
   are measurements - Warning/Critical are Orion threshold opinions, Unmanaged
   is muted, CPU -2 is "unknown", an admin-down port is a decision. SWQL comes
   from a fixed catalogue with values BOUND as declared `@parameters`; no time
@@ -333,7 +335,12 @@ one, change the test deliberately rather than making it pass.
   `Site.facility`: HHS's estate (`estateLayout`) is over its own facilities,
   with Acme's `dal-01` FIRST and `aus-01` second kept intact - the SolarWinds
   fixture resolves by IP (site order), Helix names Dallas devices, and the
-  scenarios pick Dallas switches.
+  scenarios pick Dallas switches. CANDIDATE CAUSES (`graph/correlate.ts`)
+  walk a comms incident's subject to the building's network and list what
+  the network rules raised there in [opened - 15 min, now] - attached AFTER
+  both sets of rules decide, changing none of it (the planted Houston WAN
+  alarm stays held back; a test pins it). Four answers, never two: found /
+  none (says what it searched) / no-path (trunk, queue) / unknown (no graph).
 - **Scope comes from the token, not the request.** Repository and resolver
   functions take a `Principal` and derive keys from it. An operator with no site
   claim gets *device* scope, not the whole estate — widening access is a
@@ -346,7 +353,8 @@ uneven sites (Dallas 16, others 11) in a two-tier topology — core → distribu
 → access → AP, plus a WAN edge. The vendor is per SITE, not per tenant, because
 that is what estates look like after an acquisition.
 
-`scenarios.ts` holds six situations that each prove one claim and emit
+`scenarios.ts` holds six situations (plus a seventh, `wan-degraded`, only
+for an estate with a Houston - HHS's) that each prove one claim and emit
 **vendor-shaped payloads** — the JSON these clouds actually return and POST — so
 they travel the real fetch → normalise → collapse → evaluate → correlate path.
 Devices are selected by role and vendor, never by literal name, so a generator

@@ -24,7 +24,7 @@ import { TraceStep } from './DevicePanel.tsx';
 import type {
   AgentResult, AgentTrace, Brief, CommsAlarm, CommsAnomaly, CommsIncident, IntegrationHealth, PhoneInventory, WorkforceSummary,
 } from './transport/index.ts';
-import type { CommsSnapshot } from './transport/index.ts';
+import type { CandidateCauses, CommsSnapshot } from './transport/index.ts';
 
 const PLATFORMS = ['teams', 'genesys', 'webex'] as const;
 
@@ -49,7 +49,7 @@ export function CommsBoard({ snapshot }: { snapshot: CommsSnapshot }) {
           <span className="mono">{snapshot.incidents.length} · {snapshot.heldBack.length} held</span>
         </div>
         <div className="roster-list">
-          {snapshot.incidents.map((i) => <IncidentRow key={i.incidentId} incident={i} />)}
+          {snapshot.incidents.map((i) => <IncidentRow key={i.incidentId} incident={i} causes={snapshot.causes[i.incidentId]} />)}
           {snapshot.heldBack.map((a) => <HeldRow key={a.alarmId} alarm={a} />)}
           {snapshot.anomalies
             .filter((a) => !snapshot.incidents.some((i) => i.subject.kind === a.subject.kind && i.subject.id === a.subject.id))
@@ -79,7 +79,7 @@ export function CommsBoard({ snapshot }: { snapshot: CommsSnapshot }) {
 
 /* -------------------------------------------------------------------------- */
 
-function IncidentRow({ incident }: { incident: CommsIncident }) {
+function IncidentRow({ incident, causes }: { incident: CommsIncident; causes?: CandidateCauses }) {
   return (
     <div className="comms-incident">
       <div className="exception">
@@ -113,10 +113,38 @@ function IncidentRow({ incident }: { incident: CommsIncident }) {
         {incident.context && incident.context.status !== 'ok' && (
           <li className="is-context-note">{incident.context.note}</li>
         )}
+        {causes && <Causes causes={causes} />}
         {incident.evidence.map((e) => <li key={e}>{e}</li>)}
       </ul>
     </div>
   );
+}
+
+/**
+ * What the knowledge graph puts beside an incident: the network in the same
+ * building, around that time. Cool, never amber - a candidate is a place to
+ * look, not a finding - and "held back" says out loud that the network rules
+ * did not think it worth a page on its own. The other three answers are said
+ * as themselves: "looked, nothing" is not "could not look".
+ */
+function Causes({ causes }: { causes: CandidateCauses }) {
+  if (causes.status === 'none') return <li className="is-cause-note">knowledge graph: nothing raised on {causes.searched}</li>;
+  if (causes.status !== 'found') return <li className="is-cause-note">knowledge graph: {causes.reason}</li>;
+  return (
+    <>
+      {causes.causes.map((c) => (
+        <li key={c.id} className="is-cause" title={'path: ' + c.path}>
+          {c.device} ({c.role}): {c.what.toLowerCase()}, {c.severity}
+          {c.paged ? ', paged' : ', held back (one witness)'} · {minutesLabel(c.minutesBefore)} · candidate cause, via the building
+        </li>
+      ))}
+    </>
+  );
+}
+
+function minutesLabel(m: number): string {
+  if (m === 0) return 'same minute';
+  return m > 0 ? m + ' min before' : -m + ' min after';
 }
 
 /**

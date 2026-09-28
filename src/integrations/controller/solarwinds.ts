@@ -19,7 +19,9 @@
  *                        plane as the probe: a tenant running both has one
  *                        external witness, not two.
  *   CPU, interfaces      the box reported its own counters over SNMP and
- *                        SolarWinds relayed them. DEVICE plane.
+ *                        SolarWinds relayed them. DEVICE plane. That includes
+ *                        the interface ERROR counters: a WAN edge dropping
+ *                        packets says so here long before anything goes down.
  *   SolarWinds ALERTS    NOT INGESTED. They are Orion's conclusions from the
  *                        same polls; taking them as well would count one
  *                        witness twice - the double-counting the plane model
@@ -56,7 +58,8 @@ export const SWQL = {
     'n.CPULoad, n.LastSystemUpTimePollUtc FROM Orion.Nodes n ORDER BY n.NodeID WITH ROWS @first TO @last',
   interfaces:
     'SELECT i.InterfaceID, i.NodeID, i.Node.Caption AS NodeCaption, i.Node.IPAddress AS NodeIPAddress, ' +
-    'i.Name, i.OperStatus, i.AdminStatus, i.LastSync FROM Orion.NPM.Interfaces i ' +
+    'i.Name, i.OperStatus, i.AdminStatus, i.InErrorsThisHour, i.OutErrorsThisHour, i.LastSync ' +
+    'FROM Orion.NPM.Interfaces i ' +
     'ORDER BY i.InterfaceID WITH ROWS @first TO @last',
 } as const;
 
@@ -122,7 +125,17 @@ const nodeCpu = swisResource('node-cpu', 'device', 'nodes', solarwindsNodes);
 const interfaces = swisResource('interfaces', 'device', 'interfaces', solarwindsInterfaces);
 
 type NodeRow = (typeof solarwindsNodes)[number];
-type InterfaceRow = (typeof solarwindsInterfaces)[number];
+/**
+ * One Orion.NPM.Interfaces row. The error counters are Orion's rolling
+ * CURRENT-HOUR totals, and may be absent (null) on an interface Orion does
+ * not poll for errors - absent is "not measured", never zero.
+ */
+type InterfaceRow = {
+  InterfaceID: number; NodeID: number; NodeCaption: string; NodeIPAddress: string; Name: string;
+  OperStatus: number; AdminStatus: number;
+  InErrorsThisHour?: number | null; OutErrorsThisHour?: number | null;
+  LastSync: string;
+};
 
 /** Orion node status codes that are MEASUREMENTS. Everything else is skipped. */
 const STATUS_UP = 1;
@@ -182,6 +195,24 @@ export const solarwinds: Connector = {
           }),
           interfaceId,
         });
+
+        // Errors, only on a link that is UP and only when MEASURED: a down
+        // link's counters are frozen, and a missing counter read as 0 would
+        // report "clean" for a port nobody is polling.
+        if (state === 'up' && typeof r.InErrorsThisHour === 'number' && typeof r.OutErrorsThisHour === 'number') {
+          out.push({
+            ...controllerMetric({
+              identity, plane: resource.plane, encoding: raw.encoding,
+              deviceId, siteId: inventory.siteOf(deviceId),
+              sourceRef: 'I:' + r.InterfaceID + ':errors',
+              kind: 'interface-errors', value: r.InErrorsThisHour + r.OutErrorsThisHour, unit: 'count',
+              observedAt: raw.receivedAt,
+              receivedAt: raw.receivedAt,
+              attributes: { orionInterfaceId: r.InterfaceID, orionNodeId: r.NodeID, inErrors: r.InErrorsThisHour, outErrors: r.OutErrorsThisHour },
+            }),
+            interfaceId,
+          });
+        }
       }
       return out;
     }

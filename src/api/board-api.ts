@@ -62,6 +62,7 @@ import type { ApiGatewayEvent, ApiGatewayResult } from './rest-handler.ts';
 import {
   recentAudit, summariseAudit, AUDIT_RETENTION_DAYS, type AuditEntry, type AuditSummary,
 } from '../ai/audit.ts';
+import { candidateCauses, type CandidateCauses } from '../graph/correlate.ts';
 
 // ---------------------------------------------------------------------------
 // The snapshots - the contract the board renders
@@ -98,6 +99,12 @@ export type CommsSnapshot = {
   brief: Brief;
   /** Unusual for the subject and hour of week. Early warnings and context - never alarms. */
   anomalies: CommsAnomaly[];
+  /**
+   * Per open incident id: what the knowledge graph puts beside it - the
+   * network alarms and incidents in the same building, around that time.
+   * CANDIDATES, attached after both sets of rules decided; see correlate.ts.
+   */
+  causes: Record<string, CandidateCauses>;
 };
 
 // ---------------------------------------------------------------------------
@@ -220,6 +227,9 @@ export function boardSnapshot(caller: Principal, siteId?: string): BoardSnapshot
  */
 export async function commsSnapshot(caller: Principal): Promise<CommsSnapshot | null> {
   if (!commsVisibleTo(caller)) return null;
+  // What the network rules decided, ONCE: the brief and the candidate causes
+  // read the same decisions, so they cannot disagree about the network.
+  const network = tenantScenarios(caller);
   const [workforce, incidents, alarms, health, resolved, phones, brief, anomalies] = await Promise.all([
     commsWorkforce(caller),
     commsIncidents(caller),
@@ -229,11 +239,17 @@ export async function commsSnapshot(caller: Principal): Promise<CommsSnapshot | 
     commsPhones(caller),
     // The network incidents the board's network view shows, so the brief and
     // the board cannot disagree about what is open.
-    buildDailyBrief(caller, now(), { networkIncidents: tenantScenarios(caller).incidents }),
+    buildDailyBrief(caller, now(), { networkIncidents: network.incidents }),
     latestAnomalies(caller),
   ]);
   // Nothing polled yet: no view rather than a snapshot with holes in it.
   if (!workforce) return null;
+  // In parallel: reads only, one incident each - a loop of awaits here is a
+  // round trip per incident per board load, deployed.
+  const at = new Date(now()).toISOString();
+  const causes: Record<string, CandidateCauses> = Object.fromEntries(await Promise.all(
+    incidents.map(async (i) => [i.incidentId, await candidateCauses(caller, i, network, at)] as const),
+  ));
   return {
     workforce,
     incidents,
@@ -243,6 +259,7 @@ export async function commsSnapshot(caller: Principal): Promise<CommsSnapshot | 
     phones,
     brief,
     anomalies: anomalies?.anomalies ?? [],
+    causes,
   };
 }
 

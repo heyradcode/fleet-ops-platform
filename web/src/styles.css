@@ -1563,3 +1563,9 @@ button.topo-node:hover { border-color: var(--amber); }
   .audit-body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
   .audit-body .roster { max-height: 45vh; }
 }
+
+/* Knowledge-graph candidates: the Helix treatment - text colour, a cool
+   marker, no amber. A candidate is somewhere to look, not a finding. */
+.comms-evidence li.is-cause { color: var(--text); }
+.comms-evidence li.is-cause::before { content: '⇢ '; color: var(--accent-cool); }
+.comms-evidence li.is-cause-note { font-style: italic; }

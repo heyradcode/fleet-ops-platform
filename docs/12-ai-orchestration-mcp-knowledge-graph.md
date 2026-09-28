@@ -7,8 +7,9 @@ Three parts:
 2. **MCP.** Built: an MCP tool server on AgentCore Runtime, behind an
    AgentCore Gateway that passes the user's token through, with an audit
    trail and a board view of it.
-3. **The knowledge graph.** Phases 1 and 2 are built: the facility join and
-   the graph itself. Candidate causes and graph tools are still a design.
+3. **The knowledge graph.** Phases 1 to 3 are built: the facility join,
+   the graph, and candidate causes on the comms board. The graph's agent
+   tools are still a design.
 
 The designs follow the proposal deck's AI architecture (slides 3, 5, 6, 11
 and 12). The deck is held locally and not in the repository. They are shaped
@@ -465,7 +466,7 @@ Lambda code, plus the TTL if it isn't applied yet.
 
 ---
 
-## Part 3 — The knowledge graph (phases 1 and 2 built)
+## Part 3 — The knowledge graph (phases 1 to 3 built)
 
 ### What it is for
 
@@ -686,6 +687,59 @@ exist yet.
   people per facility and platform, not per queue.
 - **Device CIs in Helix** are still joined at query time through the
   inventory aliases (`recentChanges`), as before.
+
+### Built: phase 3, candidate causes
+
+`candidateCauses(principal, incident, network, now)` in
+`src/graph/correlate.ts` starts from a comms incident's subject and walks to
+the network that serves it:
+- **a facility:** its devices (`Facility ← LOCATED_AT ← Device`), one Query;
+- **a trunk:** would follow `Sbc RUNS_ON Device`, which has no source yet;
+- **a queue:** isn't a place on the network.
+
+On the devices it reaches, it lists the network incidents and alarms the
+rules decided within **[opened − 15 min, now]**. It ranks them worst first,
+then what paged over what didn't, then nearest in time, and keeps at most
+five. A network incident is listed once, not once per alarm inside it.
+
+It gives **four answers**, because "found nothing" must never look like
+"couldn't look":
+- `found`: the candidates, each with its path;
+- `none`: it looked, and says what it searched ("6 network devices at
+  Lubbock Field Office, 14:15Z to 14:30Z");
+- `no-path`: it says why (trunk, queue);
+- `unknown`: the graph isn't built.
+
+**Candidates, never evidence.** It runs after both sets of rules have
+decided and changes none of their decisions. A test pins that the planted
+Houston WAN alarm is still held back afterwards, that no network incident
+was opened for it, and that the comms incident's severity is unchanged.
+
+**The planted pair.** HHS's seventh scenario, `wan-degraded`, exists only
+where the estate has a Houston site. Houston's WAN edge reports 4,158
+interface errors an hour over SNMP, relayed by SolarWinds. For that,
+SolarWinds now reads Orion's `InErrorsThisHour` and `OutErrorsThisHour`,
+and only on an up link where they were measured: absent means "not
+measured", never zero. It has one witness, so it's held back and pages
+nobody, exactly like the lone port flap. Beside Houston's call-quality
+incident, it becomes the top candidate:
+
+```
+Call quality degraded at LC=1120
+  => wan-hou01-02 (wan-edge): interface errors, critical, held back - one witness
+     path: Houston Regional (1120) <- LOCATED_AT <- wan-hou01-02 (wan-edge)
+```
+
+**Where it shows:**
+- **Comms board:** under each incident, in the Helix colour, never amber.
+- **`CommsSnapshot.causes`:** served the same in the tab and by `GET /comms`.
+- **The demo:** `pnpm start --only=graph`, section 13.
+
+**Not yet:**
+- **The daily brief:** it doesn't carry candidates yet.
+- **Helix changes as candidates:** they already reach the incident through
+  Helix context, so listing them again from the graph would show each
+  change twice.
 
 ---
 

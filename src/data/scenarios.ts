@@ -147,7 +147,7 @@ export function buildScenarios(estate: Estate): Scenario[] {
   // scenario expects to collapse into one incident.
   const downstream = estate.devices.filter((d) => d.uplinkDeviceId === dist.deviceId);
 
-  return [
+  const scenarios: Scenario[] = [
     {
       id: 'double-report',
       title: 'One port failure, delivered twice by one cloud',
@@ -290,4 +290,49 @@ export function buildScenarios(estate: Estate): Scenario[] {
       ],
     },
   ];
+
+  // Only where there IS a Houston - the HHS estate. Acme has none, and its
+  // feeds would skip a SolarWinds batch anyway: Acme runs no SolarWinds.
+  if (estate.sites.some((s) => s.siteId === 'hou-01')) scenarios.push(wanDegraded(estate));
+  return scenarios;
+}
+
+/**
+ * Houston's WAN edge drops packets while Houston's calls go bad.
+ *
+ * The seventh situation, and the only one about the knowledge graph (docs/12,
+ * Part 3). The network half is deliberately WEAK: one witness - SNMP error
+ * counters, relayed by SolarWinds, the DEVICE plane - so the rules hold it
+ * back and nobody is paged, exactly as for the lone port flap. The comms half
+ * is already planted: poor call quality at Houston Regional (LC=1120), from
+ * Teams and Webex agreeing. What joins them is the building - the WAN edge is
+ * LOCATED_AT facility 1120 - and what comes of the join is a CANDIDATE, never
+ * evidence: it promotes nothing, suppresses nothing, pages nobody.
+ */
+function wanDegraded(estate: Estate): Scenario {
+  const wan = pick(estate, 'hou-01', 'wan-edge');
+  const alias = (kind: string) => wan.aliases.find((a) => a.kind === kind)?.value ?? '';
+  const port = estate.interfaces.find((i) => i.deviceId === wan.deviceId);
+  if (!port) throw new Error('scenario needs an interface on ' + wan.name + '. Fix the generator.');
+  return {
+    id: 'wan-degraded',
+    title: 'A WAN edge drops packets, and only the box itself says so',
+    proves:
+      'One witness still does not page. But a held-back signal in the RIGHT ' +
+      'BUILDING is what the knowledge graph puts next to that building\'s ' +
+      'call-quality incident - as a candidate cause, never as evidence.',
+    expect: 'held back on the network board; the top candidate cause on Houston\'s call-quality incident',
+    feeds: [{
+      controller: 'solarwinds',
+      resource: 'interfaces',
+      records: [{
+        InterfaceID: 71001, NodeID: 2101,
+        NodeCaption: alias('snmp-sysname'), NodeIPAddress: alias('mgmt-ip'),
+        Name: port.name, OperStatus: 1, AdminStatus: 1,
+        // Up, and erroring: thousands an hour against a critical line of 1,000.
+        InErrorsThisHour: 4_120, OutErrorsThisHour: 38,
+        LastSync: '2026-09-08T09:29:40.0000000',
+      }],
+    }],
+  };
 }

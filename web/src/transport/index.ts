@@ -40,6 +40,7 @@ import type { CommsAnomaly } from '../../../src/integrations/comms/anomalies.ts'
 export type { AuditSnapshot, BoardSnapshot, CommsSnapshot } from '../../../src/api/board-api.ts';
 import type { AuditSnapshot, BoardSnapshot, CommsSnapshot } from '../../../src/api/board-api.ts';
 export type { AuditEntry } from '../../../src/ai/audit.ts';
+export type { CandidateCause, CandidateCauses } from '../../../src/graph/correlate.ts';
 
 /**
  * One frame of the recorded half-hour.

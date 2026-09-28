@@ -77,6 +77,8 @@ import { toolSpecsFor } from './ai/tools.ts';
 import { buildDailyBrief, renderBrief } from './reporting/daily-brief.ts';
 import { commsToolsFor } from './ai/comms-tools.ts';
 import { commsConfigFor, HHS_DEMO_TENANT } from './integrations/comms/config.ts';
+import { buildGraph, neighbours } from './graph/store.ts';
+import { commsSnapshot } from './api/board-api.ts';
 import { COMMS_SOURCES } from './integrations/comms/types.ts';
 import { evaluateSignals } from './integrations/comms/incidents.ts';
 import { loadRunbooksFromDisk } from './platform/runbook-loader.node.ts';
@@ -129,6 +131,8 @@ async function main() {
   if (wants('solarwinds')) await sectionSolarwinds();
   // After comms and SolarWinds: it summarises what they stored.
   if (wants('brief')) await sectionBrief();
+  // After the brief: it reads what comms polled, and reseeds the world.
+  if (wants('graph')) await sectionGraph();
 
   summary();
 }
@@ -1092,6 +1096,48 @@ async function sectionBrief() {
 }
 
 // ===========================================================================
+// 13. The knowledge graph
+// ===========================================================================
+
+async function sectionGraph() {
+  section('13', 'The knowledge graph: the building joins the network to the calls');
+  const lead = verifyToken(signDemoToken({
+    sub: 'cognito_hhs_ops', email: 'ops-lead@hhs.texas.example',
+    'custom:tenantId': HHS_DEMO_TENANT, 'cognito:groups': ['admin'],
+  }));
+  const built = await buildGraph(lead);
+  note(built.nodes + ' nodes, ' + built.edges + ' edges - structure only: no person node exists, no incident is copied in.');
+  const houston = await neighbours(lead, { type: 'Facility', id: '1120' }, { direction: 'in', rel: 'LOCATED_AT' });
+  const lubbock = await neighbours(lead, { type: 'Facility', id: '3308' }, { direction: 'in' });
+  write('   Houston Regional (1120) <- LOCATED_AT <- ' + houston.length + ' network devices' + '\n');
+  write('   Lubbock Field Office (3308) <- ' + lubbock.map((n) => n.rel).filter((r, i, a) => a.indexOf(r) === i).join(', ') +
+    ' <- ' + lubbock.length + ' nodes ' + dim('(its devices, the satellite terminal that is its WAN, and the Helix site that names it)') + '\n');
+
+  const snap = await commsSnapshot(lead);
+  if (!snap) {
+    note('');
+    note('No comms data stored - run all sections (`pnpm start`) to see candidate causes.');
+    return;
+  }
+  note('');
+  note('Beside each open comms incident, what the network rules raised in the same building - CANDIDATES, never evidence:');
+  for (const i of snap.incidents) {
+    const c = snap.causes[i.incidentId];
+    write('   ' + i.title + '\n');
+    if (c.status === 'found') {
+      for (const x of c.causes) {
+        write('     \x1b[36m=>\x1b[0m ' + x.device + ' (' + x.role + '): ' + x.what.toLowerCase() + ', ' + x.severity +
+          (x.paged ? ', paged' : ', held back - one witness') + '\n');
+        write('        ' + dim('path: ' + x.path) + '\n');
+      }
+    } else {
+      write('     ' + dim(c.status === 'none' ? 'looked: nothing raised on ' + c.searched : c.reason) + '\n');
+    }
+  }
+  write('   ' + dim('the WAN edge still pages nobody: the graph promotes nothing, it says where else to look') + '\n');
+}
+
+// ===========================================================================
 
 async function ensureData() {
   ensurePrincipals();
@@ -1124,7 +1170,7 @@ function summary() {
     '   Bedrock  : ' + bedrockUsage.calls + ' model calls, ' + bedrockUsage.embeddings + ' embeddings, ' +
       bedrockUsage.inputTokens + ' in / ' + bedrockUsage.outputTokens + ' out\n' +
     '\n' + dim('   docs/  for the written explanations   infra/terraform/  for the IaC\n' +
-      '   pnpm start --only=<auth|ingest|scenarios|data|events|graphql|rest|geo|ai|comms|solarwinds|brief>') + '\n\n',
+      '   pnpm start --only=<auth|ingest|scenarios|data|events|graphql|rest|geo|ai|comms|solarwinds|brief|graph>') + '\n\n',
   );
 }
 
