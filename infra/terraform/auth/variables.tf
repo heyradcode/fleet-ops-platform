@@ -50,3 +50,9 @@ variable "seed_demo_customers" {
   type        = bool
   default     = false
 }
+
+variable "comms_archive_retention_days" {
+  description = "How long each comms poll's archived output is kept in S3 (comms-archive.tf). Signals and counts only - no personal data."
+  type        = number
+  default     = 400
+}

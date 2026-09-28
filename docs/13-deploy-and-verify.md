@@ -21,7 +21,7 @@ deployed path **as you**, using your own token.
 | 1 | The deploy policy gets the Gateway actions | see below | the `agentcore` apply succeeding |
 | 2 | Build what ships | `pnpm build:lambda && pnpm build:agent` | nothing yet: this only writes `.build/` |
 | 3 | The board API: `GET /audit`, the HHS estate, candidate causes; and the table's TTL | `terraform -chdir=infra/terraform/auth apply` | `board API: GET /board`, `GET /audit` |
-| 4 | The knowledge graph in DynamoDB | `TABLE_NAME=$(terraform -chdir=infra/terraform/auth output -raw main_table_name) pnpm seed:aws` | `GET /comms + candidate causes` (Houston's top candidate is `wan-hou01-02`) |
+| 4 | The knowledge graph in DynamoDB, and the comms poll's backup in S3 | `TABLE_NAME=$(terraform -chdir=infra/terraform/auth output -raw main_table_name) COMMS_ARCHIVE_BUCKET=$(terraform -chdir=infra/terraform/auth output -raw comms_archive_bucket) pnpm seed:aws` | `GET /comms + candidate causes` (Houston's top candidate is `wan-hou01-02`); the seed prints `comms archive: 5 objects … -> s3://…` |
 | 5 | The Gateway, the MCP server's graph tools, and the agent pointed at the Gateway | `terraform -chdir=infra/terraform/agentcore apply` | `MCP via Gateway` ×2, `Agent on AgentCore` |
 | 6 | Everything, as you | `pnpm smoke:aws` | all PASS |
 

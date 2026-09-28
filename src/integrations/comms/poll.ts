@@ -25,6 +25,7 @@ import { reconcileIncidents } from './lifecycle.ts';
 import { pullPhoneInventory, type PhoneInventory } from './kurmi.ts';
 import { putPhoneInventory } from './store.ts';
 import { backfillBaselines, detectAndLearn, metricsFromSignals, putAnomalies, type BackfillProgress, type CommsAnomaly } from './anomalies.ts';
+import { archiveCommsPoll, type ArchiveResult } from './archive.ts';
 
 export type CommsPollResult = {
   /** The full roster, for the caller's use in memory. Never persisted; see store.ts. */
@@ -46,6 +47,8 @@ export type CommsPollResult = {
   anomalies: CommsAnomaly[];
   /** Per-source health and data quality, as recorded by this poll. */
   health: IntegrationHealth;
+  /** This poll's backup in S3 - signals and counts only. Never fails the poll; see archive.ts. */
+  archive: ArchiveResult;
 };
 
 /**
@@ -135,8 +138,15 @@ export async function runCommsPoll(
   }), dataQuality(report, collected.unmappedBandwidthPeers, phones, collected.unmappedStarlinkTerminals));
 
   await putCommsRun(principal, { workforce, alarms });
+
+  // The backup, LAST: of what was decided and stored. Built field by field -
+  // the roster (`report`) has no way in - and it never fails the poll.
+  const archive = await archiveCommsPoll(principal, {
+    signals: collected.signals, alarms, incidents, resolved: lifecycle.resolved, workforce, health,
+  }, at);
+
   return {
     report, directorySync, workforce, signals: collected.signals, alarms, incidents,
-    resolved: lifecycle.resolved, reopened: lifecycle.reopened, phones, anomalies, health,
+    resolved: lifecycle.resolved, reopened: lifecycle.reopened, phones, anomalies, health, archive,
   };
 }

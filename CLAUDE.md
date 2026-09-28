@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 391 tests, no network. Picks up web/ tests too.
+pnpm test                       # 397 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180 - real Cognito sign-in
 pnpm web:env                    # write web/.env.cognito.local from the Terraform outputs
@@ -264,7 +264,13 @@ one, change the test deliberately rather than making it pass.
   as 2 calls and was, correctly, not flagged.
 - **The workforce roster is never persisted.** The join links named people
   to agencies and buildings; the store keeps counts only, and the roster is
-  rebuilt each poll. Comms reads need TENANT scope until an agency/facility
+  rebuilt each poll. That includes the S3 ARCHIVE (`comms/archive.ts`):
+  each poll's NORMALISED output - signals, alarms, incidents, workforce
+  counts, health - never raw API responses. Its input type has no roster
+  field, and a tripwire refuses the whole poll's archive on any email or
+  E.164 number (naming the record, never the match). It never fails the
+  poll. Written through `setCommsArchiveStore` (in memory by default; the
+  seed uses the AWS CLI, `scripts/s3-cli-store.ts`). Comms reads need TENANT scope until an agency/facility
   scope exists - a site is not a facility. The comms agent tools are offered
   per tenant via `toolSpecsFor`; `TOOL_SPECS` stays the network set.
 - **The board's data views have ONE implementation.** `boardSnapshot` and

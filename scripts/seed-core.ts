@@ -97,6 +97,11 @@ export async function seedDemoData(log: (line: string) => void = () => {}): Prom
   const poll = await runCommsPoll(hhs, client, config, now());
   log('  comms poll [' + elapsed() + ']: ' + poll.incidents.length + ' open incident(s), ' + poll.resolved.length + ' resolved, ' +
     poll.anomalies.length + ' anomal' + (poll.anomalies.length === 1 ? 'y' : 'ies'));
+  // The poll's backup - reported, never fatal (archive.ts).
+  const a = poll.archive;
+  log('  comms archive: ' + (a.status === 'written'
+    ? a.objects.length + ' objects, ' + Math.round(a.bytes / 1024) + ' KB -> ' + (a.objects[0] ?? '').replace(/\/comms\/.*$/, '/comms/')
+    : a.status.toUpperCase() + ' - ' + (a.status === 'refused' ? a.reason : a.error)));
 
   // --- The network tenant ----------------------------------------------------
   // What the assistant's tools read: device state, and the observations the

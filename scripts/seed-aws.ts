@@ -1,7 +1,8 @@
 /**
  * Fill the REAL DynamoDB table with what the offline board computes.
  *
- *   TABLE_NAME=$(terraform -chdir=infra/terraform/auth output -raw main_table_name) pnpm seed:aws
+ *   TABLE_NAME=$(terraform -chdir=infra/terraform/auth output -raw main_table_name) \
+ *   COMMS_ARCHIVE_BUCKET=$(terraform -chdir=infra/terraform/auth output -raw comms_archive_bucket) pnpm seed:aws
  *   pnpm seed:aws --dry-run        # the same run through an in-memory table; no AWS at all
  *
  * The same code the board runs in the tab - the comms poll against the vendor
@@ -32,6 +33,8 @@
 import { DynamoTable, setTableStore, type Item, type QueryOptions, type TableStore } from '../src/aws/dynamodb.ts';
 import { createSdkTableStore } from '../src/aws/dynamodb.sdk.ts';
 import { seedDemoData } from './seed-core.ts';
+import { setCommsArchiveStore } from '../src/aws/s3.ts';
+import { createCliObjectStore } from './s3-cli-store.ts';
 
 const dryRun = process.argv.includes('--dry-run');
 const tableName = process.env.TABLE_NAME ?? '';
@@ -60,6 +63,18 @@ function counted(inner: TableStore) {
 const { store, ops } = counted(dryRun ? new DynamoTable('dry-run') : createSdkTableStore(tableName));
 setTableStore(store);
 console.log(dryRun ? 'DRY RUN - in-memory table, no AWS' : 'Writing to DynamoDB table ' + tableName);
+
+// The comms poll's backup (comms/archive.ts): to the real bucket when it is
+// named, in memory otherwise - said either way, because a backup that
+// silently went nowhere is the failure a backup exists to prevent.
+const archiveBucket = process.env.COMMS_ARCHIVE_BUCKET ?? '';
+if (!dryRun && archiveBucket) {
+  setCommsArchiveStore(createCliObjectStore(archiveBucket));
+  console.log('Archiving comms polls to s3://' + archiveBucket);
+} else if (!dryRun) {
+  console.log('COMMS_ARCHIVE_BUCKET is not set - the comms poll is archived IN MEMORY ONLY. It is a Terraform output:\n' +
+    '  COMMS_ARCHIVE_BUCKET=$(terraform -chdir=infra/terraform/auth output -raw comms_archive_bucket)');
+}
 const started = performance.now();
 
 // The seeding itself - comms baselines (resumable), the comms poll, the

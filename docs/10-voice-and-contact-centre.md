@@ -79,6 +79,9 @@ The rule that decides everything below is the network side's, restated:
             MEASUREMENT three polls running - never on silence
         ▼
  store (counts only) ──▶ board · assistant tools · daily brief
+        ▼
+ ARCHIVE  the poll's normalised output, to S3 as a backup - signals, alarms,
+          incidents, workforce COUNTS, health; never a person
 ```
 
 Each stage is one file under `src/integrations/comms/`, and each file's header
@@ -97,7 +100,42 @@ is the long form of the paragraph above it.
 | `helix-context.ts`, `helix-network.ts` | Candidate changes and existing tickets |
 | `kurmi.ts`, `starlink.ts`, `bandwidth.ts` | The sources with unusual protocols — SOAP, a stream, XML |
 | `poll.ts` | The order all of the above runs in |
+| `archive.ts` | The backup: each poll's normalised output to S3, with a tripwire that refuses personal data |
 | `../../reporting/daily-brief.ts` | The executive brief: every figure from stored data, none from a model |
+
+### The archive: a backup of what the polls meant, not of what the APIs said
+
+After every poll, `archive.ts` writes the poll's **normalised** output to S3.
+That's the signals (one number per trunk, facility or queue per window, with
+its sample size), the alarms and incidents the rules decided, the workforce
+as **counts**, and each source's health. It's enough to rebuild the comms
+side of the table, to keep history past the table's lifetime, and to query a
+year of it with Athena.
+
+It is deliberately **not** the raw API responses. Those carry the roster
+(names, emails, addresses, phone numbers), which this platform never stores
+(`store.ts`). Two guards keep it that way:
+- **By type.** The archive's input has no field for the roster or a call
+  record, so the poll's roster can't be passed by mistake.
+- **By a tripwire.** Every object is scanned for an email address or an
+  E.164 phone number before anything is written. One match refuses the whole
+  poll's archive and names the record type, never the match.
+
+A test runs a real poll and checks that no name, email, street address,
+phone number or vendor id from the mock directory appears anywhere in the
+archive.
+
+| | |
+|---|---|
+| Layout | `comms/<record>/tenant=<t>/dt=YYYY-MM-DD/hh=HH/<poll time>.jsonl`: JSON Lines, hive-partitioned for Athena, one object per record type per poll |
+| Records | `signals`, `alarms`, `incidents` (open and resolved), `workforce`, `health`; every line carries `schema`, `tenantId`, `polledAt` |
+| Bucket | `infra/terraform/auth/comms-archive.tf`: versioned, SSE-S3, public access blocked, TLS only; kept `comms_archive_retention_days` (default 400) |
+| Failure | Never fails the poll. It's logged and reported in the poll result; the operational data is already in the table |
+| Writer | `pnpm seed:aws`, through the AWS CLI (`scripts/s3-cli-store.ts`). A scheduled poller in Lambda would use an SDK adapter behind the same `ObjectStore` interface |
+
+It stays in S3 Standard on purpose. The cheaper classes bill a minimum object
+size (128 KB for Standard-IA and Glacier Instant Retrieval), and these
+objects are a few KB each.
 
 ---
 

@@ -155,3 +155,45 @@ export function appendFlows(flows: FlowObservation[]): string | undefined {
   log.debug('appended flow records', { uri, records: flows.length });
   return uri;
 }
+
+// ---------------------------------------------------------------------------
+// Object stores behind a registry - for writers that must reach REAL S3
+// ---------------------------------------------------------------------------
+// The buckets above are in-memory stand-ins, synchronous, and never leave the
+// process. What must reach real S3 - the comms archive, a BACKUP whose whole
+// point is to exist somewhere else - goes through this instead: an async
+// store, in memory by default, and the SDK adapter (aws/s3.sdk.ts) when a
+// Node entry point registers it. The same shape as mainTable/setTableStore,
+// for the same reason: the browser graph must never load the SDK.
+
+export interface ObjectStore {
+  readonly name: string;
+  /** Write one object; resolves to its s3:// URI once it is durable. */
+  put(key: string, body: string, contentType: string): Promise<string>;
+}
+
+/** The default: in memory, readable back - which is what tests and the demo inspect. */
+export class MemoryObjectStore implements ObjectStore {
+  readonly name: string;
+  readonly #objects = new Map<string, { body: string; contentType: string }>();
+  constructor(name: string) { this.name = name; }
+  async put(key: string, body: string, contentType: string): Promise<string> {
+    this.#objects.set(key, { body, contentType });
+    return 's3://' + this.name + '/' + key;
+  }
+  get(key: string): { body: string; contentType: string } | undefined { return this.#objects.get(key); }
+  keys(prefix = ''): string[] { return [...this.#objects.keys()].filter((k) => k.startsWith(prefix)).sort(); }
+  clear(): void { this.#objects.clear(); }
+}
+
+export const memoryCommsArchive = new MemoryObjectStore(env('COMMS_ARCHIVE_BUCKET', 'netpulse-dev-comms-archive'));
+let archiveStore: ObjectStore = memoryCommsArchive;
+
+export function setCommsArchiveStore(next: ObjectStore): void { archiveStore = next; }
+export function resetCommsArchiveStore(): void { archiveStore = memoryCommsArchive; }
+
+/** What the comms archive writes to. Forwards per call, so registering late works. */
+export const commsArchiveStore: ObjectStore = {
+  get name() { return archiveStore.name; },
+  put: (key, body, contentType) => archiveStore.put(key, body, contentType),
+};
