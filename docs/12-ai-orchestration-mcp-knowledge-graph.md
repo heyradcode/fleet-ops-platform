@@ -4,8 +4,9 @@ Three parts:
 
 1. **How AI orchestration works now**: what the code does, file by file.
    This part describes shipped code.
-2. **MCP.** Phase 1 (an MCP tool server on AgentCore Runtime, with an
-   audit trail) is built. Phase 2 (AgentCore Gateway) is a design.
+2. **MCP.** Built: an MCP tool server on AgentCore Runtime, behind an
+   AgentCore Gateway that passes the user's token through, with an audit
+   trail and a board view of it.
 3. **How the knowledge graph would be built.** A design; none of it is built.
 
 The designs follow the proposal deck's AI architecture (slides 3, 5, 6, 11
@@ -229,7 +230,7 @@ so each rule stays visible and testable.
 
 ---
 
-## Part 2 — MCP integration (phase 1 built)
+## Part 2 — MCP integration (built: the server, the Gateway front door, the audit trail)
 
 ### What the deck asks of MCP
 
@@ -246,8 +247,8 @@ behaviour*. What MCP adds is:
   audited service, which any MCP client can use (the agent, another agent, an
   IDE);
 - **the audit trail**, in the one place every tool call passes through;
-- **a path to AgentCore Gateway** (semantic tool search, policy, one front
-  door).
+- **a place for AgentCore Gateway**: one governed front door, with token
+  checks, metrics and policy outside the agent.
 
 ### The target architecture
 
@@ -273,36 +274,62 @@ way to the tool. The tenant is derived from the token **at the tool
 boundary**, exactly as the rest of the platform does it, and is never taken
 from a tool argument.
 
-### Why an MCP server on Runtime first, and Gateway second
+### Behind the AgentCore Gateway
 
-AgentCore Gateway is the natural long-term front door. It aggregates MCP
-targets, offers semantic tool search, and can restrict a runtime to be called
-only through it. **But the tenant boundary depends on the tool knowing who
-the caller is,** and Gateway's outbound authorisation to an MCP server target
-is one of:
-- IAM SigV4;
-- an API key;
-- OAuth: client credentials, authorization code, or **on-behalf-of token
-  exchange**.
+The first version of this section put Gateway off to a "phase 2". It assumed
+that anything behind Gateway is reached with the gateway's own identity,
+which would break the tenant boundary. That's true of one of the two ways to
+put an MCP server behind Gateway, and not of the other.
 
-IAM and API keys authenticate the **gateway**, not the user. On-behalf-of
-exchange needs an authorisation server that supports token exchange, and
-Cognito's support for that has to be confirmed before it's relied on. Until
-the user's identity demonstrably reaches the target, putting Gateway in front
-would turn a per-user, per-tenant tool into one trusting a shared credential.
-That's the regression the platform's first rule exists to prevent.
+| | MCP gateway, "MCP server" target | Gateway with an "AgentCore Runtime" target |
+|---|---|---|
+| What it is | Aggregates tools from many MCP servers into one virtual server | A governed front door: forwards requests to the runtime unchanged |
+| How it reaches our server | IAM, API key, OAuth client credentials, or on-behalf-of exchange | Can **pass the user's token through** (`JWT_PASSTHROUGH`) |
+| Who the tool thinks asked | The gateway, unless on-behalf-of exchange works, which needs an IdP implementing RFC 8693/7523. Cognito user pools don't. | **The user**, exactly as without the gateway |
+| `tools/list` | Synced by the gateway once, the same for everyone | Our server's, **per caller** (5 tools for a Dallas operator, 10 for an HHS admin) |
+| Semantic tool search | Yes | No |
+| Token check, metrics, AgentCore Policy, interceptors | Yes | Yes |
 
-So the order is:
+**We use the Runtime target.** It adds the front door without giving up the
+property the design rests on: the user's own token reaches the tool.
 
-1. **Phase 1: an MCP server on Runtime, called directly by the agent with the
-   user's token.** It has the full tenant boundary and adds the audit trail.
-2. **Phase 2: Gateway in front,** once one of these is proven:
-   - on-behalf-of token exchange works with the pool;
-   - Gateway's header propagation (`metadataConfiguration`) can carry a
-     **signed** identity the target verifies;
-   - or tool-side scoping moves to Gateway's fine-grained access rules.
+```
+board ──JWT──▶ Runtime: AGENT ──same user token──▶ GATEWAY
+                                                     │ checks the token itself (same pool, same client)
+                                                     │ JWT_PASSTHROUGH: forwards it unchanged
+                                                     ▼
+                                           Runtime: MCP SERVER
+                                                     │ accepts calls from THIS gateway only
+                                                     │ re-verifies (7 checks), scopes, audits - as before
+```
 
-   Until then, Gateway is an option, not a dependency.
+| Piece | What it does |
+|---|---|
+| `infra/terraform/agentcore/gateway.tf` | The gateway: `CUSTOM_JWT` inbound, the same pool and `allowed_clients`, and **no** `protocol_type` (Runtime targets can't join an MCP-type gateway). One target, `tools`, of type `http.agentcore_runtime`, pointing at the MCP runtime with `jwt_passthrough`. Its role has **no permissions**: with passthrough the gateway signs nothing and fetches no credential. |
+| `mcp.tf`: `allowed_workload_configuration` | The MCP runtime accepts only requests whose identity chain includes this gateway. A front door that can be walked around is decoration: without this, any valid token could call the runtime's own address and skip the gateway. |
+| `gatewayTargetUrl` in `src/aws/agentcore-url.ts` | `https://{id}.gateway.bedrock-agentcore.{region}.amazonaws.com/tools/invocations`. It refuses any host that isn't an AgentCore gateway, because this URL is sent the caller's token. |
+| `agent-entry.ts` | Prefers `MCP_GATEWAY_URL`/`_TARGET`, falls back to `MCP_RUNTIME_ARN`, then to in-process. The gateway comes first because, once it fronts the runtime, the direct address is refused. |
+| `servedBy.toolsRoute` | The answer says **"tools over MCP via Gateway"**. Seeing that on the board proves the front door is in the path. |
+| `var.mcp_via_gateway` | Default `true`. `false` removes the gateway and the lock, and the agent calls the runtime directly again. |
+
+**Why "JWT inbound" and not "authenticate only".** `AUTHENTICATE_ONLY` is
+SigV4-based and carries no bearer token to pass through. `NONE` would leave
+the whole decision to the target. JWT inbound means the gateway makes a
+decision of its own before anything reaches our code.
+
+**The caveat, stated rather than hidden.** AWS describes token passthrough as
+right for onboarding and recommends on-behalf-of exchange for production,
+because the same token is accepted at two hops. That was already true here:
+the agent relays the user's token to the MCP runtime. So passthrough adds a
+hop that checks the token, not a new place that accepts it. On-behalf-of
+exchange is the upgrade once the pool sits behind an IdP that can do it.
+
+**What is still open:**
+- **AgentCore Policy (Cedar)** attached to the gateway, as a second
+  enforcement of the role rules, outside the agent's environment.
+- **Header forwarding.** It isn't documented which headers reach a Runtime
+  target. Our server keeps no session state, so a dropped `Mcp-Session-Id`
+  would cost speed, not correctness. The first real call confirms it.
 
 ### What was built (phase 1)
 

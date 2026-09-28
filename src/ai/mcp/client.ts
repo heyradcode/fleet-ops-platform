@@ -61,6 +61,8 @@ export type McpClientOptions = {
   sessionId?: string;
   /** Told when the server assigns (or changes) the session, so the caller can resume it next time. */
   onSession?: (sessionId: string) => void;
+  /** Reported, not acted on: the URL already decides where requests go. */
+  route?: 'direct' | 'gateway';
 };
 
 export type McpToolProvider = ToolProvider & {
@@ -159,6 +161,7 @@ export function createMcpToolProvider(opts: McpClientOptions): McpToolProvider {
 
   return {
     via: 'mcp',
+    route: opts.route,
     get sessionId() { return sessionId; },
     get serverInfo() { return serverInfo; },
 

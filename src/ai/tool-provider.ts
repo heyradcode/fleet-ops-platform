@@ -27,6 +27,13 @@ import { wallNow } from '../platform/clock.ts';
 export type ToolProvider = {
   /** Which kind - reported with the answer, so the board can say "tools over MCP". */
   readonly via: 'in-process' | 'mcp';
+  /**
+   * How an MCP provider reaches its server: straight to the runtime, or
+   * through the AgentCore Gateway in front of it. Reported with the answer,
+   * so "via Gateway" on the board is proof the front door is in the path
+   * rather than a claim in a Terraform file.
+   */
+  readonly route?: 'direct' | 'gateway';
   /** The tools this caller may be offered. Computed from the caller, never global. */
   list(): Promise<ToolSpec[]>;
   /** Run one. Errors come back as text starting "ERROR:" - never thrown at the loop. */

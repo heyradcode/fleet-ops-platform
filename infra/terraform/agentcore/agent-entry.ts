@@ -26,7 +26,7 @@ import { createClaudeInvoker } from '../../../src/aws/bedrock.sdk.ts';
 import { verifyTokenRs256 } from '../../../src/auth/cognito-jwt-verifier.ts';
 import { serveInvocation } from '../../../src/ai/agent-http.ts';
 import { createMcpToolProvider } from '../../../src/ai/mcp/client.ts';
-import { runtimeInvocationUrl } from '../../../src/aws/agentcore-url.ts';
+import { gatewayTargetUrl, runtimeInvocationUrl } from '../../../src/aws/agentcore-url.ts';
 import type { Principal } from '../../../src/platform/types.ts';
 import { env } from '../../../src/platform/env.ts';
 import { log } from '../../../src/platform/logger.ts';
@@ -36,10 +36,20 @@ const issuer = env('COGNITO_ISSUER', '');
 const clientId = env('COGNITO_APP_CLIENT_ID', '');
 const model = env('AGENT_MODEL', 'offline');
 const fallbackModel = env('AGENT_FALLBACK_MODEL', '');
-// Set: every tool call goes to the MCP server runtime, as the caller.
-// Unset: the tools run in this process, as before - a valid deployment.
+// Where the tools are, in order of preference:
+//   MCP_GATEWAY_URL + _TARGET   through the AgentCore Gateway in front of the
+//                               MCP runtime (mcp_via_gateway, gateway.tf)
+//   MCP_RUNTIME_ARN             straight to the MCP runtime
+//   neither                     in this process - a valid deployment
+// The gateway comes FIRST because once it exists the MCP runtime accepts
+// calls from nothing else (allowed_workload_configuration): the direct
+// address would answer 403 to every tool call.
+const mcpGatewayUrl = env('MCP_GATEWAY_URL', '');
+const mcpGatewayTarget = env('MCP_GATEWAY_TARGET', '');
 const mcpRuntimeArn = env('MCP_RUNTIME_ARN', '');
-const mcpUrl = mcpRuntimeArn ? runtimeInvocationUrl(mcpRuntimeArn) : '';
+const mcpRoute: 'gateway' | 'direct' | undefined = mcpGatewayUrl ? 'gateway' : mcpRuntimeArn ? 'direct' : undefined;
+const mcpUrl = mcpRoute === 'gateway' ? gatewayTargetUrl(mcpGatewayUrl, mcpGatewayTarget)
+  : mcpRoute === 'direct' ? runtimeInvocationUrl(mcpRuntimeArn) : '';
 
 // The AWS SDKs read AWS_REGION. Terraform passes the region under its own
 // name rather than setting a variable the runtime may consider its own.
@@ -58,7 +68,10 @@ setTableStore(createSdkTableStore(table));
 if (model !== 'offline') {
   setModelInvoker(createClaudeInvoker({ model, fallbackModel: fallbackModel || undefined }));
 }
-log.info('agent: wired', { model, fallbackModel: fallbackModel || '(none)', runbooks: runbooks.length, tools: mcpUrl ? 'mcp' : 'in-process' });
+log.info('agent: wired', {
+  model, fallbackModel: fallbackModel || '(none)', runbooks: runbooks.length,
+  tools: mcpRoute ? 'mcp via ' + mcpRoute : 'in-process',
+});
 
 /**
  * The MCP session per verified USER, so a person's follow-ups reach the MCP
@@ -75,6 +88,7 @@ const mcpTools = (principal: Principal, token: string) => {
     token,
     sessionId: mcpSessions.get(key),
     onSession: (id) => mcpSessions.set(key, id),
+    route: mcpRoute,
   });
 };
 

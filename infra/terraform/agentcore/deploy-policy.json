@@ -27,6 +27,24 @@
       "Resource": "*"
     },
     {
+      "Sid": "ManageGateways",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock-agentcore:CreateGateway",
+        "bedrock-agentcore:UpdateGateway",
+        "bedrock-agentcore:DeleteGateway",
+        "bedrock-agentcore:GetGateway",
+        "bedrock-agentcore:ListGateways",
+        "bedrock-agentcore:CreateGatewayTarget",
+        "bedrock-agentcore:UpdateGatewayTarget",
+        "bedrock-agentcore:DeleteGatewayTarget",
+        "bedrock-agentcore:GetGatewayTarget",
+        "bedrock-agentcore:ListGatewayTargets",
+        "bedrock-agentcore:SynchronizeGatewayTargets"
+      ],
+      "Resource": "*"
+    },
+    {
       "Sid": "AgentCoreIdentityServiceLinkedRole",
       "Effect": "Allow",
       "Action": "iam:CreateServiceLinkedRole",
@@ -41,7 +59,10 @@
       "Sid": "PassTheRuntimeRole",
       "Effect": "Allow",
       "Action": "iam:PassRole",
-      "Resource": "arn:aws:iam::588651260734:role/netpulse-*-agent-runtime",
+      "Resource": [
+        "arn:aws:iam::588651260734:role/netpulse-*-agent-runtime",
+        "arn:aws:iam::588651260734:role/netpulse-*-mcp-gateway"
+      ],
       "Condition": {
         "StringEquals": {
           "iam:PassedToService": "bedrock-agentcore.amazonaws.com"

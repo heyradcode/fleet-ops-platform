@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 338 tests, no network. Picks up web/ tests too.
+pnpm test                       # 341 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180 - real Cognito sign-in
 pnpm web:env                    # write web/.env.cognito.local from the Terraform outputs
@@ -292,9 +292,16 @@ one, change the test deliberately rather than making it pass.
   token.** `src/ai/mcp/` (hand-rolled, no SDK in `src/`) on a second
   AgentCore runtime (`agentcore/mcp.tf`, `server_protocol = "MCP"`). The
   agent relays the caller's own token; a service credential would turn a
-  Dallas operator's question into an answer about the tenant - which is also
-  why it is NOT behind AgentCore Gateway (outbound auth is the gateway's
-  identity). `runTool` in `ai/tool-provider.ts` is the ONE implementation
+  Dallas operator's question into an answer about the tenant. It sits behind
+  an AgentCore GATEWAY (`agentcore/gateway.tf`) as an "AgentCore Runtime"
+  target with JWT_PASSTHROUGH - NEVER an "MCP server" target, which reaches
+  the server as the gateway (or via on-behalf-of exchange, which Cognito
+  cannot do) and syncs one tools/list for everyone. Gateway inbound is
+  CUSTOM_JWT (AUTHENTICATE_ONLY is SigV4 and carries no token to pass), and
+  the runtime accepts that gateway ONLY (`allowed_workload_configuration`) -
+  a front door that can be walked around is decoration. The agent prefers
+  `MCP_GATEWAY_URL`, since the direct address is then refused; answers say
+  "tools over MCP via Gateway". `runTool` in `ai/tool-provider.ts` is the ONE implementation
   both routes call, so they cannot disagree. The server lists read tools
   only, re-verifies with all seven checks BEFORE parsing, and audits every
   call (`ai/audit.ts`): argument HASHES, never arguments; `wallNow()`, never
@@ -558,7 +565,8 @@ src/data/        estate generator, scenarios, health trace, runbooks, schema.sql
 web/src/transport/  the boundary that lets the backend run in the browser;
                  api.ts reads the data views over HTTP, select.ts picks
 src/ai/agent-invocation.ts  one AgentCore invocation: token -> answer
-infra/terraform/agentcore/  the assistant on Bedrock AgentCore Runtime
+infra/terraform/agentcore/  the assistant on Bedrock AgentCore Runtime, the MCP
+                 tool server, and the Gateway in front of it
 src/api/board-api.ts  GET /board, /comms and /audit - the one implementation
                  of each view, served from Lambda (infra/terraform/auth/api.tf)
 web/src/auth/    sign-in: the real pool only (provider.ts); local.ts is the

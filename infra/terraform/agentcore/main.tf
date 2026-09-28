@@ -276,16 +276,29 @@ resource "aws_bedrockagentcore_agent_runtime" "agent" {
     request_header_allowlist = ["Authorization"]
   }
 
-  environment_variables = {
-    TABLE_NAME            = local.main_table_name
-    COGNITO_ISSUER        = local.cognito_issuer
-    COGNITO_APP_CLIENT_ID = local.cognito_client
-    NETPULSE_REGION       = var.region
-    AGENT_MODEL           = var.agent_model
-    AGENT_FALLBACK_MODEL  = var.agent_fallback_model
-    # Empty: tools in-process. The agent treats "" as unset.
-    MCP_RUNTIME_ARN = var.use_mcp_tools ? aws_bedrockagentcore_agent_runtime.mcp.agent_runtime_arn : ""
-  }
+  # Where the tools are is decided by which MCP variables are PRESENT (see
+  # agent-entry.ts): the gateway's pair, else the runtime ARN, else none and
+  # the tools run in the agent. Absent rather than "" when switched off, so
+  # the fallback path never depends on an empty value being accepted.
+  environment_variables = merge(
+    {
+      TABLE_NAME            = local.main_table_name
+      COGNITO_ISSUER        = local.cognito_issuer
+      COGNITO_APP_CLIENT_ID = local.cognito_client
+      NETPULSE_REGION       = var.region
+      AGENT_MODEL           = var.agent_model
+      AGENT_FALLBACK_MODEL  = var.agent_fallback_model
+    },
+    var.use_mcp_tools ? tomap({
+      MCP_RUNTIME_ARN = aws_bedrockagentcore_agent_runtime.mcp.agent_runtime_arn
+    }) : tomap({}),
+    # The gateway (gateway.tf), which the agent then prefers - the runtime
+    # accepts nothing else once the gateway fronts it.
+    var.use_mcp_tools && var.mcp_via_gateway ? tomap({
+      MCP_GATEWAY_URL    = try(aws_bedrockagentcore_gateway.mcp[0].gateway_url, "")
+      MCP_GATEWAY_TARGET = local.gateway_target_name
+    }) : tomap({}),
+  )
 
   # A session's microVM stays up (memory billed) until it has been idle this
   # long. Five minutes covers a person asking follow-ups; the default is 15.

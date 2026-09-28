@@ -41,3 +41,14 @@ variable "use_mcp_tools" {
   type        = bool
   default     = true
 }
+
+variable "mcp_via_gateway" {
+  description = <<-EOT
+    true: an AgentCore Gateway fronts the MCP runtime (gateway.tf). The agent
+    calls the gateway, which checks the user's token and passes it through;
+    the runtime then accepts calls from that gateway only. false: the agent
+    calls the MCP runtime directly, as before.
+  EOT
+  type        = bool
+  default     = true
+}

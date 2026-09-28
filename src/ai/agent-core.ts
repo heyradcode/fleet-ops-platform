@@ -58,7 +58,14 @@ export type AgentResult = {
    * on AgentCore, by which model, and which turn of the conversation. Set by
    * the CALLER of runAgent - the loop does not know where it is running.
    */
-  servedBy?: { host: 'tab' | 'agentcore'; model: string; turn: number; tools?: 'in-process' | 'mcp' };
+  servedBy?: {
+    host: 'tab' | 'agentcore';
+    model: string;
+    turn: number;
+    tools?: 'in-process' | 'mcp';
+    /** Only for MCP: straight to the tool server, or through the AgentCore Gateway. */
+    toolsRoute?: 'direct' | 'gateway';
+  };
 };
 
 const SYSTEM_PROMPT = [

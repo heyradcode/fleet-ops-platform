@@ -40,7 +40,7 @@ independent services; you use the ones you need:
 |---|---|---|
 | **Runtime** | Hosts your agent code. Each *session* gets its own isolated **microVM** (CPU, memory, filesystem), kept warm between requests in that session and destroyed after it. Any framework, any model. | **Yes** |
 | **Identity** | *Inbound*: who may invoke the agent (IAM SigV4, or JWTs from your OIDC provider). *Outbound*: credentials the agent uses to call other services on a user's behalf (OAuth token vault). | **Inbound, yes** (Cognito JWT) |
-| **Gateway** | Turns existing APIs and Lambda functions into MCP tools, with policy, guardrails and interceptors in front. | No |
+| **Gateway** | A governed front door for agentic traffic: aggregates MCP servers and APIs into tools, or forwards to a runtime unchanged, with token checks, policy, guardrails and interceptors in front. | **Yes**: in front of the MCP tool server, passing the user's token through (docs/12, Part 2) |
 | **Memory** | Managed short-term (conversation) and long-term (extracted facts, preferences) memory. | No |
 | **Code Interpreter** / **Browser** | Sandboxed code execution and a managed headless browser as tools. | No |
 | **Observability** | Traces, metrics and logs for sessions and tool calls, in CloudWatch. | Logs only |
@@ -449,10 +449,9 @@ The other AgentCore services map onto real gaps in this platform:
   memory, and end with it. AgentCore Memory would make a conversation survive
   the session, and could extract long-term facts ("this operator always asks
   about Dallas"). Worth it once conversations need to last.
-- **Gateway:** the agent's tools are code inside the bundle. Gateway could
-  expose the board API's routes as MCP tools, with policy and guardrails
-  outside the agent, and the runtime could be restricted to accept calls only
-  through it.
+- **Gateway:** now in use, in front of the MCP tool server (docs/12,
+  Part 2). What's still open is attaching AgentCore Policy (Cedar) to it,
+  so the role rules are enforced a second time, outside the agent.
 - **Observability:** ADOT auto-instrumentation gives per-step traces in
   CloudWatch. The bundle is CommonJS partly to keep that option open, because
   ADOT only patches `require()`.

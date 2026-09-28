@@ -132,6 +132,20 @@ resource "aws_bedrockagentcore_agent_runtime" "mcp" {
     custom_jwt_authorizer {
       discovery_url   = "${local.cognito_issuer}/.well-known/openid-configuration"
       allowed_clients = [local.cognito_client]
+
+      # Behind the gateway, ONLY the gateway. A front door that can be walked
+      # around is decoration: without this, anyone holding a valid token
+      # could call the runtime's own address and skip every check the
+      # gateway adds. The gateway stamps its identity on what it forwards;
+      # the runtime rejects requests whose chain does not include it.
+      dynamic "allowed_workload_configuration" {
+        for_each = var.mcp_via_gateway ? [1] : []
+        content {
+          hosting_environment {
+            arn = aws_bedrockagentcore_gateway.mcp[0].gateway_arn
+          }
+        }
+      }
     }
   }
 

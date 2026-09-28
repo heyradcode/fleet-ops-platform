@@ -126,7 +126,10 @@ export async function handleAgentInvocation(req: InvocationRequest, deps: Invoca
       history,
       onStep: deps.onStep,
     });
-    result.servedBy = { host: 'agentcore', model: deps.model ?? 'offline', turn: history.length + 1, tools: provider.via };
+    result.servedBy = {
+      host: 'agentcore', model: deps.model ?? 'offline', turn: history.length + 1, tools: provider.via,
+      ...(provider.route ? { toolsRoute: provider.route } : {}),
+    };
 
     // Only answers that passed the output guardrail become context - a
     // withheld answer fed back in would be the model reading what it was
@@ -139,7 +142,7 @@ export async function handleAgentInvocation(req: InvocationRequest, deps: Invoca
       }].slice(-HISTORY_TURNS));
     }
     log.info('agent: answered', {
-      tenant: principal.tenantId, stoppedBecause: result.stoppedBecause, tools: provider.via,
+      tenant: principal.tenantId, stoppedBecause: result.stoppedBecause, tools: provider.via, route: provider.route ?? '-',
       modelCalls: result.usage.modelCalls, inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens,
     });
     return { status: 200, body: result };
