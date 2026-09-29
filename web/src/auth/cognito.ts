@@ -68,6 +68,39 @@ export function cognitoConfigured(): boolean {
   return Boolean(e?.VITE_COGNITO_DOMAIN && e?.VITE_COGNITO_CLIENT_ID && e?.VITE_COGNITO_ISSUER);
 }
 
+/**
+ * Before sending anyone away: does the pool THIS BUILD names still exist?
+ *
+ * The VITE_ values are baked in when the board is built, so a build made
+ * before its pool was replaced sends every sign-in to a hosted UI that is
+ * gone. That happened: the Vercel build kept a deleted pool's domain after
+ * the pool was replaced, and "Continue" landed on a browser error page -
+ * "this site can't be reached", on a page that is not ours and explains
+ * nothing. The pool's JWKS is public and CORS-open (the verifier reads it
+ * anyway), and Cognito answers a deleted pool with "User pool ... does not
+ * exist" - so one request turns a dead redirect into a sentence.
+ *
+ * Blocks ONLY on that definite answer, or on no answer at all. Any other
+ * hiccup lets the redirect try: a guard that locked people out on a slow
+ * JWKS read would be worse than the bug it exists for.
+ */
+export async function assertPoolExists(issuer: string, fetchFn: typeof fetch = fetch): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetchFn(issuer + '/.well-known/jwks.json');
+  } catch {
+    throw new AuthError('The sign-in service cannot be reached. Check your connection and try again.');
+  }
+  if (res.ok) return;
+  const body = await res.text().catch(() => '');
+  if (/does not exist/i.test(body)) {
+    // The real reason, to the console, for whoever deploys it.
+    console.warn('Cognito sign-in: this build is configured for ' + issuer + ', which no longer exists - rebuild with the current VITE_COGNITO_* values.');
+    throw new AuthError('This site is set up for a sign-in service that no longer exists, so it cannot send you to sign in. ' +
+      'It needs rebuilding with the current sign-in settings - tell whoever deploys the board.');
+  }
+}
+
 const VERIFIER_KEY = 'netpulse.pkce.verifier';
 const STATE_KEY = 'netpulse.pkce.state';
 const TOKEN_KEY = 'netpulse.session';
@@ -119,7 +152,9 @@ export const cognitoAuth: AuthProvider = {
   },
 
   async signInWith(provider, email) {
-    const { domain, clientId, redirectUri } = config();
+    const { domain, clientId, redirectUri, pool } = config();
+    // Before the PKCE pair is stored or the page leaves: see assertPoolExists.
+    await assertPoolExists(pool.issuer);
     const { verifier, challenge } = createPkcePair();
     // `state` is CSRF protection, not decoration: on the way back it is
     // compared against what was stored, so a redirect the user did not start

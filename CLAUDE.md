@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 440 tests, no network. Picks up web/ tests too.
+pnpm test                       # 443 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180 - real Cognito sign-in
 pnpm web:env                    # write web/.env.cognito.local from the Terraform outputs
@@ -609,6 +609,15 @@ network. Nothing real belongs in this repo.
   which only esbuild reads - same shape as `runbook-loader.node.ts` and
   `aws/dynamodb.sdk.ts`. CI's portability step greps for `@aws-sdk` imports
   and the two adapters in shared code; it did not always.
+- **The board's `VITE_*` values are baked in at BUILD time, and Vercel keeps
+  its OWN copy.** `pnpm web:env` fixes local builds only. After the pool was
+  replaced, the Vercel build still named the deleted pool's hosted-UI domain,
+  and "Continue" sent everyone to a hostname that no longer resolves - a
+  browser error page, nothing of ours on screen. Whenever Terraform replaces
+  the pool (or the API or the agent), set the Vercel project's environment
+  variables from `terraform output vercel_env` and REDEPLOY without the build
+  cache. The sign-in page now checks its pool's JWKS first
+  (`assertPoolExists`) and says so in a sentence instead.
 - **The sign-in callback runs TWICE in development.** `main.tsx` renders
   under React `StrictMode`, which mounts effects twice on purpose. The first
   run consumed the single-use PKCE state and signed the person in; the second
