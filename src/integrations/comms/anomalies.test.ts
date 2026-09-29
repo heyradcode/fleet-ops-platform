@@ -17,7 +17,9 @@ import {
 import { createCommsClient } from './client.ts';
 import { COMMS_CONFIG, HHS_DEMO_TENANT } from './config.ts';
 import { backfillCommsBaselines, runCommsPoll } from './poll.ts';
-import { detectAndLearn, hourOfWeek, learnOnly, type MetricPoint } from './anomalies.ts';
+import {
+  detectAndLearn, hourOfWeek, latestAnomalies, learnOnly, MAX_STORED_ANOMALIES, putAnomalies, type CommsAnomaly, type MetricPoint,
+} from './anomalies.ts';
 import { toolByName } from '../../ai/tools.ts';
 import { buildDailyBrief } from '../../reporting/daily-brief.ts';
 
@@ -144,4 +146,17 @@ test('the brief and the assistant: early warning apart from context', async () =
   const [early, context] = out.split('CONTEXT for open incidents:');
   assert.match(early, new RegExp(GENESYS_SUBTLE_QUEUE));
   assert.match(context, /sbc2/);
+});
+
+test('a bad day stores the most unusual, counts the rest - and one item never outgrows DynamoDB', async () => {
+  const principal: Principal = {
+    sub: 'a', email: 'a@x', tenantId: 'anomaly-cap', roles: ['admin'], scope: { kind: 'tenant' }, identityProvider: 'cognito',
+  };
+  // Most unusual first, as detectAndLearn returns them.
+  const many = Array.from({ length: 250 }, (_, i) => ({ explanation: 'anomaly ' + i, z: 250 - i }) as unknown as CommsAnomaly);
+  await putAnomalies(principal, '2026-09-08T14:30:00.000Z', many);
+  const stored = (await latestAnomalies(principal))!;
+  assert.equal(stored.anomalies.length, MAX_STORED_ANOMALIES);
+  assert.equal(stored.omitted, 50);
+  assert.equal((stored.anomalies[0] as unknown as { z: number }).z, 250, 'the most unusual kept');
 });

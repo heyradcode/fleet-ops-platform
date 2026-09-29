@@ -291,12 +291,23 @@ export async function backfillBaselines(
   return points;
 }
 
+/**
+ * At most this many are stored - the MOST unusual, since they arrive sorted
+ * by |z|. One item, and a bad day across hundreds of buildings could pass
+ * DynamoDB's 400 KB and fail the poll's write; the rest are counted, and
+ * said to be there.
+ */
+export const MAX_STORED_ANOMALIES = 200;
+
 /** The latest poll's anomalies, stored as one item: they describe NOW. */
 export async function putAnomalies(principal: Principal, asOf: string, anomalies: CommsAnomaly[]): Promise<void> {
-  await mainTable.put({ PK: pk(principal, 'COMMS'), SK: 'ANOMALIES#LATEST', entity: 'Anomalies', asOf, anomalies });
+  await mainTable.put({
+    PK: pk(principal, 'COMMS'), SK: 'ANOMALIES#LATEST', entity: 'Anomalies', asOf,
+    anomalies: anomalies.slice(0, MAX_STORED_ANOMALIES), omitted: Math.max(0, anomalies.length - MAX_STORED_ANOMALIES),
+  });
 }
 
-export async function latestAnomalies(principal: Principal): Promise<{ asOf: string; anomalies: CommsAnomaly[] } | undefined> {
+export async function latestAnomalies(principal: Principal): Promise<{ asOf: string; anomalies: CommsAnomaly[]; omitted: number } | undefined> {
   const item = await mainTable.get(pk(principal, 'COMMS'), 'ANOMALIES#LATEST');
-  return item ? { asOf: String(item.asOf), anomalies: item.anomalies as CommsAnomaly[] } : undefined;
+  return item ? { asOf: String(item.asOf), anomalies: item.anomalies as CommsAnomaly[], omitted: Number(item.omitted ?? 0) } : undefined;
 }

@@ -145,7 +145,52 @@ export function observeRun(args: {
   ];
 }
 
-/** Data-quality issues with their fixes. Pure. */
+/**
+ * At most this many issues of one kind are LISTED; the rest roll up into one
+ * issue that counts them and names the same fix.
+ *
+ * Not tidiness - the list is stored as ONE item, and a tenant's first day is
+ * when it is longest: every mapping table is empty, so every Webex location,
+ * Kurmi department and SIP peer is "unmapped". Unbounded, that passes
+ * DynamoDB's 400 KB item limit, the health write throws, and the poll dies
+ * at the moment someone is watching it most closely. Bounded, it is also a
+ * work list: fix these twenty, and the next poll lists the next twenty.
+ */
+export const MAX_ISSUES_PER_KIND = 20;
+
+/** The fix for everything a roll-up stands for - the same as each listed one's. */
+const ROLL_UP_ACTION: Partial<Record<DataQualityIssue['kind'], string>> = {
+  'unknown-domain': 'Add each to the tenant\'s agencyDomains (an agency) or contractorDomains.',
+  'unmapped-webex-location': 'Add each to the tenant\'s webexLocationFacility table with its LC code.',
+  'unmapped-bandwidth-peer': 'If a peer carries a Teams SBC, add its peer id to bandwidth.peerTrunk.',
+  'unmapped-kurmi-department': 'Add each to kurmi.departmentFacility with its LC code.',
+  'unmapped-starlink-terminal': 'Add each fixed site\'s terminal to starlink.terminalFacility with its LC code.',
+  'unknown-agency-code': 'Add each to kurmi.agencyCodes, or correct param2 on those devices in Kurmi.',
+};
+
+/** Keep the first MAX_ISSUES_PER_KIND of each kind, in order; roll up the rest. Pure. */
+export function boundIssues(issues: DataQualityIssue[]): DataQualityIssue[] {
+  const seen = new Map<DataQualityIssue['kind'], number>();
+  const rest = new Map<DataQualityIssue['kind'], { items: number; count: number }>();
+  const out: DataQualityIssue[] = [];
+  for (const i of issues) {
+    const n = (seen.get(i.kind) ?? 0) + 1;
+    seen.set(i.kind, n);
+    if (n <= MAX_ISSUES_PER_KIND) { out.push(i); continue; }
+    const r = rest.get(i.kind) ?? { items: 0, count: 0 };
+    rest.set(i.kind, { items: r.items + 1, count: r.count + i.count });
+  }
+  for (const [kind, r] of rest) {
+    out.push({
+      kind, count: r.count,
+      detail: '...and ' + r.items + ' more ' + kind.replace(/-/g, ' ') + ' issue(s) not listed here',
+      action: (ROLL_UP_ACTION[kind] ?? 'The same fix as those listed.') + ' Fix the ones listed, and the next poll lists the next.',
+    });
+  }
+  return out;
+}
+
+/** Data-quality issues with their fixes, bounded per kind (boundIssues). Pure. */
 export function dataQuality(
   report: WorkforceReport, unmappedBandwidthPeers: string[], phones?: PhoneInventory,
   unmappedStarlinkTerminals: string[] = [], deskPhones?: RegistrationReport,
@@ -248,7 +293,7 @@ export function dataQuality(
       action: actionFor[reason] ?? 'Review.',
     });
   }
-  return issues;
+  return boundIssues(issues);
 }
 
 const healthPk = (p: Principal) => pk(p, 'COMMS');

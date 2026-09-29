@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 428 tests, no network. Picks up web/ tests too.
+pnpm test                       # 430 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180 - real Cognito sign-in
 pnpm web:env                    # write web/.env.cognito.local from the Terraform outputs
@@ -541,6 +541,16 @@ network. Nothing real belongs in this repo.
   vacuously once the store went async. `memoryTable` is for what only the
   fake has (size, stats, Scan); production code never touches it. Write first, delete last:
   a crash between a delete and its replacement put loses the record.
+- **A fixed-key item is a SNAPSHOT, and DynamoDB caps an item at 400 KB.**
+  The in-memory table has no limit, so every test passes and the first real
+  tenant fails the write - which, unguarded, fails the poll. Anything that
+  grows with the customer's estate is split or bounded: queue staffing is
+  one item per queue (header written after); data quality lists at most
+  `MAX_ISSUES_PER_KIND` per kind plus a roll-up that names the fix (a
+  tenant's FIRST day, every table empty, is when it is longest); stored
+  anomalies are the `MAX_STORED_ANOMALIES` most unusual, the rest counted.
+  A test for each builds the realistic size and asserts it would NOT have
+  fitted unbounded, so it cannot pass vacuously.
 - **Loops of awaits are slow; parallel read-modify-writes lose updates.**
   At ~300 ms a round trip, a thousand sequential awaits is five minutes.
   Use `forEachByKey` (`platform/concurrency.ts`): different keys run in

@@ -18,7 +18,7 @@ import {
 import { createCommsClient } from './client.ts';
 import { COMMS_CONFIG, HHS_DEMO_TENANT } from './config.ts';
 import { runCommsPoll } from './poll.ts';
-import { loadHealth, STALE_AFTER_MS, type SourceHealth } from './health.ts';
+import { boundIssues, loadHealth, MAX_ISSUES_PER_KIND, STALE_AFTER_MS, type DataQualityIssue, type SourceHealth } from './health.ts';
 import type { CommsTenantConfig } from './types.ts';
 
 let clock: ControllableClock;
@@ -138,4 +138,28 @@ test('health is stored, and read back only at tenant scope', async () => {
   assert.equal((await loadHealth(principal))!.sources.length, 9);
   const site: Principal = { ...principal, roles: ['operator'], scope: { kind: 'site', siteId: 'x' } };
   await assert.rejects(loadHealth(site), OutOfScopeError);
+});
+
+test('a first-day tenant - every table empty - lists twenty of each, rolls up the rest, and stays far under 400 KB', () => {
+  const kinds: DataQualityIssue['kind'][] = [
+    'unmapped-webex-location', 'unmapped-kurmi-department', 'unmapped-bandwidth-peer', 'unmapped-starlink-terminal', 'unknown-domain',
+  ];
+  const all: DataQualityIssue[] = kinds.flatMap((kind) => Array.from({ length: 2000 }, (_, i) => ({
+    kind, count: 1, detail: kind + ' "Some Rather Long Admin-Typed Name Number ' + i + '"',
+    action: 'Add "Some Rather Long Admin-Typed Name Number ' + i + '" to the table that maps it, with its LC code.',
+  })));
+  assert.ok(JSON.stringify(all).length > 400_000, 'unbounded, it would not have fitted - the test proves something');
+
+  const bounded = boundIssues([{ kind: 'blank-agency', count: 3, detail: 'x', action: 'y' }, ...all]);
+  assert.ok(JSON.stringify(bounded).length < 40_000);
+  for (const kind of kinds) {
+    const listed = bounded.filter((i) => i.kind === kind);
+    assert.equal(listed.length, MAX_ISSUES_PER_KIND + 1, kind + ': twenty listed and one roll-up');
+    const rollUp = listed.at(-1)!;
+    assert.equal(rollUp.count, 2000 - MAX_ISSUES_PER_KIND);
+    assert.match(rollUp.detail, /^\.\.\.and 1980 more/);
+    assert.match(rollUp.action, /Fix the ones listed, and the next poll lists the next\.$/, 'a roll-up still names the fix');
+  }
+  assert.deepEqual(bounded[0], { kind: 'blank-agency', count: 3, detail: 'x', action: 'y' }, 'the rest untouched, in order');
+  assert.match(bounded.find((i) => i.kind === 'unmapped-webex-location' && i.detail.startsWith('...'))!.action, /webexLocationFacility/);
 });

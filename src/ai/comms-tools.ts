@@ -236,6 +236,7 @@ export const COMMS_TOOLS: Tool[] = [
         ...(early.length ? early.map((a) => '  ' + a.explanation) : ['  none']),
         'CONTEXT for open incidents:',
         ...(context.length ? context.map((a) => '  ' + a.explanation) : ['  none']),
+        ...(latest.omitted ? [latest.omitted + ' less unusual ones were not stored - these are the most unusual.'] : []),
       ].join('\n');
     },
   },
