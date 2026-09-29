@@ -3,6 +3,9 @@
 NetPulse is an estate operations platform: network feeds in, incidents out, a live
 board and an assistant on top. This is the shortest path through it.
 
+New to all of it? `docs/00-the-simple-version.md` explains the whole
+architecture in plain words first, then points at the code.
+
 ## 1. Run it (5 minutes)
 
 ```bash

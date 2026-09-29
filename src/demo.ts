@@ -65,7 +65,7 @@ import { checkInput, canUseTool } from './ai/guardrails.ts';
 import { b64urlEncode, b64urlDecodeText, setUuid, seededUuid } from './platform/crypto.ts';
 import { setClock, fixedClock, now, nowIso } from './platform/clock.ts';
 import { setRandom, seededRandom } from './platform/random.ts';
-import { mockFetch, directory as commsDirectory, DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS } from './integrations/comms/mock/index.ts';
+import { mockFetch, directory as commsDirectory, DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER, DEMO_CUCM_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS } from './integrations/comms/mock/index.ts';
 import { createCommsClient } from './integrations/comms/client.ts';
 import { backfillCommsBaselines, runCommsPoll } from './integrations/comms/poll.ts';
 import { syncEntraDirectory } from './integrations/comms/entra-directory.ts';
@@ -801,7 +801,7 @@ async function sectionComms() {
       webex: { token: DEMO_WEBEX_TOKEN },
       bandwidth: { ...DEMO_BANDWIDTH_USER },
       helix: { ...DEMO_HELIX_USER },
-      kurmi: { ...DEMO_KURMI_USER },
+      kurmi: { ...DEMO_KURMI_USER }, cucm: { ...DEMO_CUCM_USER },
       starlink: { ...DEMO_STARLINK_ACCOUNTS.prod },
     },
   });
@@ -889,6 +889,14 @@ async function sectionComms() {
       ', no agency: ' + ph.blankAgency + ' - counted and named, never dropped') + '\n');
     write('   Houston (LC=1120) has ' + (ph.byFacility.find((f) => f.code === '1120')?.count ?? 0) +
       ' Cisco phones too - the call-quality incident\'s reach is wider than Teams and Webex' + '\n');
+  }
+  // Kurmi says the phones EXIST; only the call control says they WORK.
+  const reg = poll.health.sources.find((s) => s.source === 'cucm');
+  if (reg && reg.status !== 'not-configured') {
+    const elPaso = poll.signals.find((s) => s.kind === 'desk-phone-registration' && s.subject.id === '2031');
+    write('   ...and CUCM (RisPort70) was asked, BY THOSE NAMES, whether each is registered' +
+      (elPaso ? ': at El Paso ' + Math.round(elPaso.value * elPaso.sampleSize) + ' of ' + elPaso.sampleSize + ' are not' : '') + '\n');
+    write('   ' + dim('a phone that cannot register makes no calls - Teams and Webex see nothing; the call control is the only witness') + '\n');
   }
 
   note('');

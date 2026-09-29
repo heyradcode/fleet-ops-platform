@@ -21,7 +21,7 @@
 import { now } from '../../../platform/clock.ts';
 import { b64urlEncode, b64urlDecodeText } from '../../../platform/crypto.ts';
 
-export type ServiceId = 'teams' | 'genesys' | 'webex' | 'bandwidth' | 'helix' | 'kurmi' | 'starlink';
+export type ServiceId = 'teams' | 'genesys' | 'webex' | 'bandwidth' | 'helix' | 'kurmi' | 'starlink' | 'cucm';
 
 export type MockRequest = {
   method: string;
@@ -98,6 +98,7 @@ export function createApp(
 
         if (!route.public) {
           const auth = service === 'bandwidth' ? checkBasic(req.headers)
+            : service === 'cucm' ? checkBasic(req.headers, DEMO_CUCM_USER)
             : service === 'helix' ? checkArJwt(req.headers)
               : checkBearer(service, req.headers);
           if (auth !== 'ok') {
@@ -239,12 +240,20 @@ export const DEMO_BANDWIDTH_USER = {
   password: 'demo-only-not-a-real-password',
 } as const;
 
-export function checkBasic(headers: Headers): 'ok' | 'missing' | 'invalid' {
+/** CUCM: an application user with read-only serviceability access. Basic auth. Announces itself as fake. */
+export const DEMO_CUCM_USER = {
+  username: 'netpulse-ris-readonly',
+  password: 'demo-only-not-a-real-password',
+} as const;
+
+export function checkBasic(
+  headers: Headers, user: { username: string; password: string } = DEMO_BANDWIDTH_USER,
+): 'ok' | 'missing' | 'invalid' {
   const m = /^Basic\s+(\S+)$/i.exec(headers.get('authorization') ?? '');
   if (!m) return 'missing';
   let pair = '';
   try { pair = atob(m[1]); } catch { return 'invalid'; }
-  return pair === DEMO_BANDWIDTH_USER.username + ':' + DEMO_BANDWIDTH_USER.password ? 'ok' : 'invalid';
+  return pair === user.username + ':' + user.password ? 'ok' : 'invalid';
 }
 
 /**

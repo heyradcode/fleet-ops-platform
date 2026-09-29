@@ -40,6 +40,9 @@ export const SELF_EVIDENT: ReadonlySet<CommsSignalKind> = new Set<CommsSignalKin
   'trunk-call-failure', 'queue-backlog', 'queue-abandonment',
   // The dish measuring its own link: the system of record, like a trunk.
   'wan-latency', 'wan-drop-rate',
+  // The call control counting its own registrations. What it INFERS about a
+  // building's network is the knowledge graph's job, as a candidate.
+  'desk-phone-registration',
 ]);
 
 /** Which sources can witness each kind - so a missing witness can be named. */
@@ -50,6 +53,7 @@ export const WITNESSES: Record<CommsSignalKind, SignalSource[]> = {
   'queue-abandonment': ['genesys'],
   'wan-latency': ['starlink'],
   'wan-drop-rate': ['starlink'],
+  'desk-phone-registration': ['cucm'],
 };
 
 export type CommsAlarm = {
@@ -264,12 +268,16 @@ function titleFor(subject: CommsSubject, kinds: CommsSignalKind[]): string {
   const media = kinds.includes('facility-media-degradation');
   switch (subject.kind) {
     case 'trunk': return 'SBC ' + subject.name + ' is failing calls';
-    case 'facility':
+    case 'facility': {
       // One incident when both happen at one facility - the WAN evidence is
       // then very likely the explanation for the call quality.
-      return wan && media ? 'Call quality and satellite WAN degraded at ' + subject.name
+      const phones = kinds.includes('desk-phone-registration');
+      const base = wan && media ? 'Call quality and satellite WAN degraded at ' + subject.name
         : wan ? 'Satellite WAN degraded at ' + subject.name
-          : 'Call quality degraded at ' + subject.name;
+          : media ? 'Call quality degraded at ' + subject.name : undefined;
+      if (!phones) return base ?? 'Call quality degraded at ' + subject.name;
+      return base ? base + ', and desk phones dropping off' : 'Desk phones dropping off the call control at ' + subject.name;
+    }
     case 'queue': return 'Queue "' + subject.name + '" is overwhelmed';
   }
 }

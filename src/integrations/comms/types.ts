@@ -41,8 +41,16 @@ export const COMMS_SOURCES: readonly CommsSource[] = ['teams', 'genesys', 'webex
  */
 export type CarrierSource = 'bandwidth' | 'starlink';
 
-/** Anything that can witness a signal: a platform or a carrier. */
-export type SignalSource = CommsSource | CarrierSource;
+/**
+ * The CALL CONTROL: Cisco Unified CM, on premises or as Webex Calling
+ * Dedicated Instance. It witnesses one thing nobody else can - whether the
+ * desk phones are REGISTERED - because a phone that is not makes no calls
+ * for a call-quality source to judge. Holds users, but we read devices only.
+ */
+export type CallControlSource = 'cucm';
+
+/** Anything that can witness a signal: a platform, a carrier or the call control. */
+export type SignalSource = CommsSource | CarrierSource | CallControlSource;
 
 /** The agency split, per the customer: an agency, a contractor, or unknown. */
 export type AgencyAssignment =
@@ -162,4 +170,12 @@ export type CommsTenantConfig = {
    * here. A hostname the estate does not have is simply no edge.
    */
   sbcSwitch?: Record<string, string>;
+  /**
+   * CUCM RisPort70: desk-phone registration, asked by the names Kurmi lists.
+   * `requestsPerMinute` is OUR SHARE of the cluster's RisPort allowance (15 a
+   * minute by default, 18 at most) - an allowance every RisPort application
+   * on that cluster shares, the customer's own tools included. Agree it with
+   * whoever runs the cluster; for Dedicated Instance, that includes Cisco.
+   */
+  cucm?: { requestsPerMinute: number };
 };

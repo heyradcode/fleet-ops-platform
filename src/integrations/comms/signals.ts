@@ -34,6 +34,10 @@ import { drainGenesys, drainGraph, drainWebex } from './client.ts';
 import { errorLine, type CommsTenantConfig, type SignalSource } from './types.ts';
 import { pullBandwidthTrunks } from './bandwidth.ts';
 import { drainTelemetry, siteWan } from './starlink.ts';
+import {
+  describeRegistration, deskPhoneSeverity, readRegistrations, summariseRegistrations,
+  type DeskPhone, type RegistrationReport,
+} from './cucm.ts';
 import type { WorkforceMember, WorkforceReport } from './workforce.ts';
 
 export type CommsSignalKind =
@@ -42,7 +46,8 @@ export type CommsSignalKind =
   | 'queue-backlog'               // Genesys: callers waiting right now
   | 'queue-abandonment'           // Genesys: abandoned / offered, per queue
   | 'wan-latency'                 // Starlink: the dish's own ping latency, per facility
-  | 'wan-drop-rate';              // Starlink: the dish's own packet drop, per facility
+  | 'wan-drop-rate'               // Starlink: the dish's own packet drop, per facility
+  | 'desk-phone-registration';    // CUCM: desk phones the network dropped / measured, per facility
 
 export type CommsSubject = { kind: 'trunk' | 'facility' | 'queue'; id: string; name: string };
 
@@ -403,11 +408,26 @@ export type CollectedSignals = {
   unmappedStarlinkTerminals: string[];
   /** Raw Starlink stream bodies archived this poll - the replay path if anything downstream fails. */
   starlinkArchived: string[];
+  /**
+   * Sources that were NOT ASKED this poll, and why - the call control when no
+   * phone list came from Kurmi. Unavailable to the rules, like a failure, but
+   * not the source's fault: the health view says "not asked", never "down",
+   * or someone is sent to the wrong team.
+   */
+  notAsked: Partial<Record<SignalSource, string>>;
+  /** What the desk-phone registration read found, when it ran. Counts only. */
+  deskPhones?: RegistrationReport;
 };
 
 /** Every signal for the window ending at `at`, from every source the tenant runs. One source failing is that source's problem. */
 export async function collectSignals(
   client: CommsClient, config: CommsTenantConfig, workforce: WorkforceReport, at: number,
+  /**
+   * The desk phones to ask the call control about, from this poll's Kurmi
+   * pull. Absent in a baseline backfill on purpose: registration is a
+   * snapshot of NOW, with no past to read.
+   */
+  opts: { deskPhones?: DeskPhone[] } = {},
 ): Promise<CollectedSignals> {
   const w: Window = { from: at - SIGNAL_WINDOW_MS, to: at };
   const members = new Map(workforce.members.map((m) => [m.emailKey, m]));
@@ -416,6 +436,8 @@ export async function collectSignals(
   let unmappedBandwidthPeers: string[] = [];
   let unmappedStarlinkTerminals: string[] = [];
   let starlinkArchived: string[] = [];
+  const notAsked: CollectedSignals['notAsked'] = {};
+  let deskPhones: RegistrationReport | undefined;
 
   const attempt = async (source: SignalSource, run: () => Promise<void>) => {
     try {
@@ -451,7 +473,39 @@ export async function collectSignals(
       signals.push(...starlinkSignals(client.tenantId, sites, isoWindow(w)));
     });
   }
-  return { signals, errors, unmappedBandwidthPeers, unmappedStarlinkTerminals, starlinkArchived };
+  if (config.cucm) {
+    const phones = opts.deskPhones;
+    if (!phones) {
+      notAsked.cucm = 'not asked this poll: no phone list - Kurmi, which names the phones, was unavailable';
+    } else {
+      const share = config.cucm.requestsPerMinute;
+      await attempt('cucm', async () => {
+        deskPhones = summariseRegistrations(phones, await readRegistrations(client, phones, share), at);
+        signals.push(...deskPhoneSignals(client.tenantId, deskPhones, isoWindow(w)));
+      });
+    }
+  }
+  return { signals, errors, unmappedBandwidthPeers, unmappedStarlinkTerminals, starlinkArchived, notAsked, deskPhones };
+}
+
+/**
+ * Per-facility desk-phone registration. The call control counting its own
+ * registrations - a fact, like a trunk's failure rate - so one source is
+ * enough (SELF_EVIDENT). An `ok` building is emitted too: it is the healthy
+ * MEASUREMENT an open incident needs before it may resolve.
+ */
+function deskPhoneSignals(tenantId: TenantId, report: RegistrationReport, window: { from: string; to: string }): CommsSignal[] {
+  const out: CommsSignal[] = [];
+  for (const f of report.byFacility) {
+    const severity = deskPhoneSeverity(f);
+    if (!severity) continue;
+    const subject: CommsSubject = { kind: 'facility', id: f.facility, name: 'LC=' + f.facility };
+    out.push(signal({
+      tenantId, source: 'cucm', subject, kind: 'desk-phone-registration', value: f.dropped / f.measured, unit: 'ratio',
+      sampleSize: f.measured, window, severity, detail: describeRegistration(f, subject.name),
+    }));
+  }
+  return out;
 }
 
 /** Per-facility WAN signals from the dishes. Obstruction and alerts are the evidence. */

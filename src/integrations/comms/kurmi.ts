@@ -35,6 +35,7 @@
 import { childText, childrenNamed, descendants, escapeXml, parseXml, type XmlElement } from '../../platform/xml.ts';
 import { CommsHttpError, type CommsClient } from './client.ts';
 import type { CommsTenantConfig } from './types.ts';
+import type { DeskPhone } from './cucm.ts';
 
 /** How many times a truncated slice may be split. 2 -> up to 256 searches. */
 export const MAX_PARTITION_DEPTH = 2;
@@ -49,6 +50,12 @@ export type PhoneUnplaced = 'no-department' | 'no-facility-leaf' | 'unmapped-dep
 
 export type Phone = {
   dbid: string;
+  /**
+   * `ciscoName` (SEP + MAC), upper-cased: what CUCM knows the phone by. Held
+   * IN MEMORY for the registration read and never stored - the inventory
+   * that is stored is counts.
+   */
+  name: string;
   agency: PhoneAgency;
   facility?: string;
   unplaced?: PhoneUnplaced;
@@ -151,7 +158,7 @@ export function normalisePhone(device: XmlElement, config: NonNullable<CommsTena
 
   const path = text('kurmiDepartment').replace(/\/+$/, '');
   const segments = path.split('/').filter((s) => s.length > 0);
-  const phone: Phone = { dbid: device.attrs.dbid ?? '', agency, disabled, model: text('model') };
+  const phone: Phone = { dbid: device.attrs.dbid ?? '', name: text('ciscoName').toUpperCase(), agency, disabled, model: text('model') };
   if (segments.length === 0) return { ...phone, unplaced: 'no-department' };
   const leaf = segments[segments.length - 1];
   const hit = Object.entries(config.departmentFacility).find(([k]) => k.toLowerCase() === leaf.toLowerCase());
@@ -186,10 +193,25 @@ export function summarisePhones(phones: Phone[], searches: number, truncated: bo
   return inv;
 }
 
+/**
+ * The inventory's counts, and - IN MEMORY ONLY - the enabled, placed phones
+ * by name, which is what the call control is asked about (cucm.ts). A phone
+ * with no facility is not asked: it could not become a building's signal.
+ */
+export async function pullPhones(
+  client: CommsClient, config: CommsTenantConfig, asOf: string,
+): Promise<{ inventory: PhoneInventory; deskPhones: DeskPhone[] }> {
+  const kurmi = config.kurmi!;
+  const { devices, searches, truncated } = await pullKurmiDevices(client, kurmi.tenantDbid);
+  const phones = devices.map((d) => normalisePhone(d, kurmi));
+  return {
+    inventory: summarisePhones(phones, searches, truncated, asOf),
+    deskPhones: phones.filter((p) => !p.disabled && p.facility && p.name).map((p) => ({ name: p.name, facility: p.facility! })),
+  };
+}
+
 export async function pullPhoneInventory(
   client: CommsClient, config: CommsTenantConfig, asOf: string,
 ): Promise<PhoneInventory> {
-  const kurmi = config.kurmi!;
-  const { devices, searches, truncated } = await pullKurmiDevices(client, kurmi.tenantDbid);
-  return summarisePhones(devices.map((d) => normalisePhone(d, kurmi)), searches, truncated, asOf);
+  return (await pullPhones(client, config, asOf)).inventory;
 }

@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 403 tests, no network. Picks up web/ tests too.
+pnpm test                       # 419 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180 - real Cognito sign-in
 pnpm web:env                    # write web/.env.cognito.local from the Terraform outputs
@@ -434,6 +434,23 @@ network. Nothing real belongs in this repo.
   exceeds 2^53 - fine for ms maths, never an identity. The published client
   caches its token in a STATIC field, shared across tenants; ours is per
   client. A dish's sample count is a clock, not traffic - no volume baseline.
+- **Desk phones are asked about BY NAME, and CUCM's limits are shared and
+  silent.** `comms/cucm.ts` reads RisPort70 (on-prem CUCM or Webex Calling
+  Dedicated Instance - the same API): `selectCmDeviceExt`, which collates
+  nodes and takes NO wildcards, so the names come from Kurmi (in memory
+  only; the stored inventory is counts). No Kurmi, the source is NOT ASKED
+  - a health gap, never "down", and unavailable to the lifecycle. An answer
+  caps at 2000 devices and does not say it stopped, so batches of 500. The
+  ~15 requests a minute are the CLUSTER'S, shared with the customer's tools:
+  paced to `cucm.requestsPerMinute`, a per-poll budget, and a building the
+  budget missed is not measured - never a partial rate. A 500 is NOT
+  retried (it is usually that limit). A node not responding fails the read.
+  Compare case-insensitively (`Ok`/`OK`, `UnRegistered`). Only network
+  reasons count (6, 13); switched off/wiped/logged out is a decision, over a
+  week is dormant (data quality). The answer carries LoginUserId, a
+  Description that is a name, and the extension: never read. A phone that
+  cannot register makes NO calls - Teams and Webex see nothing; this is the
+  only witness, so it is SELF_EVIDENT.
 - **911Inform is NOT built: there is no public API documentation.** Do not
   invent one; it needs the vendor's or HHS's reference first, as Kurmi's
   schema did.
@@ -601,7 +618,7 @@ src/integrations/connector.ts  the one contract: poll() and onWebhook()
 src/integrations/controller/  Meraki, Mist, Aruba Central
 src/integrations/probe.ts  the external plane — the only thing that sees silence
 src/integrations/splunk/   outbound HEC (a bus consumer) + catalogued SPL search
-src/integrations/comms/  Teams, Genesys, Webex, Bandwidth, Helix, Kurmi, Starlink: client (tokens, retries, paging),
+src/integrations/comms/  Teams, Genesys, Webex, Bandwidth, Helix, Kurmi, CUCM, Starlink: client (tokens, retries, paging),
                  connectors, the workforce join (agency + facility split), and
                  signals -> alarms -> incidents
 src/integrations/comms/mock/  Teams (Graph), Genesys, Webex mocks: mockFetch on the

@@ -62,6 +62,13 @@ export type CommsEndpoints = {
   helixApi: string;
   /** Kurmi's SOAP endpoint. PLACEHOLDER path - see comms/kurmi.ts. */
   kurmiApi: string;
+  /**
+   * CUCM RisPort70, on a node of the customer's cluster. The path and port
+   * are the published ones; the host is per customer - and for Dedicated
+   * Instance it is reached over the customer's private peering, so the
+   * poller must run where that route exists.
+   */
+  cucmRis: string;
   /** Starlink's token endpoint - on www., unlike the API. */
   starlinkAuth: string;
   /** Starlink Enterprise API base. */
@@ -79,6 +86,7 @@ export const REAL_ENDPOINTS: CommsEndpoints = {
   bandwidthInsights: 'https://insights.bandwidth.com/api/v1',
   helixApi: 'https://hhs-restapi.onbmc.example',
   kurmiApi: 'https://kurmi.hhs.example/Kurmi/services/API',
+  cucmRis: 'https://cucm.hhs.example:8443/realtimeservice2/services/RISService70',
   starlinkAuth: 'https://www.starlink.com/api/auth/connect/token',
   starlinkApi: 'https://starlink.com/api/public',
 };
@@ -94,6 +102,8 @@ export type CommsCredentials = {
   helix?: { username: string; password: string };
   /** Kurmi: a read-only API login. Sent INSIDE every SOAP envelope - see comms/kurmi.ts. */
   kurmi?: { login: string; password: string };
+  /** CUCM: an application user with read-only serviceability access. Basic auth. */
+  cucm?: { username: string; password: string };
   /**
    * A Starlink SERVICE ACCOUNT. One per environment, never shared: each
    * service account has its own position in the telemetry stream, so dev and
@@ -142,6 +152,8 @@ export type CommsClient = {
   soap(source: 'kurmi', url: string, build: (auth: { login: string; password: string }) => string): Promise<Response>;
   /** How many token requests have been made, per source. For the tests and the demo. */
   tokenRequests: Record<CommsSource | 'helix' | 'starlink', number>;
+  /** The injected wait - for pacing a connector to a rate limit it shares (CUCM's). */
+  sleep(ms: number): Promise<void>;
 };
 
 export function createCommsClient(opts: {
@@ -236,10 +248,10 @@ export function createCommsClient(opts: {
     if (source === 'kurmi') return undefined;   // credentials are in the envelope
     // AR-JWT, not Bearer - see the mock kernel's checkArJwt.
     if (source === 'helix') return 'AR-JWT ' + await tokenFor('helix');
-    if (source === 'bandwidth') {
+    if (source === 'bandwidth' || source === 'cucm') {
       // No token to fetch or refresh: a Basic credential on every request.
-      const c = opts.credentials.bandwidth;
-      if (!c) throw new CommsHttpError(source, 0, 'no Bandwidth credentials configured');
+      const c = source === 'bandwidth' ? opts.credentials.bandwidth : opts.credentials.cucm;
+      if (!c) throw new CommsHttpError(source, 0, 'no ' + (source === 'bandwidth' ? 'Bandwidth' : 'CUCM') + ' credentials configured');
       return 'Basic ' + basic(c.username + ':' + c.password);
     }
     return 'Bearer ' + await tokenFor(source);
@@ -258,6 +270,9 @@ export function createCommsClient(opts: {
 
       last = new CommsHttpError(source, res.status, await res.text());
       if (!last.retryable || attempt === ATTEMPTS) break;
+      // A RisPort Fault is most often the cluster's SHARED rate limit. Retrying
+      // at once spends more of an allowance other applications live on.
+      if (source === 'cucm') break;
 
       // Retry-After, when the service sends one, is an instruction rather
       // than a hint - retrying sooner is how an integration gets its quota
@@ -283,7 +298,7 @@ export function createCommsClient(opts: {
     });
   }
 
-  return { tenantId: opts.tenantId, endpoints, request, soap, tokenRequests };
+  return { tenantId: opts.tenantId, endpoints, request, soap, tokenRequests, sleep };
 }
 
 /** Standard base64 for a Basic header, built on the portable encoder. */

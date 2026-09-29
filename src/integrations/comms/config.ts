@@ -59,6 +59,10 @@ export const COMMS_CONFIG: Record<string, CommsTenantConfig> = {
     timeZone: 'America/Chicago',
     // Both SBCs are in the Austin Data Center, each behind its own access
     // switch - so a problem on one's switch is never a candidate for the other.
+    // Our share of the CUCM cluster's RisPort allowance (15 a minute by
+    // default, shared by every application that reads it). A DEMO value -
+    // agree the real one with whoever runs the cluster.
+    cucm: { requestsPerMinute: 10 },
     sbcSwitch: {
       'sbc1.voice.hhs.texas.example': 'acc-adc01-04',
       'sbc2.voice.hhs.texas.example': 'acc-adc01-05',

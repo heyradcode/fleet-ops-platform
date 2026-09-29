@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { setClock, fixedClock, now, type ControllableClock } from '../../platform/clock.ts';
 import type { Principal } from '../../platform/types.ts';
 import {
-  DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS, DEMO_WEBEX_TOKEN, directory, HELIX_PLANTED,
+  DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_CUCM_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS, DEMO_WEBEX_TOKEN, directory, HELIX_PLANTED,
   injectFault, mockFetch, resetMockState, TEAMS_PLANTED,
 } from './mock/index.ts';
 import { createCommsClient, HELIX_TOKEN_TTL_S, TOKEN_HEADROOM_MS, type FetchFn } from './client.ts';
@@ -40,7 +40,7 @@ function client(fetch: FetchFn = mockFetch) {
       webex: { token: DEMO_WEBEX_TOKEN },
       bandwidth: { ...DEMO_BANDWIDTH_USER },
       helix: { ...DEMO_HELIX_USER },
-      kurmi: { ...DEMO_KURMI_USER },
+      kurmi: { ...DEMO_KURMI_USER }, cucm: { ...DEMO_CUCM_USER },
       starlink: { ...DEMO_STARLINK_ACCOUNTS.prod },
     },
     sleep: async () => {},
@@ -165,6 +165,6 @@ test('end to end: the poll stores incidents with their Helix context', async () 
   const stored = await commsIncidents(principal);
   const houston = stored.find((i) => i.subject.id === TEAMS_PLANTED.degradedFacility)!;
   assert.deepEqual(houston.context?.changes.map((c) => c.id), [HELIX_PLANTED.houstonChange]);
-  // Context never changes WHETHER something paged: still exactly the four planted.
-  assert.equal(stored.length, 4);
+  // Context never changes WHETHER something paged: still exactly the five planted.
+  assert.equal(stored.length, 5);
 });

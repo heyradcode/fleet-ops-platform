@@ -38,12 +38,13 @@ import type { EntraSyncResult } from './entra-directory.ts';
 import type { CommsTenantConfig } from './types.ts';
 import type { WorkforceReport } from './workforce.ts';
 import type { PhoneInventory } from './kurmi.ts';
+import type { RegistrationReport } from './cucm.ts';
 
 /** Every feed the health view tracks. The directory sync is its own row: it can fail while Teams answers. */
 export type HealthSource = ApiSource | 'entra-directory';
 
 export const HEALTH_SOURCES: readonly HealthSource[] = [
-  'entra-directory', 'teams', 'genesys', 'webex', 'bandwidth', 'helix', 'kurmi', 'starlink',
+  'entra-directory', 'teams', 'genesys', 'webex', 'bandwidth', 'helix', 'kurmi', 'cucm', 'starlink',
 ];
 
 export type SourceStatus = 'healthy' | 'degraded' | 'down' | 'not-configured';
@@ -66,7 +67,7 @@ export type SourceHealth = {
 export type DataQualityIssue = {
   kind: 'unknown-domain' | 'unmapped-webex-location' | 'unmapped-bandwidth-peer' | 'facility-conflict' | 'unplaced'
     | 'unknown-agency-code' | 'blank-agency' | 'unmapped-kurmi-department' | 'kurmi-no-facility'
-    | 'unmapped-starlink-terminal';
+    | 'unmapped-starlink-terminal' | 'dormant-desk-phone' | 'no-registration-record';
   count: number;
   detail: string;
   /** The fix, in words someone can act on. */
@@ -86,6 +87,7 @@ const CAVEATS: Partial<Record<HealthSource, string[]>> = {
   helix: ['field names are unverified against the customer\'s (customised) Helix forms'],
   kurmi: ['modelled from ONE sample - no schema yet; paging unknown, so searches are partitioned by MAC prefix'],
   starlink: ['the stream advances on SEND - raw bodies are archived before parsing; one service account per environment'],
+  cucm: ['modelled from Cisco\'s published RisPort70 reference, not a live cluster; the request allowance is the cluster\'s, shared - our share is configured'],
 };
 
 /** What this poll saw, per source, from the pieces the poll already has. Pure. */
@@ -95,9 +97,12 @@ export function observeRun(args: {
   directoryError?: string;
   report: WorkforceReport;
   signalErrors: Partial<Record<ApiSource, string>>;
+  /** Sources not asked this poll, and why - a gap, never "down". */
+  signalNotAsked?: Partial<Record<ApiSource, string>>;
   helixError?: string;
   kurmiError?: string;
   phones?: PhoneInventory;
+  deskPhones?: RegistrationReport;
 }): SourceRun[] {
   const { config, report } = args;
   const run = (source: HealthSource, configured: boolean, error: string | undefined, gaps: string[]): SourceRun =>
@@ -122,15 +127,35 @@ export function observeRun(args: {
     run('starlink', !!config.starlink, args.signalErrors.starlink, []),
     run('kurmi', !!config.kurmi, args.kurmiError,
       args.phones?.truncated ? ['a MAC-prefix slice was still truncated at the depth limit - phone counts are LOW'] : []),
+    run('cucm', !!config.cucm, args.signalErrors.cucm, [
+      ...(args.signalNotAsked?.cucm ? [args.signalNotAsked.cucm] : []),
+      ...(args.deskPhones?.unmeasuredFacilities.length
+        ? ['request budget reached - not measured this poll: ' + args.deskPhones.unmeasuredFacilities.map((f) => 'LC=' + f).join(', ')]
+        : []),
+    ]),
   ];
 }
 
 /** Data-quality issues with their fixes. Pure. */
 export function dataQuality(
   report: WorkforceReport, unmappedBandwidthPeers: string[], phones?: PhoneInventory,
-  unmappedStarlinkTerminals: string[] = [],
+  unmappedStarlinkTerminals: string[] = [], deskPhones?: RegistrationReport,
 ): DataQualityIssue[] {
   const issues: DataQualityIssue[] = [];
+  if (deskPhones?.dormant) {
+    issues.push({
+      kind: 'dormant-desk-phone', count: deskPhones.dormant,
+      detail: deskPhones.dormant + ' Cisco desk phone(s) unregistered for over a week',
+      action: 'Reclaim them in Kurmi, or find out why they are unplugged; until then they are left out of the registration rate.',
+    });
+  }
+  if (deskPhones?.noRecord) {
+    issues.push({
+      kind: 'no-registration-record', count: deskPhones.noRecord,
+      detail: deskPhones.noRecord + ' Cisco desk phone(s) in Kurmi that CUCM has no registration record for',
+      action: 'Check they are provisioned on this CUCM cluster (Kurmi can feed more than one) and have ever been plugged in.',
+    });
+  }
   for (const t of unmappedStarlinkTerminals) {
     issues.push({
       kind: 'unmapped-starlink-terminal', count: 1, detail: 'Starlink terminal ' + t,

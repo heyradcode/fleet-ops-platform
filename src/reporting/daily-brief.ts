@@ -129,13 +129,21 @@ function commsItem(i: CommsIncident, at: number, peopleAt: (code: string) => str
     const wan = i.kinds.some((k) => k === 'wan-latency' || k === 'wan-drop-rate');
     const media = i.kinds.includes('facility-media-degradation');
     const place = i.subject.id.startsWith('starlink-terminal:') ? i.subject.name : facilityName(i.subject.id);
-    title = wan && media ? 'Poor call quality and a degraded satellite link at ' + place
+    // Desk phones off the call control: the one facility problem that is not
+    // about call QUALITY - those phones make no calls at all.
+    const phones = i.figures.find((f) => f.kind === 'desk-phone-registration');
+    const base = wan && media ? 'Poor call quality and a degraded satellite link at ' + place
       : wan ? 'Satellite internet link degraded at ' + place
-        : 'Poor call quality at ' + place;
+        : media || !phones ? 'Poor call quality at ' + place : undefined;
+    title = base && phones ? base + ', and desk phones not working'
+      : base ?? 'Desk phones not working at ' + place;
     const drop = i.figures.find((f) => f.kind === 'wan-drop-rate');
     const latency = i.figures.find((f) => f.kind === 'wan-latency');
     const link = [drop ? pct(drop.value) + ' of packets lost' : '', latency ? latency.value + ' ms delay' : ''].filter(Boolean).join(', ');
-    impact = (link ? link + '; ' : '') + peopleAt(i.subject.id);
+    const deskPhones = phones
+      ? Math.round(phones.value * phones.sampleSize) + ' of ' + phones.sampleSize + ' desk phones cannot make or take calls'
+      : '';
+    impact = [link, deskPhones].filter(Boolean).map((s) => s + '; ').join('') + peopleAt(i.subject.id);
   } else {
     area = 'contact centre';
     title = 'Callers waiting too long in the "' + i.subject.name + '" queue';

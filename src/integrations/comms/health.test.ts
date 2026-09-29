@@ -12,7 +12,7 @@ import { setClock, fixedClock, now, type ControllableClock } from '../../platfor
 import type { Principal } from '../../platform/types.ts';
 import { OutOfScopeError } from '../../platform/tenancy.ts';
 import {
-  clearFaults, DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS, DEMO_WEBEX_TOKEN, directory,
+  clearFaults, DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_CUCM_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS, DEMO_WEBEX_TOKEN, directory,
   injectFault, mockFetch, resetMockState, TEAMS_PLANTED,
 } from './mock/index.ts';
 import { createCommsClient } from './client.ts';
@@ -43,7 +43,7 @@ function setup(tenantId: string, tweak: (c: CommsTenantConfig) => void = () => {
       webex: { token: DEMO_WEBEX_TOKEN },
       bandwidth: { ...DEMO_BANDWIDTH_USER },
       helix: { ...DEMO_HELIX_USER },
-      kurmi: { ...DEMO_KURMI_USER },
+      kurmi: { ...DEMO_KURMI_USER }, cucm: { ...DEMO_CUCM_USER },
       starlink: { ...DEMO_STARLINK_ACCOUNTS.prod },
     },
     sleep: async () => {},
@@ -75,9 +75,9 @@ test('Genesys down: the poll survives, the rest is untouched, and the queue inci
   assert.equal(s.genesys.status, 'down');
   assert.match(s.genesys.lastError!, /503/);
   assert.equal(s.genesys.stale, true, 'never had good data');
-  for (const ok of ['teams', 'webex', 'bandwidth', 'helix']) assert.equal(s[ok].status, 'healthy', ok);
-  // Houston's call quality, Lubbock's satellite link, SBC2 - not the queue.
-  assert.deepEqual(r.incidents.map((i) => i.subject.kind).sort(), ['facility', 'facility', 'trunk']);
+  for (const ok of ['teams', 'webex', 'bandwidth', 'helix', 'kurmi', 'cucm']) assert.equal(s[ok].status, 'healthy', ok);
+  // Houston's call quality, Lubbock's satellite link, El Paso's desk phones, SBC2 - not the queue.
+  assert.deepEqual(r.incidents.map((i) => i.subject.kind).sort(), ['facility', 'facility', 'facility', 'trunk']);
   assert.equal(r.report.byPlatform.genesys, undefined, 'absent, not zero');
 });
 
@@ -118,7 +118,7 @@ test('Helix down: its row is down, and the incidents are all still there', async
   injectFault('helix', 503, 1000);
   const r = await poll();
   assert.equal(byName(r.health.sources).helix.status, 'down');
-  assert.equal(r.incidents.length, 4);
+  assert.equal(r.incidents.length, 5);
   assert.ok(r.incidents.every((i) => i.context?.status === 'unavailable'));
 });
 
@@ -135,7 +135,7 @@ test('a configuration gap is a data-quality issue with the fix named', async () 
 test('health is stored, and read back only at tenant scope', async () => {
   const { poll, principal } = setup('h-scope');
   await poll();
-  assert.equal((await loadHealth(principal))!.sources.length, 8);
+  assert.equal((await loadHealth(principal))!.sources.length, 9);
   const site: Principal = { ...principal, roles: ['operator'], scope: { kind: 'site', siteId: 'x' } };
   await assert.rejects(loadHealth(site), OutOfScopeError);
 });

@@ -23,7 +23,7 @@ import { buildScenarios } from '../src/data/scenarios.ts';
 import { runScenarioFeeds, collapseDuplicates, resolveLocations } from '../src/pipeline/steps.ts';
 import { putDeviceStates, putObservations } from '../src/platform/repository.ts';
 import {
-  DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS, DEMO_WEBEX_TOKEN,
+  DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_CUCM_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS, DEMO_WEBEX_TOKEN,
   directory, mockFetch, mockHistory,
 } from '../src/integrations/comms/mock/index.ts';
 import { createCommsClient } from '../src/integrations/comms/client.ts';
@@ -60,7 +60,7 @@ export async function seedDemoData(log: (line: string) => void = () => {}): Prom
       webex: { token: DEMO_WEBEX_TOKEN },
       bandwidth: { ...DEMO_BANDWIDTH_USER },
       helix: { ...DEMO_HELIX_USER },
-      kurmi: { ...DEMO_KURMI_USER },
+      kurmi: { ...DEMO_KURMI_USER }, cucm: { ...DEMO_CUCM_USER },
       starlink: { ...DEMO_STARLINK_ACCOUNTS.prod },
     },
   });

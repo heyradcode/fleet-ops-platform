@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 
 import { setClock, fixedClock, type ControllableClock } from '../../platform/clock.ts';
 import {
-  DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS, directory, injectFault, mockFetch, resetMockState,
+  DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER, DEMO_CUCM_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS, directory, injectFault, mockFetch, resetMockState,
 } from './mock/index.ts';
 import type { Person } from './mock/directory.ts';
 import { GRAPH_TOKEN_TTL_S } from './mock/teams.ts';
@@ -39,7 +39,7 @@ function credentials(): CommsCredentials {
     webex: { token: DEMO_WEBEX_TOKEN },
     bandwidth: { ...DEMO_BANDWIDTH_USER },
     helix: { ...DEMO_HELIX_USER },
-    kurmi: { ...DEMO_KURMI_USER },
+    kurmi: { ...DEMO_KURMI_USER }, cucm: { ...DEMO_CUCM_USER },
     starlink: { ...DEMO_STARLINK_ACCOUNTS.prod },
   };
 }

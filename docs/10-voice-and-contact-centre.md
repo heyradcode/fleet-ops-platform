@@ -25,7 +25,8 @@ pnpm mock                      # the vendor mocks on http://127.0.0.1:5190, for 
 | **Genesys Cloud** | Agents; queue backlog and abandonment | queue | the system of record |
 | **Bandwidth** | The carrier's end of each SIP trunk | trunk | the other end of the SBC |
 | **Starlink** | The satellite WAN at remote sites | facility | the dish measures its link |
-| **Kurmi** | The Cisco desk-phone estate, by agency | — | inventory only |
+| **Kurmi** | The Cisco desk-phone estate, by agency — and the phone names CUCM is asked about | — | inventory only |
+| **CUCM** (RisPort70) — on premises, or Webex Calling Dedicated Instance | Whether each desk phone is **registered** | facility | the call control counting its own registrations |
 | **Helix** (BMC ITSM) | Changes and tickets | — | **context, never evidence** |
 | **SolarWinds** (Orion) | Network devices: ICMP and SNMP | device | two planes, see below |
 | **911Inform** | E911 — **not built**, see below | | |
@@ -44,6 +45,13 @@ The rule that decides everything below is the network side's, restated:
   of the SBC**. It sees the half of an outage Teams structurally cannot — a
   dead SBC's inbound calls fail at the carrier and never reach Teams — and the
   two ends together say **which leg** is at fault.
+- *Desk-phone registration* is the call control counting its own
+  registrations, so it pages on one source too — and it is the **only**
+  witness there is. A phone that cannot register makes no calls, so Teams and
+  Webex, which judge calls, see nothing: the same silence as a dead SBC. Only
+  the **network's** reasons count (`KeepAliveTimeout`, `ConnectivityError`); a
+  phone switched off, wiped or logged out of is a decision, like an admin-down
+  port, and a desk unregistered for over a week is data quality.
 - *SolarWinds* is a poller we run, so it observes from two planes: its ICMP
   status is **external** (the same plane as our own probe — one witness, not
   two, if a tenant runs both), and the SNMP counters it relays are **device**.
@@ -63,7 +71,9 @@ The rule that decides everything below is the network side's, restated:
  Teams · Genesys · Webex ──▶ WORKFORCE: people joined by lower-cased email,
         │                    agency from the domain, facility from Entra/Webex
         ▼
- Teams · Webex · Genesys · Bandwidth · Starlink
+ Kurmi ──phone names──▶ CUCM (RisPort70 is asked BY NAME; no Kurmi, not asked)
+        │
+ Teams · Webex · Genesys · Bandwidth · Starlink · CUCM
         │  each source isolated: one failing costs that source, never the poll
         ▼
  SIGNALS  one number per (subject, kind, window) - never one per call
@@ -99,6 +109,7 @@ is the long form of the paragraph above it.
 | `health.ts` | Per-source status with history; data-quality issues that name their fix |
 | `helix-context.ts`, `helix-network.ts` | Candidate changes and existing tickets |
 | `kurmi.ts`, `starlink.ts`, `bandwidth.ts` | The sources with unusual protocols — SOAP, a stream, XML |
+| `cucm.ts` | Desk-phone registration: by name, batched, paced to a shared allowance; which unregistrations count |
 | `poll.ts` | The order all of the above runs in |
 | `archive.ts` | The backup: each poll's normalised output to S3, with a tripwire that refuses personal data |
 | `../../reporting/daily-brief.ts` | The executive brief: every figure from stored data, none from a model |
@@ -153,6 +164,7 @@ know exactly where:
 | Bandwidth | Account API (XML, sites, SIP peers) | **call-outcomes endpoint is a placeholder**, isolated in `fetchPeerOutcomes` | the Insights reference |
 | Helix | AR System REST, as documented | CI association flattened onto the change | the customer's customised forms; token lifetime |
 | Kurmi | **One sample's structure** — no schema | endpoint path, paging, failure reporting | the schema (held by the legacy EMP reporting team) |
+| CUCM (RisPort70) | Cisco's **published** RisPort70 reference (DevNet) | Fault wordings; a name with no record being simply absent | that the cluster grants RisPort to an application user (for Dedicated Instance, Cisco's call); our share of the rate allowance; the route to it |
 | Starlink | The published Enterprise API client | alert names (real ones come from each response) | alert names; `ObstructionPercentTime` units |
 | SolarWinds | SWIS / SWQL references | — | custom properties; which columns are UTC |
 | 911Inform | — | **not built** | an API reference — there is no public one |
@@ -178,6 +190,19 @@ values never were.
   person; a sum overstates every "how many are affected".
 - **Resolution needs a healthy measurement.** A dead SBC at 3am produces no
   signal at all; "no alarm" would have closed its incident while it was down.
+- **A phone that cannot register is silent** (CUCM). No call, so no bad
+  call: every call-quality source reports a building whose desk phones are
+  all dead as fine. Only the call control can say so.
+- **RisPort70's limits are shared and silent.** Its ~15 requests a minute are
+  the whole cluster's, spent by every application that reads it; an answer
+  holds at most 2000 devices and does not say when it stopped. So phones are
+  asked by name in batches of 500, paced to a configured share, and a
+  building the per-poll budget did not reach is *not measured* — never a
+  partial rate. `selectCmDeviceExt` takes no wildcards, which is why the
+  names come from Kurmi.
+- **The same answer names people.** RisPort70 returns the logged-in user,
+  a description that is usually someone's name, and the extension. The
+  connector reads name, status, reason and time, and nothing else.
 - **Inverted thresholds fail silently.** Reachability was `[1, 1]` for a
   release — every reachable device critical, invisible to the alarm rules,
   visible only on the map and in the agent's evidence.
@@ -199,3 +224,8 @@ irreversible:
 4. **Writing to Helix.** Opening or updating a ticket pages people.
 5. **Delivering the daily brief** by mail or Teams. It is built; sending it is
    the customer's call.
+6. **Reading CUCM at all, and how much.** RisPort's allowance is shared with
+   the customer's own tools, so our share (`cucm.requestsPerMinute`) is theirs
+   to set. For Dedicated Instance, whether an application user may read
+   RisPort is Cisco's to allow, and the cluster is reached over private
+   peering, so the poller has to run where that route is.

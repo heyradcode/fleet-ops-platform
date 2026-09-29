@@ -9,7 +9,7 @@ import { setClock, fixedClock, now, type ControllableClock } from '../../platfor
 import type { Principal } from '../../platform/types.ts';
 import { rawBucket } from '../../aws/s3.ts';
 import {
-  DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS, DEMO_WEBEX_TOKEN,
+  DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_CUCM_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS, DEMO_WEBEX_TOKEN,
   directory, mockFetch, resetMockState, setPlanted, STARLINK_TERMINALS,
 } from './mock/index.ts';
 import { createCommsClient, type CommsCredentials } from './client.ts';
@@ -29,7 +29,7 @@ const client = (starlink: CommsCredentials['starlink'], tenantId = HHS_DEMO_TENA
   credentials: {
     entra: { tenantId: directory().entraTenantId, ...DEMO_CLIENT }, genesys: { ...DEMO_CLIENT },
     webex: { token: DEMO_WEBEX_TOKEN }, bandwidth: { ...DEMO_BANDWIDTH_USER },
-    helix: { ...DEMO_HELIX_USER }, kurmi: { ...DEMO_KURMI_USER }, starlink,
+    helix: { ...DEMO_HELIX_USER }, kurmi: { ...DEMO_KURMI_USER }, cucm: { ...DEMO_CUCM_USER }, starlink,
   },
   sleep: async () => {},
 });

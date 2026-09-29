@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { setClock, fixedClock, now, type ControllableClock } from '../../platform/clock.ts';
 import type { Principal } from '../../platform/types.ts';
 import {
-  clearFaults, DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS, DEMO_WEBEX_TOKEN, directory,
+  clearFaults, DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_CUCM_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS, DEMO_WEBEX_TOKEN, directory,
   injectFault, mockFetch, resetMockState, setPlanted, TEAMS_PLANTED,
 } from './mock/index.ts';
 import { createCommsClient } from './client.ts';
@@ -44,7 +44,7 @@ function setup(tenantId: string) {
       webex: { token: DEMO_WEBEX_TOKEN },
       bandwidth: { ...DEMO_BANDWIDTH_USER },
       helix: { ...DEMO_HELIX_USER },
-      kurmi: { ...DEMO_KURMI_USER },
+      kurmi: { ...DEMO_KURMI_USER }, cucm: { ...DEMO_CUCM_USER },
       starlink: { ...DEMO_STARLINK_ACCOUNTS.prod },
     },
     sleep: async () => {},
@@ -65,7 +65,7 @@ test('one problem is one incident across polls: same id, same opening, advancing
   const { poll } = setup('l-continuity');
   const first = await poll(false);
   const second = await poll();
-  assert.equal(second.incidents.length, 4);
+  assert.equal(second.incidents.length, 5);
   for (const i of second.incidents) {
     const was = first.incidents.find((f) => f.subject.id === i.subject.id)!;
     assert.equal(i.incidentId, was.incidentId);
@@ -78,14 +78,14 @@ test('recovery resolves after three MEASURED-healthy polls, and not before', asy
   const { poll, principal } = setup('l-recovery');
   await poll(false);
   setPlanted(false);
-  assert.equal((await poll()).incidents.length, 4, 'one good poll is not a recovery');
+  assert.equal((await poll()).incidents.length, 5, 'one good poll is not a recovery');
   const second = await poll();
-  assert.equal(second.incidents.length, 4);
+  assert.equal(second.incidents.length, 5);
   assert.ok(second.incidents.every((i) => i.clearPolls === 2));
   const third = await poll();
   assert.equal(third.incidents.length, 0);
-  assert.equal(third.resolved.length, 4);
-  assert.equal((await commsResolvedIncidents(principal)).length, 4);
+  assert.equal(third.resolved.length, 5, 'El Paso\'s phones too: registered again, and MEASURED so three times');
+  assert.equal((await commsResolvedIncidents(principal)).length, 5);
 });
 
 test('a source that is DOWN cannot vouch for recovery: unknown neither counts nor resets', async () => {

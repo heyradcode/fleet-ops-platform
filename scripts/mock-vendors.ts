@@ -19,7 +19,7 @@
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import {
-  DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_WEBEX_TOKEN, directory, injectFault, MOCK_PREFIXES, resetMockState,
+  DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_CUCM_USER, DEMO_WEBEX_TOKEN, directory, injectFault, MOCK_PREFIXES, resetMockState,
   splitTarget, type ServiceId,
 } from '../src/integrations/comms/mock/index.ts';
 import type { MockRequest, MockResponse } from '../src/integrations/comms/mock/kernel.ts';
@@ -52,8 +52,8 @@ function control(path: string, query: URLSearchParams): MockResponse | undefined
   if (path === '/__mock/fault') {
     const service = query.get('service') as ServiceId | null;
     const status = Number(query.get('status') ?? 429) as 429 | 500 | 502 | 503;
-    if (!service || !['teams', 'genesys', 'webex', 'bandwidth', 'helix', 'kurmi'].includes(service)) {
-      return { status: 400, body: { message: 'service must be teams, genesys, webex, bandwidth, helix or kurmi' } };
+    if (!service || !['teams', 'genesys', 'webex', 'bandwidth', 'helix', 'kurmi', 'cucm'].includes(service)) {
+      return { status: 400, body: { message: 'service must be teams, genesys, webex, bandwidth, helix, kurmi or cucm' } };
     }
     injectFault(service, status, Number(query.get('times') ?? 1), Number(query.get('retryAfter') ?? 2));
     return { status: 200, body: { injected: { service, status } } };
@@ -142,6 +142,10 @@ function catalogue() {
     ],
     kurmi: [
       'POST ' + ORIGIN + '/kurmi/Kurmi/services/API   (text/xml SOAP SEARCH_QUERY_TYPE; credentials IN the envelope)',
+    ],
+    cucm: [
+      'POST ' + ORIGIN + '/cucm/realtimeservice2/services/RISService70   (text/xml SOAP selectCmDeviceExt, by Name; Basic ' +
+        DEMO_CUCM_USER.username + ':...; 15 requests a minute)',
     ],
     controls: [
       'POST ' + ORIGIN + '/__mock/fault?service=genesys&status=429&times=2',

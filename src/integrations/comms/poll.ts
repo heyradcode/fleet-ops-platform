@@ -22,7 +22,8 @@ import { attachHelixContext } from './helix-context.ts';
 import { dataQuality, observeRun, recordHealth, type IntegrationHealth } from './health.ts';
 import { errorLine, type SignalSource } from './types.ts';
 import { reconcileIncidents } from './lifecycle.ts';
-import { pullPhoneInventory, type PhoneInventory } from './kurmi.ts';
+import { pullPhones, type PhoneInventory } from './kurmi.ts';
+import type { DeskPhone } from './cucm.ts';
 import { putPhoneInventory } from './store.ts';
 import { backfillBaselines, detectAndLearn, metricsFromSignals, putAnomalies, type BackfillProgress, type CommsAnomaly } from './anomalies.ts';
 import { archiveCommsPoll, type ArchiveResult } from './archive.ts';
@@ -93,13 +94,31 @@ export async function runCommsPoll(
     try { directorySync = await syncEntraDirectory(principal, client); } catch (err) { directoryError = errorLine(err); }
   }
   const report = await buildWorkforce(client, config, await loadEntraDirectory(principal));
-  const collected = await collectSignals(client, config, report, at);
-  const alarms = evaluateSignals(collected.signals, {
-    unavailable: Object.keys(collected.errors) as SignalSource[],
-  });
+
+  // Kurmi BEFORE the signals: it names the desk phones the call control is
+  // asked about. Devices, not people - and isolated like every other source.
+  // The names stay in THIS function: the stored inventory is counts.
+  let phones: PhoneInventory | undefined;
+  let deskPhones: DeskPhone[] | undefined;
+  let kurmiError: string | undefined;
+  if (config.kurmi) {
+    try {
+      ({ inventory: phones, deskPhones } = await pullPhones(client, config, nowIso()));
+    } catch (err) {
+      kurmiError = errorLine(err);
+    }
+    // OUTSIDE the try. Kurmi's catch turns any error into "Kurmi is down";
+    // our own store failing to write is not Kurmi's fault, and reporting it
+    // as a vendor outage would send someone to the wrong team.
+    if (phones) await putPhoneInventory(principal, phones);
+  }
+
+  const collected = await collectSignals(client, config, report, at, { deskPhones });
+  // A source not ASKED is as unavailable to the rules as one that failed.
+  const unavailable = [...Object.keys(collected.errors), ...Object.keys(collected.notAsked)] as SignalSource[];
+  const alarms = evaluateSignals(collected.signals, { unavailable });
   // Context AFTER the rules have decided: Helix can explain an incident, it
   // cannot create or suppress one.
-  const unavailable = Object.keys(collected.errors) as SignalSource[];
   const helix = await attachHelixContext(client, config, correlateAlarms(alarms), at);
   // Continuity: this window's incidents folded into the open set. Resolution
   // needs a HEALTHY MEASUREMENT - see lifecycle.ts - so the signals and the
@@ -116,26 +135,11 @@ export async function runCommsPoll(
   await putAnomalies(principal, nowIso(), anomalies);
   const workforce = summariseWorkforce(report, nowIso());
 
-  // Kurmi: the Cisco phones. Independent of everything above - devices, not
-  // people - and isolated like every other source.
-  let phones: PhoneInventory | undefined;
-  let kurmiError: string | undefined;
-  if (config.kurmi) {
-    try {
-      phones = await pullPhoneInventory(client, config, nowIso());
-    } catch (err) {
-      kurmiError = errorLine(err);
-    }
-    // OUTSIDE the try. Kurmi's catch turns any error into "Kurmi is down";
-    // our own store failing to write is not Kurmi's fault, and reporting it
-    // as a vendor outage would send someone to the wrong team.
-    if (phones) await putPhoneInventory(principal, phones);
-  }
-
   const health = await recordHealth(principal, at, observeRun({
     config, directorySync, directoryError, report,
-    signalErrors: collected.errors, helixError: helix.error, kurmiError, phones,
-  }), dataQuality(report, collected.unmappedBandwidthPeers, phones, collected.unmappedStarlinkTerminals));
+    signalErrors: collected.errors, signalNotAsked: collected.notAsked, helixError: helix.error, kurmiError, phones,
+    deskPhones: collected.deskPhones,
+  }), dataQuality(report, collected.unmappedBandwidthPeers, phones, collected.unmappedStarlinkTerminals, collected.deskPhones));
 
   await putCommsRun(principal, { workforce, alarms });
 

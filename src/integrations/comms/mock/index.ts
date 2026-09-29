@@ -29,10 +29,12 @@ import { bandwidthApi, bandwidthInsights } from './bandwidth.ts';
 import { helixApi } from './helix.ts';
 import { kurmiApi, resetKurmi } from './kurmi.ts';
 import { resetStarlink, starlinkApi, starlinkAuth } from './starlink.ts';
+import { cucmRis, resetCucm } from './cucm.ts';
 
 export {
-  clearFaults, DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_HELIX_USER, DEMO_WEBEX_TOKEN, injectFault, type ServiceId,
+  clearFaults, DEMO_BANDWIDTH_USER, DEMO_CLIENT, DEMO_CUCM_USER, DEMO_HELIX_USER, DEMO_WEBEX_TOKEN, injectFault, type ServiceId,
 } from './kernel.ts';
+export { CUCM_NODES, PLANTED_DESK_PHONES, plantedDeskPhones, setCucmNodeDown, setCucmRateLimit } from './cucm.ts';
 export { HELIX_PLANTED } from './helix.ts';
 export { DEMO_KURMI_USER, KURMI_TENANT_DBID, kurmiPhones, setKurmiMaxResults } from './kurmi.ts';
 export { DEMO_STARLINK_ACCOUNTS, STARLINK_RETENTION_MS, STARLINK_TERMINALS } from './starlink.ts';
@@ -70,6 +72,7 @@ export function resetMockState(): void {
   setPlanted(true);
   resetKurmi();
   resetStarlink();
+  resetCucm();
 }
 export { directory, agencyOf, facilityCodeOf, AGENCY_DOMAINS, FACILITIES } from './directory.ts';
 export { PLANTED as TEAMS_PLANTED, TEAMS_TRUNKS } from './teams.ts';
@@ -89,6 +92,8 @@ export const MOCK_HOSTS: Record<string, MockApp> = {
   'insights.bandwidth.com': bandwidthInsights,
   'hhs-restapi.onbmc.example': helixApi,
   'kurmi.hhs.example': kurmiApi,
+  // WITH the port: the lookup is by URL host, and RisPort's is 8443.
+  'cucm.hhs.example:8443': cucmRis,
   'www.starlink.com': starlinkAuth,
   'starlink.com': starlinkApi,
 };
@@ -106,6 +111,7 @@ export const MOCK_PREFIXES: Record<string, MockApp> = {
   '/bandwidth-insights': bandwidthInsights,
   '/helix': helixApi,
   '/kurmi': kurmiApi,
+  '/cucm': cucmRis,
   '/starlink-auth': starlinkAuth,
   '/starlink': starlinkApi,
 };

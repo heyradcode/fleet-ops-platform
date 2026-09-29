@@ -28,7 +28,7 @@ import { runAgent } from '../../../src/ai/agent-core.ts';
 import { toolSpecsFor } from '../../../src/ai/tools.ts';
 import { runAudited } from '../../../src/ai/tool-provider.ts';
 import { buildGraph } from '../../../src/graph/store.ts';
-import { mockHistory, mockFetch, directory as commsDirectory, DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS } from '../../../src/integrations/comms/mock/index.ts';
+import { mockHistory, mockFetch, directory as commsDirectory, DEMO_CLIENT, DEMO_WEBEX_TOKEN, DEMO_BANDWIDTH_USER, DEMO_HELIX_USER, DEMO_CUCM_USER, DEMO_KURMI_USER, DEMO_STARLINK_ACCOUNTS } from '../../../src/integrations/comms/mock/index.ts';
 import { createCommsClient } from '../../../src/integrations/comms/client.ts';
 import { commsConfigFor } from '../../../src/integrations/comms/config.ts';
 import { backfillCommsBaselines, runCommsPoll } from '../../../src/integrations/comms/poll.ts';
@@ -172,7 +172,7 @@ function ensureCommsPolled(principal: Principal): Promise<void> {
         webex: { token: DEMO_WEBEX_TOKEN },
         bandwidth: { ...DEMO_BANDWIDTH_USER },
         helix: { ...DEMO_HELIX_USER },
-        kurmi: { ...DEMO_KURMI_USER },
+        kurmi: { ...DEMO_KURMI_USER }, cucm: { ...DEMO_CUCM_USER },
         starlink: { ...DEMO_STARLINK_ACCOUNTS.prod },
       },
     });
