@@ -87,10 +87,21 @@ test('a node that did not answer fails the read, named - it is the cluster, not 
   assert.deepEqual(parseSelect(answer(node('NotFound', '')), 1), []);
 });
 
-test('a Fault is a failure, and a count that says devices were left out is one too', () => {
+test('a Fault is a failure; an answer at the ceiling is refused - it may have stopped short and not said', () => {
   assert.throws(() => parseSelect('<Envelope><Body><Fault><faultstring>Exceeded allowed rate</faultstring></Fault></Body></Envelope>', 1),
     /SOAP Fault: Exceeded allowed rate/);
-  assert.throws(() => parseSelect(answer(node('Ok', device('SEPAA', 'Registered', 0)), 3), 5), /truncated/);
+  const full = Array.from({ length: 2000 }, (_, i) => device('SEP' + String(i).padStart(12, '0'), 'Registered', 0)).join('');
+  assert.throws(() => parseSelect(answer(node('Ok', full), 2000), 2000), /ceiling may be truncated/);
+  assert.throws(() => parseSelect(answer(node('Ok', device('SEPAA', 'Registered', 0) + device('SEPBB', 'Registered', 0))), 1),
+    /asked about 1 phones and got 2/);
+});
+
+test('TotalDevicesFound is not trusted either way, and the same phone twice is not an error', () => {
+  // Ext's count for a phone that registered on two nodes is undocumented; a
+  // count larger than the devices returned must not fail a good read.
+  const twice = parseSelect(answer(
+    node('Ok', device('SEPAA', 'UnRegistered', 13)) + node('Ok', device('SEPAA', 'Registered', 0)), 2), 1);
+  assert.equal(twice.length, 2, 'both kept here - readRegistrations keeps the latest');
 });
 
 // ---------------------------------------------------------------------------

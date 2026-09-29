@@ -23,7 +23,10 @@
  *   TRUNCATION IS SILENT. One answer carries at most 2000 devices, and "the
  *   response does not indicate if results greater than 2000 have been
  *   truncated". Asking by explicit name in batches of RIS_BATCH makes it
- *   impossible by construction; a count mismatch is still checked, loudly.
+ *   impossible by construction, and an answer AT the ceiling is refused.
+ *   `TotalDevicesFound` is NOT used to check: how Ext counts a phone that
+ *   registered on two nodes is not documented, and a guard built on a guess
+ *   would fail good reads for every phone that ever failed over.
  *
  *   THE RATE LIMIT IS THE CLUSTER'S, SHARED. RisPort70 accepts ~15 requests a
  *   minute (an enterprise parameter, 18 at most) ACROSS EVERY APPLICATION
@@ -73,8 +76,9 @@ export const DORMANT_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 export const NETWORK_REASONS: Readonly<Record<number, string>> = { 6: 'ConnectivityError', 13: 'KeepAliveTimeout' };
 
 /**
- * Someone DECIDED this phone is not registered. Left out of the rate, like an
- * admin-down port. From the reference's StatusReason table.
+ * Switched off, reset or logged out - by someone, or by its own battery. Not
+ * the network, and not a phone that is trying to work: left out of the rate,
+ * like an admin-down port. From the reference's StatusReason table.
  */
 export const DECIDED_REASONS: ReadonlySet<number> = new Set([
   9,    // CallManagerReset - reset from CUCM Administration
@@ -82,7 +86,7 @@ export const DECIDED_REASONS: ReadonlySet<number> = new Set([
   19,   // EMLoginLogout
   20,   // EMCCLoginLogout
   30,   // DeviceWipe - factory reset by an administrator
-  33,   // LowBattery
+  33,   // LowBattery - off, though nobody chose it
   34,   // ManualPowerOff
 ]);
 
@@ -128,8 +132,9 @@ function statusOf(text: string | undefined): RisStatus {
 
 /**
  * Parse one answer. Throws on a SOAP Fault, on any node that did not answer,
- * and on a count that says devices were left out. Reads name, status, reason
- * and time - nothing else.
+ * on an answer at the ceiling, and on more distinct phones than were asked
+ * about. The same phone twice is tolerated - the caller keeps the latest.
+ * Reads name, status, reason and time - nothing else.
  */
 export function parseSelect(xml: string, asked: number): RisDevice[] {
   const doc = parseXml(xml);
@@ -150,12 +155,14 @@ export function parseSelect(xml: string, asked: number): RisDevice[] {
     for (const d of list ? childrenNamed(list, 'item') : []) devices.push(deviceOf(d));
   }
 
-  const found = Number(descendants(doc, 'TotalDevicesFound')[0]?.text.trim() ?? NaN);
-  if (Number.isFinite(found) && found > devices.length) {
-    throw new CommsHttpError('cucm', 200, 'found ' + found + ' devices but returned ' + devices.length + ' - the answer was truncated');
+  if (devices.length >= RIS_MAX_RETURNED) {
+    // Cannot happen at RIS_BATCH; if it does, the answer may have stopped
+    // short and would not say so.
+    throw new CommsHttpError('cucm', 200, 'an answer at the ' + RIS_MAX_RETURNED + '-device ceiling may be truncated - RisPort70 does not say');
   }
-  if (devices.length > asked) {
-    throw new CommsHttpError('cucm', 200, 'asked for ' + asked + ' devices and got ' + devices.length);
+  const distinct = new Set(devices.map((d) => d.name)).size;
+  if (distinct > asked) {
+    throw new CommsHttpError('cucm', 200, 'asked about ' + asked + ' phones and got ' + distinct);
   }
   return devices;
 }
@@ -198,6 +205,8 @@ export async function readRegistrations(
     const batch = ordered.slice(i, i + RIS_BATCH).map((p) => p.name);
     const res = await client.request('cucm', client.endpoints.cucmRis, {
       method: 'POST',
+      // SOAPAction as the WSDL names the operation - not in the reference's
+      // text, so verify it against a real cluster.
       headers: { 'Content-Type': 'text/xml; charset=utf-8', Accept: 'text/xml', SOAPAction: '"selectCmDeviceExt"' },
       body: selectEnvelope(batch),
     });

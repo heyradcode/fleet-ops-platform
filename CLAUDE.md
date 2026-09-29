@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 419 tests, no network. Picks up web/ tests too.
+pnpm test                       # 420 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180 - real Cognito sign-in
 pnpm web:env                    # write web/.env.cognito.local from the Terraform outputs
@@ -440,7 +440,9 @@ network. Nothing real belongs in this repo.
   nodes and takes NO wildcards, so the names come from Kurmi (in memory
   only; the stored inventory is counts). No Kurmi, the source is NOT ASKED
   - a health gap, never "down", and unavailable to the lifecycle. An answer
-  caps at 2000 devices and does not say it stopped, so batches of 500. The
+  caps at 2000 devices and does not say it stopped, so batches of 500
+  (an answer AT the cap is refused; `TotalDevicesFound` is NOT a check - how
+  Ext counts a phone that failed over is undocumented). The
   ~15 requests a minute are the CLUSTER'S, shared with the customer's tools:
   paced to `cucm.requestsPerMinute`, a per-poll budget, and a building the
   budget missed is not measured - never a partial rate. A 500 is NOT

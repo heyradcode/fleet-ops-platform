@@ -1,15 +1,16 @@
-# AI orchestration today, and how MCP and the knowledge graph would be added
+# AI orchestration, MCP and the knowledge graph
 
-Three parts:
+Three parts, all describing shipped code:
 
-1. **How AI orchestration works now**: what the code does, file by file.
-   This part describes shipped code.
-2. **MCP.** Built: an MCP tool server on AgentCore Runtime, behind an
-   AgentCore Gateway that passes the user's token through, with an audit
-   trail and a board view of it.
-3. **The knowledge graph.** Phases 1 to 3 are built: the facility join,
-   the graph, candidate causes on the comms board and in the brief, and the
-   graph's agent tools, served through the MCP server.
+1. **How AI orchestration works**: the agent loop, its two hosts, the model
+   and tool layers, file by file.
+2. **MCP.** An MCP tool server on AgentCore Runtime, behind an AgentCore
+   Gateway that passes the user's token through, with an audit trail and a
+   board view of it.
+3. **The knowledge graph.** All four phases: the facility join, the graph,
+   candidate causes on the comms board and in the brief (a building's
+   network, or a trunk's SBC path), and the graph's agent tools, served
+   through the MCP server.
 
 The designs follow the proposal deck's AI architecture (slides 3, 5, 6, 11
 and 12). The deck is held locally and not in the repository. They are shaped
@@ -18,7 +19,7 @@ context never becoming evidence, and determinism where a number is reported.
 
 ---
 
-## Part 1 — How AI orchestration works now
+## Part 1 — How AI orchestration works
 
 ### The shape in one picture
 
@@ -38,22 +39,33 @@ context never becoming evidence, and determinism where a number is reported.
                     │  input guardrail → [ model → tools → model → … ] → output guardrail      │
                     │  system prompt · history · budget · trace · onStep (streaming)          │
                     └───────┬───────────────────────────────┬───────────────────────────────────┘
-                            │ invokeModel()                 │ executeTool(name, input, principal)
-                            ▼                               ▼
-              ┌──────── MODEL REGISTRY ────────┐   ┌──────────── TOOL REGISTRY ────────────┐
-              │ src/aws/bedrock.ts              │   │ src/ai/tools.ts        network tools  │
-              │   scripted offline model        │   │ src/ai/comms-tools.ts  comms tools    │
-              │ src/aws/bedrock.sdk.ts          │   │ src/ai/itsm-tools.ts   Helix changes  │
-              │   Claude on Bedrock (Mantle)    │   │ toolSpecsFor(principal, {readOnly})   │
-              └─────────────────────────────────┘   └───────┬──────────────────────────────┘
-                                                            ▼
-                                   repositories (keys from the principal's tenant),
-                                   the knowledge base (RAG), Splunk / Helix registries
+                            │ invokeModel()                 │ ToolProvider: list() · call()
+                            ▼                               ▼    src/ai/tool-provider.ts
+              ┌──────── MODEL REGISTRY ────────┐   ┌──────── in-process ────────┬──────── mcp ────────────────┐
+              │ src/aws/bedrock.ts              │   │ the tab, the tests         │ the deployed agent:         │
+              │   scripted offline model        │   │                            │ src/ai/mcp/client.ts        │
+              │ src/aws/bedrock.sdk.ts          │   │                            │ → AgentCore Gateway         │
+              │   Claude on Bedrock (Mantle)    │   │                            │   (the USER's token)        │
+              └─────────────────────────────────┘   │                            │ → MCP server runtime        │
+                                                    │                            │   src/ai/mcp/server.ts      │
+                                                    └─────────────┬──────────────┴──────────────┬──────────────┘
+                                                                  ▼                             ▼
+                                                runTool / runToolAs - the ONE implementation both call
+                                                  (role check · error-as-data · the audit, on the MCP side)
+                                                                  ▼
+                                   TOOL REGISTRY: toolSpecsFor(principal, {readOnly})
+                                   tools.ts · comms-tools.ts · itsm-tools.ts · graph-tools.ts
+                                                                  ▼
+                                   repositories (keys from the principal's tenant), the knowledge
+                                   graph, the knowledge base (RAG), Splunk / Helix registries
 ```
 
 The orchestration is **one agent loop**, used by both hosts. It has no
 framework: the loop is about two hundred lines, written so every decision in
-it can be read and tested.
+it can be read and tested. Where the tools RUN is a separate choice, behind
+`ToolProvider`: in the same process, or on the MCP server - and because both
+routes end in `runTool`, they cannot disagree about what a tool does or who
+may call it.
 
 ### 1. The hosts
 
@@ -62,7 +74,7 @@ The loop runs in two places, with the same code in both:
 | Host | Entry | Who calls it | Tools offered | Model |
 |---|---|---|---|---|
 | **In the tab** | `web/src/transport/in-process.ts` → `askAgent` | The board directly, when `VITE_AGENT_RUNTIME_ARN` is unset | `toolSpecsFor(principal, { readOnly: false })`: read tools **and** the write tools the role allows | Always the offline model |
-| **On AgentCore** | `infra/terraform/agentcore/agent-entry.ts` → `serveInvocation` → `handleAgentInvocation` | The board over HTTPS, with the user's Cognito token | `toolSpecsFor(principal, { readOnly: true })`: read tools only | Set by `AGENT_MODEL`: `offline`, or a Claude model ID |
+| **On AgentCore** | `infra/terraform/agentcore/agent-entry.ts` → `serveInvocation` → `handleAgentInvocation` | The board over HTTPS, with the user's Cognito token | Whatever the **MCP server** lists for this caller: read tools only. The tools run THERE, reached through the Gateway (`MCP_GATEWAY_URL`) with the user's own token; the answer says "tools over MCP via Gateway" | Set by `AGENT_MODEL`: `offline`, or a Claude model ID |
 
 `web/src/transport/select.ts` picks the host: the AgentCore ARN routes the
 assistant there, and anything else keeps it in the tab.
@@ -77,15 +89,23 @@ assistant there, and anything else keeps it in the tab.
    downstream trusts anything else to decide what may be seen.
 2. **Request validation.** The body must be `{"question": …}`, non-empty and
    at most 2,000 characters.
-3. **World setup.** It seeds the demo world and loads the caller's tenant
-   estate, so the tools describe the same devices as the board.
-4. **Knowledge base.** It ingests the runbooks once per tenant per microVM.
-5. **Conversation history.** The last four question/answer pairs, stored in
+3. **The tool provider.** The MCP client for this caller, carrying the
+   caller's token (or, with no MCP configured, the in-process provider). The
+   tool world - the seeded demo world, the tenant's estate, the runbooks
+   ingested once per tenant - is prepared where the tools run: on the MCP
+   server for the deployed agent (`prepareToolWorld`).
+4. **Conversation history.** The last four question/answer pairs, stored in
    the microVM's memory and keyed by `tenantId|sub`. That is the verified
    user, not the session, because AgentCore does not bind a session to a user.
-6. **The loop.** `runAgent({ question, principal, tools, history, onStep })`.
+5. **The tool list, first and apart.** `provider.list()`. If the tool server
+   cannot be reached, the answer SAYS so - nothing was looked up - with a 200
+   and `stoppedBecause: 'tools_unavailable'`, and the reason goes to the log.
+   It used to fail the invocation, which AgentCore turned into a bare 424
+   and the board into "try rephrasing". It never falls back to another
+   route: the Gateway is the governed path.
+6. **The loop.** `runAgent({ question, principal, tools, callTool, history, onStep })`.
 7. **After the loop.** It remembers the turn only if the answer passed the
-   output guardrail. It stamps `servedBy: { host, model, turn }`.
+   output guardrail. It stamps `servedBy: { host, model, turn, tools, toolsRoute }`.
 
 ### 3. The loop: `src/ai/agent-core.ts`
 
@@ -129,14 +149,16 @@ Two details there are the difference between a demo and a loop that holds up:
   `ERROR: …` as its result, so the model can correct itself. A tool failure
   never kills the turn.
 
-**Tool dispatch (`executeTool`).** Three gates, in order:
-1. **Offered?** The tool must be in this run's offered list, or it's refused.
-   A real model can name a tool it was never shown, and a read-only run that
-   dispatched `openIncident` anyway would be read-only in the prompt only.
-2. **Exists?** `toolByName(name)`.
-3. **Allowed for this role?** `canUseTool(principal, name)`: write tools
-   (`openIncident`, `acknowledgeIncident`, `suppressAlarm`) need `admin` or
-   `operator`.
+**Tool dispatch.** Three gates, in order:
+1. **Offered?** In the loop (`executeTool`): the tool must be in this run's
+   offered list, or it's refused. A real model can name a tool it was never
+   shown, and a read-only run that dispatched `openIncident` anyway would be
+   read-only in the prompt only.
+2. **Exists?** In `runToolAs`, wherever the tool runs: `toolByName(name)`.
+3. **Allowed for this role?** Also in `runToolAs`: `canUseTool(principal,
+   name)` - write tools (`openIncident`, `acknowledgeIncident`,
+   `suppressAlarm`) need `admin` or `operator`. The MCP server lists read
+   tools only, so over MCP a write tool fails gate 1 or 2 before this one.
 
 **Trace and streaming.** Every guardrail check, model turn and tool call
 becomes an `AgentTrace` entry. The same entry is handed to `onStep` at the
@@ -169,13 +191,15 @@ a fallback on refusal.
 
 ### 5. The tool layer: a per-tenant registry
 
-`toolSpecsFor(principal, { readOnly })` builds the list each run offers:
+`toolSpecsFor(principal, { readOnly })` builds the list each run offers - in
+the tab directly, and on the MCP server for `tools/list`:
 
 | Group | Source | Tools |
 |---|---|---|
 | Network | `src/ai/tools.ts` (`TOOL_SPECS` / `READ_ONLY_TOOL_SPECS`) | `searchRunbooks`, `queryDeviceObservations`, `searchSplunk`, `traceTopology`, `listOpenIncidents`, plus write tools `openIncident`, `suppressAlarm` |
 | Comms (tenants running comms sources) | `src/ai/comms-tools.ts` (`commsToolsFor`) | `listCommsIncidents`, `queryWorkforce`, `integrationHealth`, `dailyBrief`, `explainAnomalies` |
 | ITSM (tenants with Helix) | `src/ai/itsm-tools.ts` (`itsmToolsFor`) | `recentChanges` (up the uplink chain, never sideways) |
+| Knowledge graph (the comms callers) | `src/ai/graph-tools.ts` (`graphToolsFor`) | `whatServes`, `explainIncident` (candidates, with paths), `graphNeighbours` (depth ≤ 2, ≤ 40 nodes) |
 
 **Every tool receives the principal and derives its keys from it.** A tool
 cannot read another tenant's data, because no function accepts a bare tenant
@@ -228,7 +252,7 @@ so each rule stays visible and testable.
 | Prompt management | One system prompt in code. No versioning, no per-tenant or per-persona prompts. |
 | Context assembly | ✅ History, question, tool results, trace. |
 | Purpose-built agents (5) | One agent whose tools cover all five areas. |
-| Audit trail | The trace goes back with every answer; nothing is persisted. |
+| Audit trail | ✅ Every tool call over MCP is recorded (`src/ai/audit.ts`): who, which tool, the outcome, how long - and a HASH of the arguments, never the arguments. Admins read it on the board's audit view. The trace still goes back with every answer. |
 
 ---
 
