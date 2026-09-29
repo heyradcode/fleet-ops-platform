@@ -76,9 +76,17 @@ export type CandidateCause = {
   path: string;
 };
 
+/**
+ * Another comms incident OPEN where this one's reach goes - today, a facility
+ * incident in a building that staffs a queue. Not a network cause and not
+ * evidence: the same building's calls going bad beside a queue backing up is
+ * one story, usually with one root, and a person should see both halves.
+ */
+export type RelatedIncident = { incidentId: string; title: string; severity: Severity; subjectId: string; path: string };
+
 export type CandidateCauses =
-  | { status: 'found'; causes: CandidateCause[] }
-  | { status: 'none'; searched: string }
+  | { status: 'found'; causes: CandidateCause[]; related?: RelatedIncident[] }
+  | { status: 'none'; searched: string; related?: RelatedIncident[] }
   | { status: 'no-path'; reason: string }
   | { status: 'unknown'; reason: string };
 
@@ -86,7 +94,12 @@ const RANK: Record<Severity, number> = { ok: 0, info: 1, warning: 2, critical: 3
 const hhmm = (iso: string) => iso.slice(11, 16);
 
 /** The devices a subject can see: hops from the subject, and the path there, device last. */
-type Reach = { devices: Map<string, { hops: number; path: string }>; searched: string };
+type Reach = {
+  devices: Map<string, { hops: number; path: string }>;
+  searched: string;
+  /** The buildings on the way, and the path to each - where related comms incidents are looked for. */
+  buildings?: Map<string, string>;
+};
 type NotReached = Exclude<CandidateCauses, { status: 'found' | 'none' }>;
 
 const named = (label: string, role: unknown) => label + ' (' + String(role ?? 'device') + ')';
@@ -136,21 +149,23 @@ async function queueReach(principal: Principal, queueId: string, name: string): 
     };
   }
   const devices = new Map<string, { hops: number; path: string }>();
+  const buildings = new Map<string, string>();
   const staffing: string[] = [];
   for (const f of main) {
     const node = await graphNode(principal, f.node);
     const label = node?.label ?? f.node.id;
     const agents = f.props?.agents ?? 0;
     staffing.push(label + ' ' + agents + ' of ' + members);
-    const via = 'Queue "' + name + '" -> STAFFED_FROM (' + agents + ' of ' + members + ' agents) -> ' +
-      label + ' (' + f.node.id + ') <- LOCATED_AT <- ';
+    const toBuilding = 'Queue "' + name + '" -> STAFFED_FROM (' + agents + ' of ' + members + ' agents) -> ' + label + ' (' + f.node.id + ')';
+    buildings.set(f.node.id, toBuilding);
+    const via = toBuilding + ' <- LOCATED_AT <- ';
     for (const d of await neighbours(principal, f.node, { direction: 'in', rel: 'LOCATED_AT' })) {
       devices.set(d.node.id, { hops: 2, path: via });
     }
   }
   if (devices.size === 0) return { status: 'no-path', reason: 'no network devices are recorded in the buildings that staff "' + name + '"' };
   return {
-    devices,
+    devices, buildings,
     searched: devices.size + ' network device' + (devices.size === 1 ? '' : 's') + ' in the buildings that staff "' + name + '" (' +
       staffing.join(', ') + (cannot ? '; ' + cannot : '') + ')',
   };
@@ -203,12 +218,21 @@ export async function candidateCauses(
   incident: CommsIncident,
   network: NetworkDecisions,
   nowIso: string,
+  /** The other OPEN comms incidents, for `related`. */
+  peers: CommsIncident[] = [],
 ): Promise<CandidateCauses> {
   const subject = incident.subject;
   const reach = subject.kind === 'trunk' ? await trunkReach(principal, subject.id)
     : subject.kind === 'queue' ? await queueReach(principal, subject.id, subject.name)
       : await facilityReach(principal, subject.id, subject.name);
   if ('status' in reach) return reach;
+
+  const related: RelatedIncident[] = peers
+    .filter((p) => p.incidentId !== incident.incidentId && p.status === 'open' &&
+      p.subject.kind === 'facility' && reach.buildings?.has(p.subject.id))
+    .sort((a, b) => RANK[b.severity] - RANK[a.severity] || a.incidentId.localeCompare(b.incidentId))
+    .map((p) => ({ incidentId: p.incidentId, title: p.title, severity: p.severity, subjectId: p.subject.id, path: reach.buildings!.get(p.subject.id)! }));
+  const withRelated = related.length ? { related } : {};
 
   const reached = reach.devices;
   const from = new Date(Date.parse(incident.openedAt) - CAUSE_WINDOW_BEFORE_MS).toISOString();
@@ -248,7 +272,7 @@ export async function candidateCauses(
     });
   }
 
-  if (hits.length === 0) return { status: 'none', searched };
+  if (hits.length === 0) return { status: 'none', searched, ...withRelated };
 
   // Worst first; then what paged over what did not; then nearer on the path;
   // then nearest in time.
@@ -267,7 +291,7 @@ export async function candidateCauses(
     const role = String(node?.props.role ?? 'device');
     return { ...h, device, role, path: reached.get(h.deviceId)!.path + named(device, role) };
   }));
-  return { status: 'found', causes };
+  return { status: 'found', causes, ...withRelated };
 }
 
 /**
@@ -277,10 +301,12 @@ export async function candidateCauses(
  */
 export async function causesForIncidents(
   principal: Principal, incidents: CommsIncident[], network: NetworkDecisions, nowIso: string,
+  /** Every OPEN comms incident, when `incidents` is only some of them. */
+  peers: CommsIncident[] = incidents,
 ): Promise<Record<string, CandidateCauses>> {
   return Object.fromEntries(await Promise.all(incidents.map(async (i) => {
     try {
-      return [i.incidentId, await candidateCauses(principal, i, network, nowIso)] as const;
+      return [i.incidentId, await candidateCauses(principal, i, network, nowIso, peers)] as const;
     } catch (err) {
       // Context, and context failing never fails its caller - the Helix
       // rule. One throttled read must not blank the comms view and the brief.

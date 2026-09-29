@@ -362,7 +362,9 @@ one, change the test deliberately rather than making it pass.
   walk a comms incident's subject to the network that serves it - a
   facility's building; a trunk's SBC path: its switch, UP the uplinks, OUT
   through the WAN edge, never a sibling switch (the recentChanges rule); a
-  queue's staffing buildings, only those with >= a fifth of ALL its agents -
+  queue's staffing buildings, only those with >= a fifth of ALL its agents
+  (plus `related`: comms incidents OPEN in those buildings - context, never a
+  merge; the peers are EVERY open incident, not just the one asked about) -
   and list the
   alarms raised there in [opened - 15 min, now] and the incidents STILL OPEN
   whenever they opened (a resolved one is over) - attached AFTER

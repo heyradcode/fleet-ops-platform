@@ -60,6 +60,14 @@ test('explainIncident: candidates are called candidates, and a wrong id teaches 
   // The queue, through the building that staffs a fifth of it.
   assert.match(out, /INCIDENT Queue "Eligibility - English" is overwhelmed\n  CANDIDATE \(not evidence\) wan-hou01-02 \(wan-edge\)/);
   assert.match(out, /path: Queue "Eligibility - English" -> STAFFED_FROM \(\d+ of \d+ agents\) -> Houston Regional/);
+  assert.match(out, /ALSO OPEN where it reaches \(context, not evidence\): Call quality degraded at LC=1120, critical/);
+
+  // Asked about the queue ALONE, it still sees the other incidents - they are the peers, not the question.
+  const queueId = out.match(/INCIDENT Queue "Eligibility - English" is overwhelmed/) &&
+    (await runTool('listCommsIncidents', {}, HHS_ADMIN)).match(/(cinc-[0-9a-f]+)[^\n]*Eligibility - English/)?.[1];
+  assert.ok(queueId, 'the queue incident id');
+  const alone = await runTool('explainIncident', { incidentId: queueId }, HHS_ADMIN);
+  assert.match(alone, /ALSO OPEN where it reaches/);
   // The failing trunk: the switch SBC2 runs on, reached by its own path.
   assert.match(out, /CANDIDATE \(not evidence\) acc-adc01-05 \(access\): Interface errors, critical, held back/);
   assert.match(out, /path: SBC sbc2\.voice\.hhs\.texas\.example -> RUNS_ON -> acc-adc01-05 \(access\)/);

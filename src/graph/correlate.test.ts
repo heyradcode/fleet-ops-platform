@@ -94,6 +94,17 @@ test('the overwhelmed queue: Houston staffs a fifth of it, so Houston\'s WAN edg
   assert.match(c.causes[0].path,
     /^Queue "Eligibility - English" -> STAFFED_FROM \(\d+ of \d+ agents\) -> Houston Regional \(1120\) <- LOCATED_AT <- wan-hou01-02 \(wan-edge\)$/);
   assert.ok(c.causes.every((x) => x.deviceId.includes('hou01')), 'only the buildings that staff a fifth of it');
+
+  // Houston's own call-quality incident is open too: one story, and said so -
+  // but not El Paso's desk phones, a building with too few of its agents.
+  const houston = incidentAt('facility', '1120')!;
+  assert.deepEqual(c.related?.map((r) => [r.incidentId, r.subjectId]), [[houston.incidentId, '1120']]);
+  assert.match(c.related![0].path, /^Queue "Eligibility - English" -> STAFFED_FROM \(\d+ of \d+ agents\) -> Houston Regional \(1120\)$/);
+  assert.equal(snap.brief.open.find((i) => i.id === queue.incidentId)?.alsoOpen,
+    'Also open where its agents sit: poor call quality at Houston Regional (LC=1120)', 'in the words the brief already uses for it');
+  // A facility's own incident has nothing "related" through a building it IS.
+  const h = snap.causes[houston.incidentId];
+  assert.ok(h.status !== 'found' || !h.related, 'no related list for a facility');
 });
 
 test('a share is of ALL a queue\'s agents: every placed agent in one building, but a tenth of the queue, is no path', async () => {

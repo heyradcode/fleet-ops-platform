@@ -60,6 +60,12 @@ export type BriefItem = {
   candidate?: string;
   /** The knowledge graph's top candidate - on the building's network, or on an SBC's path. Always a candidate. */
   networkCandidate?: string;
+  /**
+   * Another open problem where this one's graph path goes - a queue's
+   * staffing building with its own call-quality incident - in the words
+   * THIS brief already uses for it.
+   */
+  alsoOpen?: string;
   /** Already on the service desk's radar. */
   ticket?: string;
   /** What this subject normally looks like at this hour of the week, when there is history. */
@@ -298,6 +304,14 @@ export async function buildDailyBrief(
   const commsOpen = openComms.map((i) => ({
     ...commsItem(i, at, peopleAt), normally: normallyFor(i), networkCandidate: networkCandidateFor(opts.causes?.[i.incidentId], i.subject.kind),
   }));
+  // Related incidents by the brief's own titles, so one problem is not called
+  // two things on one page.
+  for (const item of commsOpen) {
+    const c = opts.causes?.[item.id];
+    const related = c && (c.status === 'found' || c.status === 'none') ? c.related ?? [] : [];
+    const titles = related.map((r) => commsOpen.find((o) => o.id === r.incidentId)?.title).filter((t): t is string => !!t);
+    if (titles.length) item.alsoOpen = 'Also open where its agents sit: ' + titles.map((t) => t.charAt(0).toLowerCase() + t.slice(1)).join('; ');
+  }
   const openSubjects = new Set(openComms.map((i) => subjectKey(i.subject)));
   const unusual = anomalies
     .filter((a) => !openSubjects.has(subjectKey(a.subject)))
@@ -397,6 +411,7 @@ export function renderBrief(b: Brief, format: 'text' | 'markdown'): string {
     if (i.status) lines.push(sub('Status: ' + i.status));
     if (i.candidate) lines.push(sub(i.candidate + ' - a candidate, not a confirmed cause'));
     if (i.networkCandidate) lines.push(sub(i.networkCandidate + ' - a candidate, not a confirmed cause'));
+    if (i.alsoOpen) lines.push(sub(i.alsoOpen));
     if (i.ticket) lines.push(sub(i.ticket));
     if (i.normally) lines.push(sub(i.normally));
   };

@@ -128,14 +128,22 @@ function IncidentRow({ incident, causes }: { incident: CommsIncident; causes?: C
  * as themselves: "looked, nothing" is not "could not look".
  */
 function Causes({ causes }: { causes: CandidateCauses }) {
-  if (causes.status === 'none') return <li className="is-cause-note">knowledge graph: nothing raised on {causes.searched}</li>;
-  if (causes.status !== 'found') return <li className="is-cause-note">knowledge graph: {causes.reason}</li>;
+  if (causes.status !== 'found' && causes.status !== 'none') return <li className="is-cause-note">knowledge graph: {causes.reason}</li>;
   return (
     <>
-      {causes.causes.map((c) => (
-        <li key={c.id} className="is-cause" title={'path: ' + c.path}>
-          {c.device} ({c.role}): {c.what.toLowerCase()}, {c.severity}
-          {c.paged ? ', paged' : ', held back (one witness)'} · {minutesLabel(c.minutesBefore)} · candidate cause, via the building
+      {causes.status === 'none'
+        ? <li className="is-cause-note">knowledge graph: nothing raised on {causes.searched}</li>
+        : causes.causes.map((c) => (
+          // The path says HOW it was reached - the building, the SBC's path
+          // or the queue's staffing - so it is the hover, not a fixed label.
+          <li key={c.id} className="is-cause" title={'path: ' + c.path}>
+            {c.device} ({c.role}): {c.what.toLowerCase()}, {c.severity}
+            {c.paged ? ', paged' : ', held back (one witness)'} · {minutesLabel(c.minutesBefore)} · candidate cause (hover for the path)
+          </li>
+        ))}
+      {(causes.related ?? []).map((r) => (
+        <li key={r.incidentId} className="is-cause-note" title={'path: ' + r.path}>
+          also open where it reaches: {r.title}, {r.severity}
         </li>
       ))}
     </>
@@ -230,6 +238,7 @@ function BriefPanel({ brief }: { brief: Brief }) {
                   {i.status && <div>Status: {i.status}</div>}
                   {i.candidate && <div>{i.candidate} - a candidate, not a confirmed cause</div>}
                   {i.networkCandidate && <div>{i.networkCandidate} - a candidate, not a confirmed cause</div>}
+                  {i.alsoOpen && <div>{i.alsoOpen}</div>}
                   {i.ticket && <div>{i.ticket}</div>}
                   {i.normally && <div className="dim">{i.normally}</div>}
                 </li>

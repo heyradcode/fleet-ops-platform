@@ -1154,6 +1154,11 @@ async function sectionGraph() {
     } else {
       write('     ' + dim(c.status === 'none' ? 'looked: nothing raised on ' + c.searched : c.reason) + '\n');
     }
+    // Another comms incident where this one reaches - context, one story.
+    for (const r of c.status === 'found' || c.status === 'none' ? c.related ?? [] : []) {
+      write('     + also open where it reaches: ' + r.title + ', ' + r.severity + '\n');
+      write('        ' + dim('path: ' + r.path) + '\n');
+    }
   }
   write('   ' + dim('neither switch nor WAN edge pages anybody: the graph promotes nothing, it says where else to look') + '\n');
 }

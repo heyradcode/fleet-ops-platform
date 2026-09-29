@@ -783,6 +783,19 @@ going is the likeliest cause there is; a resolved one is over. It ranks them wor
 then what paged over what didn't, then **nearer on the path** (a trunk's
 switch before its core), then nearest in time, and keeps at most five. A network incident is listed once, not once per alarm inside it.
 
+**Related incidents.** Beside the network candidates, a `found` or `none`
+answer can carry `related`: other comms incidents **open** where the walk
+went. Today that is a queue's staffing buildings. The overwhelmed
+Eligibility queue shows Houston's WAN edge as its candidate *and* Houston's
+own call-quality incident, both through the same `STAFFED_FROM` step - one
+story, usually one root, and a person should see both halves. Related is
+context, like the candidates: it pages nothing and merges nothing (comms
+incidents still group by subject, never across). The brief says it in its
+own words for that incident ("Also open where its agents sit: poor call
+quality at Houston Regional"), so one problem is not called two things on
+one page. `explainIncident` is given every open incident as peers, so it
+finds them even when asked about the queue alone.
+
 It gives **four answers**, because "found nothing" must never look like
 "couldn't look":
 - `found`: the candidates, each with its path;

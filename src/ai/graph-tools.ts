@@ -81,15 +81,22 @@ const label = async (p: Principal, r: NodeRef) => {
   return r.type + ' ' + (n ? n.label + (n.label !== r.id ? ' (' + r.id + ')' : '') : r.id);
 };
 
+function describeRelated(c: CandidateCauses): string {
+  if ((c.status !== 'found' && c.status !== 'none') || !c.related?.length) return '';
+  return '\n' + c.related.map((r) =>
+    '  ALSO OPEN where it reaches (context, not evidence): ' + r.title + ', ' + r.severity + ' (' + r.incidentId + ')' +
+    '\n    path: ' + r.path).join('\n');
+}
+
 function describeCauses(title: string, c: CandidateCauses): string {
   const head = 'INCIDENT ' + title;
-  if (c.status === 'none') return head + '\n  looked, found nothing: nothing raised on ' + c.searched;
+  if (c.status === 'none') return head + '\n  looked, found nothing: nothing raised on ' + c.searched + describeRelated(c);
   if (c.status !== 'found') return head + '\n  no candidates: ' + c.reason;
   return head + '\n' + c.causes.map((x) =>
     '  CANDIDATE (not evidence) ' + x.device + ' (' + x.role + '): ' + x.what + ', ' + x.severity +
     (x.paged ? ', paged' : ', held back - one witness, it paged nobody') +
     ', ' + (x.minutesBefore === 0 ? 'same minute' : x.minutesBefore > 0 ? x.minutesBefore + ' min before' : -x.minutesBefore + ' min after') +
-    '\n    path: ' + x.path).join('\n');
+    '\n    path: ' + x.path).join('\n') + describeRelated(c);
 }
 
 export const GRAPH_TOOLS: Tool[] = [
@@ -169,7 +176,7 @@ export const GRAPH_TOOLS: Tool[] = [
       const at = new Date(now()).toISOString();
       // What the network rules decided - the same function the board serves.
       const network = tenantScenarios(principal);
-      const causes = await causesForIncidents(principal, chosen, network, at);
+      const causes = await causesForIncidents(principal, chosen, network, at, open);
       return chosen.map((i) => describeCauses(i.title, causes[i.incidentId])).join('\n\n');
     },
   },
