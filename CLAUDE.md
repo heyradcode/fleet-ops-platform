@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 427 tests, no network. Picks up web/ tests too.
+pnpm test                       # 428 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180 - real Cognito sign-in
 pnpm web:env                    # write web/.env.cognito.local from the Terraform outputs
@@ -349,7 +349,10 @@ one, change the test deliberately rather than making it pass.
   every member - placed or not - on the queue node, because a share of the
   placed is not a share of the queue (contractors are in no directory).
   Membership, not who is joined; refreshed HOURLY; never from a poll whose
-  Genesys user list failed. Rebuilt after the poll by `buildGraph`:
+  Genesys user list failed. Stored ONE ITEM PER QUEUE with the header (the
+  freshness watermark) written after them - one snapshot item fails at
+  DynamoDB's 400 KB on a real contact centre. Read one queue at a time: the
+  token's rate limit is shared, so parallel buys 429s. Rebuilt after the poll by `buildGraph`:
   write all, delete what the build did not write, trim the index LAST.
   Reads need TENANT scope until a facility scope exists. The join is
   `Site.facility`: HHS's estate (`estateLayout`) is over its own facilities,

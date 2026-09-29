@@ -30,6 +30,11 @@
  *   100 members) every five minutes would be the poll's heaviest read for its
  *   least-changing data. Refreshed at most every STAFFING_REFRESH_MS.
  *
+ *   ONE QUEUE AT A TIME, ON PURPOSE. The "loops of awaits are slow" rule does
+ *   not apply here: Genesys rate-limits each token per minute, and the poll's
+ *   other Genesys reads share that allowance. Reading queues in parallel
+ *   would buy 429s and Retry-After waits, not time.
+ *
  *   NAMES ARE IN EVERY ROW. A member carries `name` and `user.name`. Only the
  *   id is read.
  */

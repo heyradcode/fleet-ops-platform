@@ -14,7 +14,9 @@ import {
 import { createCommsClient, type FetchFn } from './client.ts';
 import { COMMS_CONFIG, HHS_DEMO_TENANT } from './config.ts';
 import { runCommsPoll } from './poll.ts';
-import { commsQueueStaffing } from './store.ts';
+import { commsQueueStaffing, putQueueStaffing } from './store.ts';
+import { mainTable } from '../../aws/dynamodb.ts';
+import { pk } from '../../platform/tenancy.ts';
 import { STAFFING_REFRESH_MS, staffingOf } from './staffing.ts';
 
 let clock: ControllableClock;
@@ -91,4 +93,23 @@ test('never refreshed from a poll whose Genesys user list failed - every member 
   const genesys = r.health.sources.find((s) => s.source === 'genesys')!;
   assert.equal(genesys.status, 'down');
   assert.match(genesys.gaps.join(), /queue staffing not refreshed: the Genesys user list failed/);
+});
+
+test('a big contact centre is one item per queue, each far under DynamoDB\'s 400 KB - and a queue that went away goes', async () => {
+  const { principal } = setup('staff-big');
+  const queue = (i: number) => ({
+    queueId: 'q-' + String(i).padStart(4, '0'), queueName: 'Queue ' + String(i).padStart(4, '0'), members: 400, unplaced: 100, truncated: false,
+    byFacility: Array.from({ length: 60 }, (_, f) => ({ code: String(1000 + f), agents: 5 })),
+  });
+  const big = { asOf: new Date(now()).toISOString(), queues: Array.from({ length: 600 }, (_, i) => queue(i)) };
+  await putQueueStaffing(principal, big);
+  const rows = await mainTable.query({ pk: pk(principal, 'COMMS'), skBeginsWith: 'STAFFING#' });
+  assert.equal(rows.length, 601, 'one per queue, and the header');
+  const largest = Math.max(...rows.map((r) => JSON.stringify(r).length));
+  assert.ok(largest < 40_000, 'largest item ' + largest + ' bytes');
+  assert.ok(JSON.stringify(big).length > 400_000, 'as ONE item it would not have fitted - the test proves something');
+  assert.deepEqual(await commsQueueStaffing(principal), big);
+
+  await putQueueStaffing(principal, { ...big, queues: big.queues.slice(0, 2) });
+  assert.deepEqual((await commsQueueStaffing(principal))!.queues.map((q) => q.queueId), ['q-0000', 'q-0001']);
 });

@@ -28,7 +28,7 @@ import type { UnplacedReason } from './types.ts';
 import { commsConfigFor } from './config.ts';
 import { openCommsIncidents, resolvedCommsIncidents } from './lifecycle.ts';
 import type { PhoneInventory } from './kurmi.ts';
-import type { StaffingSnapshot } from './staffing.ts';
+import type { QueueStaffing, StaffingSnapshot } from './staffing.ts';
 import type { WorkforceReport } from './workforce.ts';
 
 /** The workforce split, with every person-level field removed. */
@@ -105,15 +105,41 @@ export async function commsPhones(principal: Principal): Promise<PhoneInventory 
   return item ? strip<PhoneInventory>(item) : undefined;
 }
 
-/** Queue staffing: COUNTS per queue per building. The roster it came from is not stored. */
+const STAFFING_QUEUE = 'STAFFING#Q#';
+const STAFFING_META = 'STAFFING#META';
+
+/**
+ * Queue staffing: COUNTS per queue per building. The roster it came from is
+ * not stored.
+ *
+ * ONE ITEM PER QUEUE, not one snapshot. A whole contact centre in one item -
+ * hundreds of queues, each staffed from dozens of buildings - passes every
+ * test and then fails at DynamoDB's 400 KB item limit on the first real
+ * tenant. The header carries `asOf`, the freshness watermark, so it is written
+ * AFTER the queues it describes, and a queue the snapshot no longer has is
+ * deleted after THAT: write first, delete last. A crash between leaves an old
+ * header, and the next poll simply refreshes.
+ */
 export async function putQueueStaffing(principal: Principal, staffing: StaffingSnapshot): Promise<void> {
-  await mainTable.put({ PK: pk(principal, 'COMMS'), SK: 'STAFFING#LATEST', entity: 'QueueStaffing', ...staffing });
+  const key = pk(principal, 'COMMS');
+  await mainTable.batchPut(staffing.queues.map((q) => ({ PK: key, SK: STAFFING_QUEUE + q.queueId, entity: 'QueueStaffing', ...q })));
+  await mainTable.put({ PK: key, SK: STAFFING_META, entity: 'QueueStaffingMeta', asOf: staffing.asOf, queues: staffing.queues.length });
+  const keep = new Set(staffing.queues.map((q) => STAFFING_QUEUE + q.queueId));
+  for (const row of await mainTable.query({ pk: key, skBeginsWith: STAFFING_QUEUE })) {
+    if (!keep.has(String(row.SK))) await mainTable.delete(row.PK, row.SK);
+  }
 }
 
 export async function commsQueueStaffing(principal: Principal): Promise<StaffingSnapshot | undefined> {
   requireTenantScope(principal);
-  const item = await mainTable.get(pk(principal, 'COMMS'), 'STAFFING#LATEST');
-  return item ? strip<StaffingSnapshot>(item) : undefined;
+  const key = pk(principal, 'COMMS');
+  const meta = await mainTable.get(key, STAFFING_META);
+  if (!meta) return undefined;
+  const queues = (await mainTable.query({ pk: key, skBeginsWith: STAFFING_QUEUE })).map((r) => strip<QueueStaffing>(r));
+  return {
+    asOf: String(meta.asOf),
+    queues: queues.sort((a, b) => a.queueName.localeCompare(b.queueName) || a.queueId.localeCompare(b.queueId)),
+  };
 }
 
 /** The OPEN incidents - one per subject that is currently a problem. */
