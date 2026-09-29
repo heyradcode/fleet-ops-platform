@@ -23,7 +23,16 @@ fixes it.
 | 3 | The board API: `GET /audit`, the HHS estate, candidate causes; and the table's TTL | `terraform -chdir=infra/terraform/auth apply` | `board API: GET /board`, `GET /audit` |
 | 4 | The knowledge graph in DynamoDB, the queue staffing and CUCM readings it is built from, and the comms poll's backup in S3 | `TABLE_NAME=$(terraform -chdir=infra/terraform/auth output -raw main_table_name) COMMS_ARCHIVE_BUCKET=$(terraform -chdir=infra/terraform/auth output -raw comms_archive_bucket) pnpm seed:aws` | `GET /comms + candidate causes` (Houston's top candidate is `wan-hou01-02`); `graph: a failing trunk …`, `graph: an overwhelmed queue …`, `comms: desk-phone registration (CUCM)`; the seed prints `comms archive: 5 objects … -> s3://…` |
 | 5 | The Gateway, the MCP server's graph tools, and the agent pointed at the Gateway | `terraform -chdir=infra/terraform/agentcore apply` | `MCP via Gateway` ×2, `Agent on AgentCore` |
-| 6 | Everything, as you | `pnpm smoke:aws` | all PASS |
+| 6 | The board people open, on Vercel: its `VITE_*` values are baked in at BUILD time, and Vercel keeps its own copy | Vercel project → Settings → Environment Variables, from `terraform -chdir=infra/terraform/auth output vercel_env` (plus `VITE_AGENT_RUNTIME_ARN` from `web/.env.cognito.local`); deploy the branch that has this code; Redeploy with the build cache OFF | `board on the web: built against today's deployment` |
+| 7 | Everything, as you | `pnpm smoke:aws` | all PASS |
+
+**Step 6 is the one that is easy to forget,** because nothing in AWS tells
+you. The pool was once replaced and the Vercel build kept the old one's
+hosted-UI domain: every "Continue" went to a hostname that no longer
+resolved. The check reads the deployed JavaScript (public - no token is
+sent to it) and names each stale value, what the build has and what
+Terraform says. It finds the board from `app_urls` in
+`infra/terraform/auth/terraform.tfvars`, or `NETPULSE_BOARD_URL`.
 
 **Step 1**, the deploy policy (an IAM change, so yours to run):
 
@@ -68,6 +77,8 @@ Example output once everything is deployed:
 ```
 Token: tenant hhs-demo, groups [admin], access token, 52 min left
 
+PASS  board on the web: built against today's deployment
+      https://fleet-ops-platform-web.vercel.app matches web/.env.cognito.local
 PASS  board API: GET /board
       7 sites: dal-01, aus-01, hou-01, aus-02, elp-01, lbb-01, adc-01
 PASS  board API: GET /comms + candidate causes

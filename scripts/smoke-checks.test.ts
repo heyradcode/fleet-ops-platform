@@ -12,8 +12,8 @@ import { setClock, fixedClock, now } from '../src/platform/clock.ts';
 import { boardSnapshot, commsSnapshot, type CommsSnapshot } from '../src/api/board-api.ts';
 import { HHS_ADMIN, pollHhsAndBuildGraph } from '../src/graph/test-world.ts';
 import {
-  judgeAgent, judgeAudit, judgeBoard, judgeComms, judgeGatewayCall, judgeGatewayList, judgeGraphPaths,
-  parseEnvFile, tokenSummary,
+  judgeAgent, judgeAudit, judgeBoard, judgeComms, judgeDeployedBoard, judgeGatewayCall, judgeGatewayList, judgeGraphPaths,
+  firstAppUrl, parseEnvFile, tokenSummary,
 } from './smoke-checks.ts';
 
 const wire = <T>(x: T): unknown => JSON.parse(JSON.stringify(x));
@@ -97,6 +97,34 @@ test('the graph\'s other paths and CUCM: each passes on today\'s snapshot, and e
   assert.equal(judgeGraphPaths(200, downCucm)[2].status, 'fail', 'down is not "no phones dropping" - nobody could ask');
   assert.match(judgeGraphPaths(200, noCucm)[2].fix ?? '', /seed:aws/, 'a poll from before CUCM');
   assert.deepEqual(judgeGraphPaths(200, null), [], 'no comms view: judgeComms already said why');
+});
+
+test('the board people open: a build baked with a replaced pool is named, value by value, with the fix', () => {
+  const env = {
+    VITE_COGNITO_DOMAIN: 'netpulse-demo-auth.auth.us-east-1.amazoncognito.com',
+    VITE_COGNITO_ISSUER: 'https://cognito-idp.us-east-1.amazonaws.com/us-east-1_vyV3OUFlX',
+    VITE_COGNITO_CLIENT_ID: 'current-client-id',
+    VITE_BOARD_API_URL: 'https://lefmd0nqhj.execute-api.us-east-1.amazonaws.com',
+  };
+  const current = 'const d="' + env.VITE_COGNITO_DOMAIN + '",c="current-client-id",i="' + env.VITE_COGNITO_ISSUER + '",a="' +
+    env.VITE_BOARD_API_URL + '";const m="This site is set up for a sign-in service that no longer exists"';
+  assert.equal(judgeDeployedBoard('https://board.example', current, env).status, 'pass');
+
+  // What the Vercel build actually had: a deleted pool, and no board API at all.
+  const stale = 'const d="meridian-demo-auth.auth.us-east-1.amazoncognito.com",c="old-client",' +
+    'i="https://cognito-idp.us-east-1.amazonaws.com/us-east-1_0d9Xr0qXI",p="https://cognito-idp.us-east-1.amazonaws.com/us-east-1_ABC123DEF";';
+  const c = judgeDeployedBoard('https://board.example', stale, env);
+  assert.equal(c.status, 'fail');
+  assert.match(c.detail, /sign-in domain \(VITE_COGNITO_DOMAIN\): built with meridian-demo-auth\.auth\.us-east-1\.amazoncognito\.com, Terraform says netpulse-demo-auth/);
+  assert.match(c.detail, /user pool \(VITE_COGNITO_ISSUER\): built with https:\/\/cognito-idp\.us-east-1\.amazonaws\.com\/us-east-1_0d9Xr0qXI/);
+  assert.ok(!c.detail.includes('ABC123DEF'), 'the repo\'s placeholder is not a setting');
+  assert.match(c.detail, /app client \(VITE_COGNITO_CLIENT_ID\) differs or is missing/);
+  assert.match(c.detail, /board API \(VITE_BOARD_API_URL\) differs or is missing/);
+  assert.match(c.detail, /predates the sign-in pre-flight/);
+  assert.match(c.fix ?? '', /output vercel_env.*WITHOUT the build cache/);
+
+  assert.equal(judgeDeployedBoard('https://board.example', undefined, env).status, 'fail');
+  assert.equal(firstAppUrl('env = "demo"\napp_urls    = ["https://fleet-ops-platform-web.vercel.app"]\n'), 'https://fleet-ops-platform-web.vercel.app');
 });
 
 test('audit: 404 is an undeployed route, null is "not an admin", rows are counted by who recorded them', () => {

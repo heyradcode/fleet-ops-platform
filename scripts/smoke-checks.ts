@@ -59,6 +59,56 @@ export function parseEnvFile(text: string): Record<string, string> {
 }
 
 // ---------------------------------------------------------------------------
+// The board people actually open
+// ---------------------------------------------------------------------------
+
+/** The values a board build bakes in, and what each is called in the report. */
+const BAKED: Array<{ key: string; label: string; find: RegExp }> = [
+  { key: 'VITE_COGNITO_DOMAIN', label: 'sign-in domain', find: /[a-z0-9-]+\.auth\.[a-z0-9-]+\.amazoncognito\.com/g },
+  { key: 'VITE_COGNITO_ISSUER', label: 'user pool', find: /https:\/\/cognito-idp\.[a-z0-9-]+\.amazonaws\.com\/[a-z0-9-]+_[A-Za-z0-9]+/g },
+  { key: 'VITE_COGNITO_CLIENT_ID', label: 'app client', find: /$^/g },
+  { key: 'VITE_BOARD_API_URL', label: 'board API', find: /https:\/\/[a-z0-9]+\.execute-api\.[a-z0-9-]+\.amazonaws\.com/g },
+  { key: 'VITE_AGENT_RUNTIME_ARN', label: 'assistant', find: /arn:aws:bedrock-agentcore:[a-z0-9-]+:\d+:runtime\/[A-Za-z0-9_-]+/g },
+];
+
+/**
+ * The first entry of `app_urls` in the auth root's tfvars - where the board is
+ * served. A regex, not an HCL parser: the file is ours and the line is simple.
+ */
+export function firstAppUrl(tfvars: string): string | undefined {
+  return /^\s*app_urls\s*=\s*\[\s*"([^"]+)"/m.exec(tfvars)?.[1];
+}
+
+/**
+ * Was the board people OPEN built against what Terraform has now?
+ *
+ * A static build bakes its VITE_ values in, and the host keeps its OWN copy
+ * of them. AWS can pass every check below and the site still send everyone to
+ * a pool that was deleted - which is what happened: the Vercel build named a
+ * replaced pool's hosted-UI domain, and sign-in went to a hostname that no
+ * longer resolved. So the deployed JavaScript (public, no token) is read and
+ * each value compared. A value the local env does not have is not judged.
+ */
+export function judgeDeployedBoard(url: string, bundle: string | undefined, expected: Record<string, string>): Check {
+  const name = 'board on the web: built against today\'s deployment';
+  if (bundle === undefined) return fail(name, 'no JavaScript from ' + url, 'check the URL (NETPULSE_BOARD_URL, or app_urls in infra/terraform/auth/terraform.tfvars)');
+  const stale: string[] = [];
+  for (const b of BAKED) {
+    const want = expected[b.key];
+    if (!want || bundle.includes(want)) continue;
+    // The repo's own placeholder (`us-east-1_ABC123DEF`, the verifier's default) is in every build; it is not a setting.
+    const built = [...new Set(bundle.match(b.find) ?? [])].filter((v) => !v.includes('ABC123DEF'));
+    // Name what the build HAS, when it can be found - the client id is only "different".
+    stale.push(b.label + ' (' + b.key + ')' + (built.length ? ': built with ' + built.join(', ') + ', Terraform says ' + want : ' differs or is missing'));
+  }
+  const guard = bundle.includes('sign-in service that no longer exists') ? '' : '; its code predates the sign-in pre-flight';
+  if (stale.length === 0) return pass(name, url + ' matches web/.env.cognito.local' + guard);
+  return fail(name, url + ' is out of date - ' + stale.join('; ') + guard,
+    'set these in the host\'s environment variables from `terraform -chdir=infra/terraform/auth output vercel_env` ' +
+    '(and VITE_AGENT_RUNTIME_ARN from web/.env.cognito.local), deploy the branch with this code, and rebuild WITHOUT the build cache');
+}
+
+// ---------------------------------------------------------------------------
 // The board API
 // ---------------------------------------------------------------------------
 

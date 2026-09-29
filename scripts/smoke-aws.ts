@@ -32,8 +32,8 @@ import { readFileSync } from 'node:fs';
 import { createMcpToolProvider, McpError } from '../src/ai/mcp/client.ts';
 import { gatewayTargetUrl, runtimeInvocationUrl } from '../src/aws/agentcore-url.ts';
 import {
-  judgeAgent, judgeAudit, judgeBoard, judgeComms, judgeGatewayCall, judgeGatewayList, judgeGraphPaths,
-  parseEnvFile, tokenSummary, type Check,
+  judgeAgent, judgeAudit, judgeBoard, judgeComms, judgeDeployedBoard, judgeGatewayCall, judgeGatewayList, judgeGraphPaths,
+  firstAppUrl, parseEnvFile, tokenSummary, type Check,
 } from './smoke-checks.ts';
 
 const token = process.env.NETPULSE_TOKEN?.trim() ?? '';
@@ -111,6 +111,33 @@ const timed = (ms = 30_000): typeof fetch => (input, init) => fetch(input, { ...
 
 const checks: Check[] = [];
 const skipped = (name: string, detail: string) => checks.push({ name, status: 'skip', detail });
+
+// --- The board people open: public JavaScript, no token sent -----------------
+let boardUrl = process.env.NETPULSE_BOARD_URL?.trim();
+if (!boardUrl) {
+  try { boardUrl = firstAppUrl(readFileSync('infra/terraform/auth/terraform.tfvars', 'utf8')); } catch { /* skipped below */ }
+}
+if (!boardUrl || !/^https:\/\//.test(boardUrl)) {
+  skipped('board on the web', 'no https board URL - set NETPULSE_BOARD_URL, or app_urls in infra/terraform/auth/terraform.tfvars');
+} else {
+  try {
+    const base = boardUrl.replace(/\/+$/, '');
+    const html = await (await fetch(base + '/')).text();
+    // The entry chunk, and the chunks it loads: a baked value lives in whichever uses it.
+    const chunks = new Set(html.match(/\/assets\/[A-Za-z0-9_-]+\.js/g) ?? []);
+    let bundle = '';
+    for (const c of chunks) {
+      const js = await (await fetch(base + c)).text();
+      bundle += js;
+      for (const more of js.match(/assets\/[A-Za-z0-9_-]+\.js/g) ?? []) {
+        if (!chunks.has('/' + more)) { chunks.add('/' + more); bundle += await (await fetch(base + '/' + more)).text(); }
+      }
+    }
+    checks.push(judgeDeployedBoard(base, bundle || undefined, webEnv));
+  } catch {
+    checks.push(judgeDeployedBoard(boardUrl, undefined, webEnv));
+  }
+}
 const bearer = { authorization: 'Bearer ' + token };
 
 // --- 1. The board API ---------------------------------------------------------
