@@ -24,7 +24,8 @@ import { errorLine, type SignalSource } from './types.ts';
 import { reconcileIncidents } from './lifecycle.ts';
 import { pullPhones, type PhoneInventory } from './kurmi.ts';
 import type { DeskPhone } from './cucm.ts';
-import { putPhoneInventory } from './store.ts';
+import { commsQueueStaffing, putPhoneInventory, putQueueStaffing } from './store.ts';
+import { pullQueueStaffing, staffingIsFresh, type StaffingSnapshot } from './staffing.ts';
 import { backfillBaselines, detectAndLearn, metricsFromSignals, putAnomalies, type BackfillProgress, type CommsAnomaly } from './anomalies.ts';
 import { archiveCommsPoll, type ArchiveResult } from './archive.ts';
 
@@ -44,6 +45,8 @@ export type CommsPollResult = {
   reopened: string[];
   /** The Cisco phone estate from Kurmi, when the tenant runs it and the pull succeeded. */
   phones?: PhoneInventory;
+  /** Queue staffing - counts per building - as stored after this poll: refreshed, or the last copy. */
+  staffing?: StaffingSnapshot;
   /** Unusual for this subject at this hour of the week. Never alarms; see anomalies.ts. */
   anomalies: CommsAnomaly[];
   /** Per-source health and data quality, as recorded by this poll. */
@@ -113,6 +116,29 @@ export async function runCommsPoll(
     if (phones) await putPhoneInventory(principal, phones);
   }
 
+  // Queue staffing: which buildings each queue's agents sit in, through the
+  // roster that exists only now. STRUCTURE, so refreshed hourly (staffing.ts).
+  // Never from a poll whose Genesys user list failed: every member would come
+  // back unplaced, and that snapshot would stand for an hour.
+  let staffing: StaffingSnapshot | undefined;
+  let staffingError: string | undefined;
+  if (config.sources.includes('genesys')) {
+    const stored = await commsQueueStaffing(principal);
+    staffing = stored;
+    if (report.errors.genesys) {
+      if (!staffingIsFresh(stored, at)) staffingError = 'queue staffing not refreshed: the Genesys user list failed this poll';
+    } else if (!staffingIsFresh(stored, at)) {
+      let fresh: StaffingSnapshot | undefined;
+      try {
+        fresh = await pullQueueStaffing(client, report, new Date(at).toISOString());
+      } catch (err) {
+        staffingError = 'queue staffing not refreshed: ' + errorLine(err);
+      }
+      // Outside the try, for Kurmi's reason: our store failing is not Genesys's fault.
+      if (fresh) { await putQueueStaffing(principal, fresh); staffing = fresh; }
+    }
+  }
+
   const collected = await collectSignals(client, config, report, at, { deskPhones });
   // A source not ASKED is as unavailable to the rules as one that failed.
   const unavailable = [...Object.keys(collected.errors), ...Object.keys(collected.notAsked)] as SignalSource[];
@@ -138,7 +164,7 @@ export async function runCommsPoll(
   const health = await recordHealth(principal, at, observeRun({
     config, directorySync, directoryError, report,
     signalErrors: collected.errors, signalNotAsked: collected.notAsked, helixError: helix.error, kurmiError, phones,
-    deskPhones: collected.deskPhones,
+    deskPhones: collected.deskPhones, staffingError, staffing,
   }), dataQuality(report, collected.unmappedBandwidthPeers, phones, collected.unmappedStarlinkTerminals, collected.deskPhones));
 
   await putCommsRun(principal, { workforce, alarms });
@@ -151,6 +177,6 @@ export async function runCommsPoll(
 
   return {
     report, directorySync, workforce, signals: collected.signals, alarms, incidents,
-    resolved: lifecycle.resolved, reopened: lifecycle.reopened, phones, anomalies, health, archive,
+    resolved: lifecycle.resolved, reopened: lifecycle.reopened, phones, staffing, anomalies, health, archive,
   };
 }

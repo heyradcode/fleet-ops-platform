@@ -8,7 +8,8 @@
  *   facility   Facility <- LOCATED_AT <- Device      (the building's network)
  *   trunk      Sbc -> RUNS_ON -> switch -> UPLINKS_TO* -> core -> WAN edge
  *              (the SBC's own path out to the carrier - never a sibling)
- *   queue      -                                     a queue is not a place
+ *   queue      Queue -> STAFFED_FROM -> Facility <- LOCATED_AT <- Device
+ *              (the buildings that staff at least QUEUE_MIN_SHARE of it)
  *
  * A TRUNK'S PATH IS UP, THEN OUT. Carrier traffic leaves the SBC through its
  * switch, climbs the uplink chain to the site's core and leaves by the WAN
@@ -47,6 +48,12 @@ export const CAUSE_WINDOW_BEFORE_MS = 15 * 60_000;
 export const MAX_CAUSES = 5;
 /** A trunk's uplink walk stops here: a loop in bad data must not walk forever. */
 const MAX_CHAIN = 8;
+/**
+ * A building staffing less than this share of a queue - of ALL its members,
+ * placed or not - is not where the queue's trouble is. Three agents of forty
+ * in a building with a bad switch do not explain forty agents' backlog.
+ */
+export const QUEUE_MIN_SHARE = 0.2;
 
 /** What the network rules decided - tenantScenarios() offline, the same shape deployed. */
 export type NetworkDecisions = { alarms: Alarm[]; incidents: Incident[]; heldBack: Alarm[] };
@@ -107,6 +114,48 @@ async function facilityReach(principal: Principal, id: string, subjectName: stri
   };
 }
 
+async function queueReach(principal: Principal, queueId: string, name: string): Promise<Reach | NotReached> {
+  const ref: NodeRef = { type: 'Queue', id: queueId };
+  const queue = await graphNode(principal, ref);
+  if (!queue) {
+    if (!(await graphBuilt(principal))) {
+      return { status: 'unknown', reason: 'the knowledge graph has not been built for this tenant' };
+    }
+    return { status: 'no-path', reason: 'no staffing is recorded for the "' + name + '" queue' };
+  }
+  const members = Number(queue.props.members ?? 0);
+  const unplaced = Number(queue.props.unplaced ?? 0);
+  const staffed = await neighbours(principal, ref, { direction: 'out', rel: 'STAFFED_FROM' });
+  const main = staffed.filter((n) => members > 0 && (n.props?.agents ?? 0) / members >= QUEUE_MIN_SHARE);
+  const cannot = unplaced ? unplaced + ' of its ' + members + ' agents cannot be placed in any building' : '';
+  if (main.length === 0) {
+    return {
+      status: 'no-path',
+      reason: 'no building staffs a fifth of the "' + name + '" queue - its placed agents are spread over ' +
+        staffed.length + ' building' + (staffed.length === 1 ? '' : 's') + (cannot ? '; ' + cannot : ''),
+    };
+  }
+  const devices = new Map<string, { hops: number; path: string }>();
+  const staffing: string[] = [];
+  for (const f of main) {
+    const node = await graphNode(principal, f.node);
+    const label = node?.label ?? f.node.id;
+    const agents = f.props?.agents ?? 0;
+    staffing.push(label + ' ' + agents + ' of ' + members);
+    const via = 'Queue "' + name + '" -> STAFFED_FROM (' + agents + ' of ' + members + ' agents) -> ' +
+      label + ' (' + f.node.id + ') <- LOCATED_AT <- ';
+    for (const d of await neighbours(principal, f.node, { direction: 'in', rel: 'LOCATED_AT' })) {
+      devices.set(d.node.id, { hops: 2, path: via });
+    }
+  }
+  if (devices.size === 0) return { status: 'no-path', reason: 'no network devices are recorded in the buildings that staff "' + name + '"' };
+  return {
+    devices,
+    searched: devices.size + ' network device' + (devices.size === 1 ? '' : 's') + ' in the buildings that staff "' + name + '" (' +
+      staffing.join(', ') + (cannot ? '; ' + cannot : '') + ')',
+  };
+}
+
 async function trunkReach(principal: Principal, fqdn: string): Promise<Reach | NotReached> {
   const sbc: NodeRef = { type: 'Sbc', id: fqdn };
   if (!(await graphNode(principal, sbc))) {
@@ -156,12 +205,9 @@ export async function candidateCauses(
   nowIso: string,
 ): Promise<CandidateCauses> {
   const subject = incident.subject;
-  if (subject.kind === 'queue') {
-    return { status: 'no-path', reason: 'a contact-centre queue is not a place on the network' };
-  }
-  const reach = subject.kind === 'trunk'
-    ? await trunkReach(principal, subject.id)
-    : await facilityReach(principal, subject.id, subject.name);
+  const reach = subject.kind === 'trunk' ? await trunkReach(principal, subject.id)
+    : subject.kind === 'queue' ? await queueReach(principal, subject.id, subject.name)
+      : await facilityReach(principal, subject.id, subject.name);
   if ('status' in reach) return reach;
 
   const reached = reach.devices;

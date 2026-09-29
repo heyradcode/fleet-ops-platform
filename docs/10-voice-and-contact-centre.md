@@ -22,7 +22,7 @@ pnpm mock                      # the vendor mocks on http://127.0.0.1:5190, for 
 |---|---|---|---|
 | **Teams** (Microsoft Graph) | Voice users; Direct Routing calls; call quality | trunk, facility | measures its own calls |
 | **Webex** | Calling users and locations; meeting quality; CDRs | facility | measures its own calls |
-| **Genesys Cloud** | Agents; queue backlog and abandonment | queue | the system of record |
+| **Genesys Cloud** | Agents; queue backlog and abandonment; queue members, placed in buildings as **counts** (hourly) | queue | the system of record |
 | **Bandwidth** | The carrier's end of each SIP trunk | trunk | the other end of the SBC |
 | **Starlink** | The satellite WAN at remote sites | facility | the dish measures its link |
 | **Kurmi** | The Cisco desk-phone estate, by agency — and the phone names CUCM is asked about | — | inventory only |
@@ -110,6 +110,7 @@ is the long form of the paragraph above it.
 | `helix-context.ts`, `helix-network.ts` | Candidate changes and existing tickets |
 | `kurmi.ts`, `starlink.ts`, `bandwidth.ts` | The sources with unusual protocols — SOAP, a stream, XML |
 | `cucm.ts` | Desk-phone registration: by name, batched, paced to a shared allowance; which unregistrations count |
+| `staffing.ts` | Which buildings each queue's agents sit in - counts, of ALL members, through the roster that is not kept |
 | `poll.ts` | The order all of the above runs in |
 | `archive.ts` | The backup: each poll's normalised output to S3, with a tripwire that refuses personal data |
 | `../../reporting/daily-brief.ts` | The executive brief: every figure from stored data, none from a model |

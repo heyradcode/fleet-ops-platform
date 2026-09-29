@@ -67,6 +67,8 @@ const QUEUE_DEFS: Array<{ name: string; division: string }> = [
 ];
 
 export const PLANTED_QUEUE = 'Eligibility - English';
+/** Where the planted queue's placed agents mostly sit: Houston Regional, whose WAN edge is erroring. */
+export const PLANTED_QUEUE_BUILDING = '1120';
 /**
  * The SUBTLE plant: twice its normal call volume for the hour, with normal
  * abandonment. No rule watches volume at all, so nothing fires; only a
@@ -106,6 +108,17 @@ function ref(): Reference {
   // Every agent is in at least one queue, or the staffing numbers lie.
   for (const [i, p] of agents.entries()) {
     if (!queues.some((q) => q.memberKeys.includes(p.key))) queues[i % queues.length].memberKeys.push(p.key);
+  }
+  // THE PLANT'S STAFFING. The overwhelmed queue is staffed substantially from
+  // Houston - every Houston agent is a member - so the knowledge graph has a
+  // real link to follow from its backlog to Houston's network (docs/12). The
+  // rest of its members stay as drawn: mostly contractors, whom nothing can
+  // place. APPENDED, drawing nothing, so no other queue's members move.
+  const planted = queues.find((q) => q.name === PLANTED_QUEUE)!;
+  for (const p of agents) {
+    if (p.kind === 'employee' && p.facility?.code === PLANTED_QUEUE_BUILDING && !planted.memberKeys.includes(p.key)) {
+      planted.memberKeys.push(p.key);
+    }
   }
   reference = { divisions, queues };
   return reference;

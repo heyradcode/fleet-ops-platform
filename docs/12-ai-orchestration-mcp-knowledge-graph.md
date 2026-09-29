@@ -564,7 +564,7 @@ Without this join, a knowledge graph would be two graphs side by side.
 | `Sbc —RUNS_ON→ Device` | which network box an SBC sits behind |
 | `Trunk —TERMINATES_ON→ Sbc` | the carrier's end of the same SBC |
 | `SatelliteTerminal —SERVES→ Facility` | a remote site's WAN link |
-| `Queue —STAFFED_FROM→ Facility` | where a queue's agents sit, as **counts**, from the workforce split |
+| `Queue —STAFFED_FROM→ Facility` | where a queue's agents sit, as **counts** on the edge: Genesys queue members placed through the workforce join |
 | `HelixCi —IS→ Device \| Sbc` | the CI join, through `inventory.peekDevice` and the tenant tables |
 | `Incident —AFFECTS→ any node` | time-stamped: opened, resolved |
 | `Change —TOUCHES→ HelixCi` | time-stamped: the change window |
@@ -615,6 +615,7 @@ correlate(incident):
              Facility ← LOCATED_AT ← Device        (the building's own network)
              Facility ← SERVES ← SatelliteTerminal (its WAN link)
              Sbc → RUNS_ON → Device → UPLINKS_TO* → core → WAN edge   (up, then out)
+             Queue → STAFFED_FROM → Facility ← LOCATED_AT ← Device    (≥ a fifth of its agents)
   window = [incident opened − 15 min, now]
   candidates = incidents / alarms AFFECTING any reached node inside the window
              + changes TOUCHING any reached CI inside the window
@@ -700,7 +701,7 @@ cities.
 | `derive.ts` | `deriveGraph(sources)`: a **pure** function of the estate, the tenant's tables and the per-facility people counts, sorted so the same sources give byte-identical output. |
 | `store.ts` | `writeGraph`, `buildGraph`, `graphNode`, `neighbours`: the adjacency list above, every edge stored both ways, one Query per question. |
 
-What it holds for HHS: 85 nodes and 132 edges.
+What it holds for HHS, once a poll has stored queue staffing: 91 nodes and 163 edges.
 - Every device in a building `LOCATED_AT` its facility, plus the uplink
   tree. The Austin Data Center's five devices are in the tree but located
   nowhere: nobody works there, so it isn't a facility.
@@ -711,6 +712,9 @@ What it holds for HHS: 85 nodes and 132 edges.
 - Helix's CI and site names `IS` our SBCs and facilities.
 - Each SBC `RUNS_ON` the data-centre access switch it's plugged into, from
   the tenant's `sbcSwitch` table (below).
+- Each contact-centre queue is `STAFFED_FROM` the buildings its agents sit
+  in, with the count **on the edge** (`props.agents`) and every member,
+  placed or not, on the queue node (below).
 
 It's rebuilt by `pnpm seed:aws` (and therefore by `pnpm mcp`) after the
 poll. A rebuild is idempotent, and stale items are found through an index
@@ -735,8 +739,22 @@ exist yet.
   demo values: **confirm them against the live CMDB**, as with every table
   in that config. In production the Helix CMDB's relationships could fill
   the same table.
-- **`Queue STAFFED_FROM Facility` is not built.** The workforce split counts
-  people per facility and platform, not per queue.
+- **`Queue STAFFED_FROM Facility` comes from queue MEMBERSHIP** - Genesys's
+  `GET /api/v2/routing/queues/{id}/members` (the `/users` form is
+  deprecated), from its published API - joined by Genesys user id to the
+  poll's roster in memory (`src/integrations/comms/staffing.ts`). Only
+  counts are stored, per queue per building, plus the members nobody can
+  place. Three things about it are easy to get wrong:
+  - **A share of the placed is not a share of the queue.** A contractor is
+    in no directory and Genesys holds no building. In the HHS mock over half
+    of every queue's members are contractors, so every share is of **all**
+    members: Houston's 12 of 50, not 12 of 23.
+  - **Membership, not who is on shift.** `joined` changes through the day.
+    The graph is structure; who is taking calls is the queue's own metrics.
+  - **Read hourly, not every poll.** One request per queue every five
+    minutes would be the poll's heaviest read, for its slowest-changing
+    data. Never refreshed from a poll whose Genesys user list failed: every
+    member would come back unplaced, and that snapshot would stand an hour.
 - **Device CIs in Helix** are still joined at query time through the
   inventory aliases (`recentChanges`), as before.
 
@@ -752,7 +770,11 @@ the network that serves it:
   core. **Never sideways:** SBC1's switch shares a parent with SBC2's, not
   a path, so a fault on it is never offered as SBC2's cause. That's the
   `recentChanges` rule, for the same reason;
-- **a queue:** isn't a place on the network.
+- **a queue:** the network in the buildings that staff **at least a fifth**
+  of it (`QUEUE_MIN_SHARE`), of all its members. Four agents of forty in a
+  building with a bad switch do not explain forty agents' backlog. When no
+  building reaches a fifth, the answer is `no-path`, saying how thin the
+  placed agents are spread and how many cannot be placed at all.
 
 On the devices it reaches, it lists the network alarms raised within
 **[opened − 15 min, now]**, and the network incidents that are **still
@@ -766,9 +788,10 @@ It gives **four answers**, because "found nothing" must never look like
 - `found`: the candidates, each with its path;
 - `none`: it looked, and says what it searched ("6 network devices at
   Lubbock Field Office, 14:15Z to 14:30Z");
-- `no-path`: it says why: a queue, a facility with no network recorded, a
-  subject that isn't in the graph (the unmapped Starlink van, a Bandwidth
-  peer with no SBC), or an SBC that no table places on the network;
+- `no-path`: it says why: a facility with no network recorded, a subject
+  that isn't in the graph (the unmapped Starlink van, a Bandwidth peer with
+  no SBC), an SBC that no table places on the network, or a queue with no
+  building staffing a fifth of it;
 - `unknown`: the graph isn't built, or couldn't be read. A failed read costs
   that incident its candidates, never the comms view or the brief.
 
@@ -841,7 +864,7 @@ MCP server they are scoped and audited with no extra code.
 
 | Tool | Takes | Returns |
 |---|---|---|
-| `whatServes` | a facility code **or name** ("Houston") | the building's devices, its satellite WAN, any SBC running on its switches, Helix's names for it, and a people **count** |
+| `whatServes` | a facility code **or name** ("Houston") | the building's devices, its satellite WAN, any SBC running on its switches, the queues it staffs (agent **counts**), Helix's names for it, and a people **count** |
 | `explainIncident` | an incident id, or nothing for every open one | candidate causes with paths (a facility's building, a trunk's SBC path), each line saying "CANDIDATE (not evidence)" and whether it paged anyone |
 | `graphNeighbours` | `Type#id` or a facility name, an optional relation, a depth | at most 2 hops and 40 nodes; every line past the first hop names the node it hangs off |
 

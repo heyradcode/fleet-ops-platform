@@ -192,7 +192,8 @@ const PLAIN_ROLE: Record<string, string> = {
 function networkCandidateFor(c: CandidateCauses | undefined, subject: CommsIncident['subject']['kind']): string | undefined {
   if (c?.status !== 'found') return undefined;
   const top = c.causes[0];
-  const where = subject === 'trunk' ? 'On the SBC\'s path to the carrier: ' : 'On the building\'s own network: ';
+  const where = subject === 'trunk' ? 'On the SBC\'s path to the carrier: '
+    : subject === 'queue' ? 'In a building that staffs the queue: ' : 'On the building\'s own network: ';
   return where + top.what.toLowerCase() + ' on its ' + (PLAIN_ROLE[top.role] ?? top.role.replace(/-/g, ' ')) +
     ' (' + top.device + ')' + (top.paged ? '' : ', reported by the device alone');
 }

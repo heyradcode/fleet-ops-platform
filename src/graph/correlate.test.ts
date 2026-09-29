@@ -76,16 +76,50 @@ test('sbc2 failing calls: the switch it runs on is the top candidate - by the SB
   assert.ok(c.causes.every((x) => x.deviceId.includes('adc01')), c.causes.map((x) => x.deviceId).join());
 });
 
-test('"none" says what was searched; queues say why there is no path', () => {
+test('"none" says what was searched', () => {
   const lubbock = incidentAt('facility', '3308');
   assert.ok(lubbock);
   const c = snap.causes[lubbock.incidentId];
   assert.equal(c.status, 'none');
   if (c.status === 'none') assert.match(c.searched, /^6 network devices at Lubbock Field Office, 14:15Z to /);
+});
 
+test('the overwhelmed queue: Houston staffs a fifth of it, so Houston\'s WAN edge is its candidate - with the share on the path', () => {
   const queue = incidentAt('queue');
-  assert.ok(queue);
-  assert.equal(snap.causes[queue.incidentId].status, 'no-path');
+  assert.ok(queue, 'the planted queue incident');
+  const c = snap.causes[queue.incidentId];
+  assert.equal(c.status, 'found');
+  if (c.status !== 'found') return;
+  assert.equal(c.causes[0].deviceId, 'dev-wan-hou01-02');
+  assert.match(c.causes[0].path,
+    /^Queue "Eligibility - English" -> STAFFED_FROM \(\d+ of \d+ agents\) -> Houston Regional \(1120\) <- LOCATED_AT <- wan-hou01-02 \(wan-edge\)$/);
+  assert.ok(c.causes.every((x) => x.deviceId.includes('hou01')), 'only the buildings that staff a fifth of it');
+});
+
+test('a share is of ALL a queue\'s agents: every placed agent in one building, but a tenth of the queue, is no path', async () => {
+  const thin = who('correlate-thin-queue');
+  const q = { type: 'Queue' as const, id: 'q-thin' };
+  await writeGraph(thin, {
+    nodes: [
+      { ...q, label: 'Thin', props: { members: 40, unplaced: 36 } },
+      { type: 'Facility', id: '1120', label: 'Houston Regional', props: {} },
+      { type: 'Device', id: 'dev-x', label: 'x', props: { role: 'access' } },
+    ],
+    edges: [
+      { from: q, rel: 'STAFFED_FROM', to: { type: 'Facility', id: '1120' }, props: { agents: 4 } },
+      { from: { type: 'Device', id: 'dev-x' }, rel: 'LOCATED_AT', to: { type: 'Facility', id: '1120' } },
+    ],
+  });
+  const c = await candidateCauses(thin, { ...houstonIncident(), subject: { kind: 'queue', id: 'q-thin', name: 'Thin' } },
+    { alarms: [alarm('a', 'dev-x', '2026-09-08T14:29:00.000Z', 'critical')], incidents: [], heldBack: [] }, '2026-09-08T14:35:00.000Z');
+  assert.equal(c.status, 'no-path', 'four agents of forty do not explain forty agents\' backlog');
+  assert.match((c as { reason: string }).reason,
+    /no building staffs a fifth of the "Thin" queue - its placed agents are spread over 1 building; 36 of its 40 agents cannot be placed/);
+
+  const none = await candidateCauses(thin, { ...houstonIncident(), subject: { kind: 'queue', id: 'q-other', name: 'Other' } },
+    { alarms: [], incidents: [], heldBack: [] }, OPENED);
+  assert.equal(none.status, 'no-path');
+  assert.match((none as { reason: string }).reason, /no staffing is recorded for the "Other" queue/);
 });
 
 // ---------------------------------------------------------------------------
@@ -214,6 +248,8 @@ test('the brief the board builds carries the same top candidate, in plain words,
   assert.equal(snap.brief.open.find((i) => i.id === incidentAt('trunk', 'sbc2.voice.hhs.texas.example')?.incidentId)?.networkCandidate,
     'On the SBC\'s path to the carrier: interface errors on its access switch (acc-adc01-05), reported by the device alone',
     'a trunk is in no building, and the brief does not say it is');
+  assert.equal(snap.brief.open.find((i) => i.id === incidentAt('queue')?.incidentId)?.networkCandidate,
+    'In a building that staffs the queue: interface errors on its WAN edge (wan-hou01-02), reported by the device alone');
   assert.equal(snap.brief.open.find((i) => i.id === incidentAt('facility', '3308')?.incidentId)?.networkCandidate, undefined,
     'looked and found nothing: the brief names nothing');
   assert.match(renderBrief(snap.brief, 'text'), /reported by the device alone - a candidate, not a confirmed cause/);

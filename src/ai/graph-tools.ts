@@ -34,8 +34,8 @@ import { graphNode, neighbours, type Neighbour } from '../graph/store.ts';
 import { causesForIncidents, type CandidateCauses } from '../graph/correlate.ts';
 import { refKey, type NodeRef, type NodeType, type Relation } from '../graph/model.ts';
 
-const NODE_TYPES: NodeType[] = ['Facility', 'Device', 'Sbc', 'Trunk', 'SatelliteTerminal', 'HelixCi', 'HelixSite'];
-const RELATIONS: Relation[] = ['LOCATED_AT', 'UPLINKS_TO', 'SERVES', 'TERMINATES_ON', 'RUNS_ON', 'IS'];
+const NODE_TYPES: NodeType[] = ['Facility', 'Device', 'Sbc', 'Trunk', 'SatelliteTerminal', 'HelixCi', 'HelixSite', 'Queue'];
+const RELATIONS: Relation[] = ['LOCATED_AT', 'UPLINKS_TO', 'SERVES', 'TERMINATES_ON', 'RUNS_ON', 'STAFFED_FROM', 'IS'];
 /** Depth 2 reaches "this building's devices, and what they uplink to". Deeper is a walk, not a question. */
 export const MAX_DEPTH = 2;
 /** A cap on what one call returns, whatever the depth. */
@@ -120,6 +120,12 @@ export const GRAPH_TOOLS: Tool[] = [
       }));
       const wan = around.filter((n) => n.rel === 'SERVES').map((n) => n.node.type + ' ' + n.node.id);
       const names = around.filter((n) => n.rel === 'IS').map((n) => n.node.type + ' "' + n.node.id + '"');
+      // Queues with agents here - counts, never who.
+      const queues = await Promise.all(around.filter((n) => n.rel === 'STAFFED_FROM').map(async (n) => {
+        const q = await graphNode(principal, n.node);
+        return '"' + (q?.label ?? n.node.id) + '" (' + String(n.props?.agents ?? 0) + ' of its ' + String(q?.props.members ?? '?') + ' agents)';
+      }));
+      queues.sort();
       // An SBC is in a building only through the switch it runs on.
       const sbcs = (await Promise.all(around.filter((n) => n.rel === 'LOCATED_AT')
         .map((n) => neighbours(principal, n.node, { direction: 'in', rel: 'RUNS_ON' }))))
@@ -131,6 +137,7 @@ export const GRAPH_TOOLS: Tool[] = [
         'known elsewhere as: ' + (names.join('; ') || 'nothing mapped'),
         'SBCs on this network: ' + (sbcs.join('; ') ||
           'none runs on a switch here (a trunk\'s own path is what explainIncident follows)'),
+        'staffs queues: ' + (queues.join('; ') || 'none recorded'),
       ].join('\n');
     },
   },
@@ -141,7 +148,8 @@ export const GRAPH_TOOLS: Tool[] = [
       description:
         'Candidate causes for an open voice or contact-centre incident, from the knowledge graph: ' +
         'what the network rules raised around the time it opened - in the same building for a ' +
-        'facility, on the SBC\'s own path to the carrier for a trunk - with the path that links them. CANDIDATES, not evidence - say so when you use them. Give an ' +
+        'facility, on the SBC\'s own path to the carrier for a trunk, in the buildings that staff it ' +
+        'for a queue - with the path that links them. CANDIDATES, not evidence - say so when you use them. Give an ' +
         'incidentId from listCommsIncidents, or none to explain every open incident.',
       input_schema: {
         type: 'object',

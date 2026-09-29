@@ -281,6 +281,7 @@ This is where the two halves meet. The graph is a map of dots and arrows:
  satellite   ── serves ─────────>  a faraway building
  SBC         ── is plugged into ─> a switch
  phone trunk ── ends at ────────>  an SBC
+ queue       ── is staffed from ─> buildings (how many agents in each)
  Helix name  ── is ─────────────>  our thing
 ```
 
@@ -291,7 +292,9 @@ When Houston's calls sound bad, we follow the arrows to **Houston's own
 boxes** and ask whether anything there complained around that time. When SBC2
 fails calls, we follow **SBC2's own road**: its switch, up the tree to
 grandma, then out through the school gate (the WAN edge). We never check the
-switch next door.
+switch next door. When a call-centre queue is overwhelmed, we follow it to
+the buildings where **at least a fifth of its agents** sit, counting every
+agent, including the ones no list can place in a building.
 
 What we find is a **candidate**, meaning "have you looked here?". There are
 four possible answers, so that "found nothing" can never be mistaken for

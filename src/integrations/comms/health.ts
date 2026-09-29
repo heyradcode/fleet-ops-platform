@@ -39,6 +39,7 @@ import type { CommsTenantConfig } from './types.ts';
 import type { WorkforceReport } from './workforce.ts';
 import type { PhoneInventory } from './kurmi.ts';
 import type { RegistrationReport } from './cucm.ts';
+import type { StaffingSnapshot } from './staffing.ts';
 
 /** Every feed the health view tracks. The directory sync is its own row: it can fail while Teams answers. */
 export type HealthSource = ApiSource | 'entra-directory';
@@ -103,6 +104,9 @@ export function observeRun(args: {
   kurmiError?: string;
   phones?: PhoneInventory;
   deskPhones?: RegistrationReport;
+  /** Queue staffing could not be refreshed - a gap on Genesys, the last copy still served. */
+  staffingError?: string;
+  staffing?: StaffingSnapshot;
 }): SourceRun[] {
   const { config, report } = args;
   const run = (source: HealthSource, configured: boolean, error: string | undefined, gaps: string[]): SourceRun =>
@@ -120,7 +124,12 @@ export function observeRun(args: {
   return [
     run('entra-directory', config.sources.includes('teams'), args.directoryError, directoryGaps),
     run('teams', config.sources.includes('teams'), joinErrors(report.errors.teams, args.signalErrors.teams), truncated('teams')),
-    run('genesys', config.sources.includes('genesys'), joinErrors(report.errors.genesys, args.signalErrors.genesys), truncated('genesys')),
+    run('genesys', config.sources.includes('genesys'), joinErrors(report.errors.genesys, args.signalErrors.genesys), [
+      ...truncated('genesys'),
+      ...(args.staffingError ? [args.staffingError] : []),
+      ...(args.staffing?.queues.some((q) => q.truncated)
+        ? ['a queue\'s member listing was truncated at the page ceiling - its staffing counts are LOW'] : []),
+    ]),
     run('webex', config.sources.includes('webex'), joinErrors(report.errors.webex, args.signalErrors.webex), truncated('webex')),
     run('bandwidth', !!config.bandwidth, args.signalErrors.bandwidth, []),
     run('helix', !!config.helix, args.helixError, []),

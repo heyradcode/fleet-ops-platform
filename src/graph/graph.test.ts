@@ -71,6 +71,18 @@ test('RUNS_ON only from the table, only to a switch the estate has: a hostname i
   assert.ok(!none.edges.some((e) => e.rel === 'RUNS_ON'), 'no table, no edges');
 });
 
+test('a queue is STAFFED_FROM buildings: the count on the edge, every member - placed or not - on the node', () => {
+  const estate = generateEstate(HHS_DEMO_TENANT);
+  const g = deriveGraph({
+    sites: estate.sites, devices: estate.devices, config: COMMS_CONFIG[HHS_DEMO_TENANT],
+    queueStaffing: [{ queueId: 'q1', queueName: 'Eligibility - English', members: 50, byFacility: [{ code: '1120', agents: 12 }], unplaced: 27, truncated: false }],
+  });
+  assert.deepEqual(g.nodes.find((n) => n.type === 'Queue'),
+    { type: 'Queue', id: 'q1', label: 'Eligibility - English', props: { members: 50, unplaced: 27 } });
+  assert.deepEqual(g.edges.find((e) => e.rel === 'STAFFED_FROM'),
+    { from: { type: 'Queue', id: 'q1' }, rel: 'STAFFED_FROM', to: { type: 'Facility', id: '1120' }, props: { agents: 12 } });
+});
+
 test('NO PEOPLE: no person node can exist, and a facility carries a count, never a name', () => {
   const g = hhsGraph({ '1120': 212 });
   assert.equal(g.nodes.find((n) => n.type === 'Facility' && n.id === '1120')?.props.people, 212);

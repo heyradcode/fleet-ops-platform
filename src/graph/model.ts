@@ -19,7 +19,7 @@
  * on a facility.
  */
 
-export type NodeType = 'Facility' | 'Device' | 'Sbc' | 'Trunk' | 'SatelliteTerminal' | 'HelixCi' | 'HelixSite';
+export type NodeType = 'Facility' | 'Device' | 'Sbc' | 'Trunk' | 'SatelliteTerminal' | 'HelixCi' | 'HelixSite' | 'Queue';
 
 /**
  * Relations, each read FROM -> TO:
@@ -28,9 +28,11 @@ export type NodeType = 'Facility' | 'Device' | 'Sbc' | 'Trunk' | 'SatelliteTermi
  *   SatelliteTerminal SERVES Facility   a remote building's satellite WAN
  *   Trunk TERMINATES_ON Sbc             a carrier peer's end of an SBC
  *   Sbc RUNS_ON Device                  the switch an SBC is plugged into
+ *   Queue STAFFED_FROM Facility         the buildings a queue's agents sit in
+ *                                       (props.agents: how many - a COUNT)
  *   HelixCi IS Sbc | HelixSite IS Facility   Helix's names for our things
  */
-export type Relation = 'LOCATED_AT' | 'UPLINKS_TO' | 'SERVES' | 'TERMINATES_ON' | 'RUNS_ON' | 'IS';
+export type Relation = 'LOCATED_AT' | 'UPLINKS_TO' | 'SERVES' | 'TERMINATES_ON' | 'RUNS_ON' | 'STAFFED_FROM' | 'IS';
 
 export type NodeRef = { type: NodeType; id: string };
 
@@ -40,7 +42,12 @@ export type GraphNode = NodeRef & {
   props: Record<string, string | number>;
 };
 
-export type GraphEdge = { from: NodeRef; rel: Relation; to: NodeRef };
+/**
+ * `props`: numbers about the RELATION, where one node cannot hold them - how
+ * many of a queue's agents sit in THIS building belongs to neither the queue
+ * nor the building. Counts only, like node props.
+ */
+export type GraphEdge = { from: NodeRef; rel: Relation; to: NodeRef; props?: Record<string, number> };
 
 export type Graph = { nodes: GraphNode[]; edges: GraphEdge[] };
 

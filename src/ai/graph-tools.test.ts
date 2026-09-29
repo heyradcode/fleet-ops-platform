@@ -47,6 +47,8 @@ test('whatServes: the building\'s network, its satellite WAN, and a people COUNT
   assert.match(out, /network: 6 devices: .*wan-lbb01-02 \(wan-edge/);
   assert.match(out, /satellite WAN: SatelliteTerminal ut01000000-00000000-00d4e5f6/);
   assert.match(out, /SBCs on this network: none runs on a switch here/, 'the SBCs are in the data centre, not Lubbock');
+  const houston = await runTool('whatServes', { facility: 'Houston' }, HHS_ADMIN);
+  assert.match(houston, /staffs queues: .*"Eligibility - English" \(\d+ of its \d+ agents\)/, 'counts, never who');
   assert.ok(!out.includes('@'));
   assert.match(await runTool('whatServes', { facility: 'the moon' }, HHS_ADMIN), /^ERROR: .*Known facilities: 0412/);
 });
@@ -55,7 +57,9 @@ test('explainIncident: candidates are called candidates, and a wrong id teaches 
   const out = await runTool('explainIncident', {}, HHS_ADMIN);
   assert.match(out, /CANDIDATE \(not evidence\) wan-hou01-02 \(wan-edge\): Interface errors, critical, held back - one witness, it paged nobody/);
   assert.match(out, /looked, found nothing: nothing raised on 6 network devices at Lubbock/);
-  assert.match(out, /a contact-centre queue is not a place on the network/);
+  // The queue, through the building that staffs a fifth of it.
+  assert.match(out, /INCIDENT Queue "Eligibility - English" is overwhelmed\n  CANDIDATE \(not evidence\) wan-hou01-02 \(wan-edge\)/);
+  assert.match(out, /path: Queue "Eligibility - English" -> STAFFED_FROM \(\d+ of \d+ agents\) -> Houston Regional/);
   // The failing trunk: the switch SBC2 runs on, reached by its own path.
   assert.match(out, /CANDIDATE \(not evidence\) acc-adc01-05 \(access\): Interface errors, critical, held back/);
   assert.match(out, /path: SBC sbc2\.voice\.hhs\.texas\.example -> RUNS_ON -> acc-adc01-05 \(access\)/);

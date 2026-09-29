@@ -79,6 +79,7 @@ import { commsToolsFor } from './ai/comms-tools.ts';
 import { commsConfigFor, HHS_DEMO_TENANT } from './integrations/comms/config.ts';
 import { buildGraph, neighbours } from './graph/store.ts';
 import { commsSnapshot } from './api/board-api.ts';
+import { commsQueueStaffing } from './integrations/comms/store.ts';
 import { COMMS_SOURCES } from './integrations/comms/types.ts';
 import { evaluateSignals } from './integrations/comms/incidents.ts';
 import { loadRunbooksFromDisk } from './platform/runbook-loader.node.ts';
@@ -1108,7 +1109,7 @@ async function sectionBrief() {
 // ===========================================================================
 
 async function sectionGraph() {
-  section('13', 'The knowledge graph: a building, or an SBC\'s switch, joins the network to the calls');
+  section('13', 'The knowledge graph: a building, an SBC\'s switch or a queue\'s staff joins the network to the calls');
   const lead = verifyToken(signDemoToken({
     sub: 'cognito_hhs_ops', email: 'ops-lead@hhs.texas.example',
     'custom:tenantId': HHS_DEMO_TENANT, 'cognito:groups': ['admin'],
@@ -1119,10 +1120,19 @@ async function sectionGraph() {
   const lubbock = await neighbours(lead, { type: 'Facility', id: '3308' }, { direction: 'in' });
   write('   Houston Regional (1120) <- LOCATED_AT <- ' + houston.length + ' network devices' + '\n');
   write('   Lubbock Field Office (3308) <- ' + lubbock.map((n) => n.rel).filter((r, i, a) => a.indexOf(r) === i).join(', ') +
-    ' <- ' + lubbock.length + ' nodes ' + dim('(its devices, the satellite terminal that is its WAN, and the Helix site that names it)') + '\n');
+    ' <- ' + lubbock.length + ' nodes ' + dim('(its devices, the satellite terminal that is its WAN, the Helix site that names it, and the queues it staffs)') + '\n');
   const sbc2 = await neighbours(lead, { type: 'Sbc', id: 'sbc2.voice.hhs.texas.example' }, { direction: 'out', rel: 'RUNS_ON' });
   write('   SBC sbc2.voice.hhs.texas.example -> RUNS_ON -> ' + (sbc2.map((n) => n.node.id).join(', ') || 'nothing') +
     ' ' + dim('(the switch it is plugged into, in the data centre - which is no facility)') + '\n');
+  // A queue is not a place, but its agents are - COUNTS, through the roster.
+  const staffing = await commsQueueStaffing(lead);
+  const eligibility = staffing?.queues.find((q) => q.queueName === 'Eligibility - English');
+  if (eligibility) {
+    const houstonAgents = eligibility.byFacility.find((f) => f.code === '1120')?.agents ?? 0;
+    write('   Queue "Eligibility - English" -> STAFFED_FROM -> ' + eligibility.byFacility.length + ' buildings, Houston ' +
+      houstonAgents + ' of its ' + eligibility.members + ' agents ' +
+      dim('(' + eligibility.unplaced + ' cannot be placed: contractors are in no directory - every share is of ALL of them)') + '\n');
+  }
 
   const snap = await commsSnapshot(lead);
   if (!snap) {
@@ -1131,7 +1141,7 @@ async function sectionGraph() {
     return;
   }
   note('');
-  note('Beside each open comms incident, what the network rules raised in the same building, or on the SBC\'s path - CANDIDATES, never evidence:');
+  note('Beside each open comms incident, what the network rules raised in the same building, on the SBC\'s path, or where a queue\'s agents sit - CANDIDATES, never evidence:');
   for (const i of snap.incidents) {
     const c = snap.causes[i.incidentId];
     write('   ' + i.title + '\n');

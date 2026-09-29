@@ -36,7 +36,7 @@ import { now } from '../platform/clock.ts';
 import { pk } from '../platform/tenancy.ts';
 import { forEachByKey } from '../platform/concurrency.ts';
 import { mainTable, type Item } from '../aws/dynamodb.ts';
-import { requireTenantScope, commsWorkforce } from '../integrations/comms/store.ts';
+import { requireTenantScope, commsQueueStaffing, commsWorkforce } from '../integrations/comms/store.ts';
 import { commsConfigFor } from '../integrations/comms/config.ts';
 import { allDevices, allSites, loadEstate } from '../geo/device-repository.ts';
 import { deriveGraph } from './derive.ts';
@@ -54,7 +54,7 @@ function itemsFor(p: Principal, graph: Graph, builtAt: string): Item[] {
     items.push({ PK: indexPk(p), SK: 'NODE#' + n.type + '#' + seg(n.id), entity: 'GraphIndex', type: n.type, id: n.id, builtAt });
   }
   for (const e of graph.edges) {
-    const body = { entity: 'GraphEdge', rel: e.rel, from: e.from, to: e.to, builtAt };
+    const body = { entity: 'GraphEdge', rel: e.rel, from: e.from, to: e.to, ...(e.props ? { props: e.props } : {}), builtAt };
     items.push({ PK: nodePk(p, e.from), SK: edgeSk('OUT', e.rel, e.to), ...body });
     items.push({ PK: nodePk(p, e.to), SK: edgeSk('IN', e.rel, e.from), ...body });
   }
@@ -105,11 +105,13 @@ export async function buildGraph(principal: Principal): Promise<GraphWrite> {
   loadEstate(principal.tenantId);
   const config = commsConfigFor(principal.tenantId);
   const workforce = config ? await commsWorkforce(principal) : undefined;
+  const staffing = config ? await commsQueueStaffing(principal) : undefined;
   const graph = deriveGraph({
     sites: allSites(principal),
     devices: allDevices(principal),
     config,
     peopleByFacility: workforce ? Object.fromEntries(workforce.byFacility.map((f) => [f.code, f.people])) : undefined,
+    queueStaffing: staffing?.queues,
   });
   return writeGraph(principal, graph);
 }
@@ -135,7 +137,7 @@ export async function graphNode(principal: Principal, ref: NodeRef): Promise<Gra
   return { type: item.type as NodeRef['type'], id: String(item.id), label: String(item.label), props: (item.props ?? {}) as GraphNode['props'] };
 }
 
-export type Neighbour = { rel: Relation; direction: 'out' | 'in'; node: NodeRef };
+export type Neighbour = { rel: Relation; direction: 'out' | 'in'; node: NodeRef; props?: Record<string, number> };
 
 /**
  * A node's edges, both directions unless narrowed - one Query either way.
@@ -153,7 +155,10 @@ export async function neighbours(
     .filter((r) => r.entity === 'GraphEdge' && (!opts.rel || r.rel === opts.rel))
     .map((r): Neighbour => {
       const out = String(r.SK).startsWith('OUT#');
-      return { rel: r.rel as Relation, direction: out ? 'out' : 'in', node: (out ? r.to : r.from) as NodeRef };
+      return {
+        rel: r.rel as Relation, direction: out ? 'out' : 'in', node: (out ? r.to : r.from) as NodeRef,
+        ...(r.props ? { props: r.props as Record<string, number> } : {}),
+      };
     })
     .sort((a, b) => (a.direction + a.rel + a.node.type + a.node.id).localeCompare(b.direction + b.rel + b.node.type + b.node.id));
 }

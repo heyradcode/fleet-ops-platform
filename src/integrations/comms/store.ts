@@ -28,6 +28,7 @@ import type { UnplacedReason } from './types.ts';
 import { commsConfigFor } from './config.ts';
 import { openCommsIncidents, resolvedCommsIncidents } from './lifecycle.ts';
 import type { PhoneInventory } from './kurmi.ts';
+import type { StaffingSnapshot } from './staffing.ts';
 import type { WorkforceReport } from './workforce.ts';
 
 /** The workforce split, with every person-level field removed. */
@@ -102,6 +103,17 @@ export async function commsPhones(principal: Principal): Promise<PhoneInventory 
   requireTenantScope(principal);
   const item = await mainTable.get(pk(principal, 'COMMS'), 'PHONES#LATEST');
   return item ? strip<PhoneInventory>(item) : undefined;
+}
+
+/** Queue staffing: COUNTS per queue per building. The roster it came from is not stored. */
+export async function putQueueStaffing(principal: Principal, staffing: StaffingSnapshot): Promise<void> {
+  await mainTable.put({ PK: pk(principal, 'COMMS'), SK: 'STAFFING#LATEST', entity: 'QueueStaffing', ...staffing });
+}
+
+export async function commsQueueStaffing(principal: Principal): Promise<StaffingSnapshot | undefined> {
+  requireTenantScope(principal);
+  const item = await mainTable.get(pk(principal, 'COMMS'), 'STAFFING#LATEST');
+  return item ? strip<StaffingSnapshot>(item) : undefined;
 }
 
 /** The OPEN incidents - one per subject that is currently a problem. */

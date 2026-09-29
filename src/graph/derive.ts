@@ -9,13 +9,18 @@
  * the estate does not have is no edge, never a guess. A guessed edge would
  * plant a candidate cause that is not there.
  *
+ * Queue STAFFED_FROM Facility comes from the stored queue STAFFING - a
+ * queue's Genesys members placed through the workforce join, as counts
+ * (comms/staffing.ts). The edge carries how many agents; the queue node how
+ * many members in all, placed or not, because a share of the placed is not a
+ * share of the queue.
+ *
  * What is NOT derived, and why:
- *   - Queue STAFFED_FROM Facility. The workforce split counts people per
- *     facility and per platform, not per queue.
  *   - Device CIs in Helix. Those arrive with each change and are joined at
  *     query time through the inventory aliases (itsm-tools.ts), as now.
  */
 import type { CommsTenantConfig } from '../integrations/comms/types.ts';
+import type { QueueStaffing } from '../integrations/comms/staffing.ts';
 import type { Device, Site } from '../platform/types.ts';
 import { refKey, type Graph, type GraphEdge, type GraphNode, type NodeRef } from './model.ts';
 
@@ -26,6 +31,8 @@ export type GraphSources = {
   config?: CommsTenantConfig;
   /** UNIQUE people per facility code, from the workforce split. Counts only. */
   peopleByFacility?: Record<string, number>;
+  /** Per queue, members per building. Counts only. */
+  queueStaffing?: QueueStaffing[];
 };
 
 export function deriveGraph(src: GraphSources): Graph {
@@ -39,8 +46,8 @@ export function deriveGraph(src: GraphSources): Graph {
     nodes.set(refKey(ref), existing ? { ...existing, props: { ...n.props, ...existing.props } } : n);
     return ref;
   };
-  const edge = (from: NodeRef, rel: GraphEdge['rel'], to: NodeRef) => {
-    edges.set(refKey(from) + '>' + rel + '>' + refKey(to), { from, rel, to });
+  const edge = (from: NodeRef, rel: GraphEdge['rel'], to: NodeRef, props?: Record<string, number>) => {
+    edges.set(refKey(from) + '>' + rel + '>' + refKey(to), { from, rel, to, ...(props ? { props } : {}) });
   };
 
   const facilityNames = src.config?.facilityNames ?? {};
@@ -88,6 +95,14 @@ export function deriveGraph(src: GraphSources): Graph {
       const deviceId = byName.get(host);
       if (deviceId) edge(sbc(fqdn), 'RUNS_ON', { type: 'Device', id: deviceId });
     }
+  }
+
+  // --- The contact centre ----------------------------------------------------
+  for (const q of src.queueStaffing ?? []) {
+    const queue = node({
+      type: 'Queue', id: q.queueId, label: q.queueName, props: { members: q.members, unplaced: q.unplaced },
+    });
+    for (const f of q.byFacility) edge(queue, 'STAFFED_FROM', facility(f.code), { agents: f.agents });
   }
 
   // An edge to a node nobody described (an uplink to a device outside the

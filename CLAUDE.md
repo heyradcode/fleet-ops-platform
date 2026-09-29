@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 420 tests, no network. Picks up web/ tests too.
+pnpm test                       # 427 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180 - real Cognito sign-in
 pnpm web:env                    # write web/.env.cognito.local from the Terraform outputs
@@ -336,14 +336,20 @@ one, change the test deliberately rather than making it pass.
   looks like a failure, and that is the row an access review looks for.
 - **The knowledge graph is STRUCTURE, never events and never people.**
   `src/graph/`: what serves what (Device LOCATED_AT Facility, UPLINKS_TO,
-  satellite SERVES, Trunk TERMINATES_ON Sbc, Sbc RUNS_ON Device, Helix names
-  IS ours). Incidents
+  satellite SERVES, Trunk TERMINATES_ON Sbc, Sbc RUNS_ON Device, Queue
+  STAFFED_FROM Facility, Helix names IS ours). Incidents
   and changes stay in their stores and are joined at query time - a graph
   copy would be a second truth to keep in step. There is NO Person type;
   facilities carry a people COUNT. An edge with no real source is NOT
   invented: a guessed edge plants a candidate cause that is not there.
   Sbc RUNS_ON Device comes ONLY from the tenant's `sbcSwitch` table (SBC
-  FQDN -> switch HOSTNAME); a hostname the estate lacks is no edge. Rebuilt after the poll by `buildGraph`:
+  FQDN -> switch HOSTNAME); a hostname the estate lacks is no edge. Queue
+  STAFFED_FROM Facility comes from Genesys queue MEMBERS joined to the
+  roster in memory (`comms/staffing.ts`): counts on the EDGE (`props`),
+  every member - placed or not - on the queue node, because a share of the
+  placed is not a share of the queue (contractors are in no directory).
+  Membership, not who is joined; refreshed HOURLY; never from a poll whose
+  Genesys user list failed. Rebuilt after the poll by `buildGraph`:
   write all, delete what the build did not write, trim the index LAST.
   Reads need TENANT scope until a facility scope exists. The join is
   `Site.facility`: HHS's estate (`estateLayout`) is over its own facilities,
@@ -352,14 +358,15 @@ one, change the test deliberately rather than making it pass.
   scenarios pick Dallas switches. CANDIDATE CAUSES (`graph/correlate.ts`)
   walk a comms incident's subject to the network that serves it - a
   facility's building; a trunk's SBC path: its switch, UP the uplinks, OUT
-  through the WAN edge, never a sibling switch (the recentChanges rule) -
+  through the WAN edge, never a sibling switch (the recentChanges rule); a
+  queue's staffing buildings, only those with >= a fifth of ALL its agents -
   and list the
   alarms raised there in [opened - 15 min, now] and the incidents STILL OPEN
   whenever they opened (a resolved one is over) - attached AFTER
   both sets of rules decide, changing none of it (the planted Houston WAN
   alarm stays held back; a test pins it). Four answers, never two: found /
-  none (says what it searched) / no-path (queue, not in the graph, an SBC
-  no table places) /
+  none (says what it searched) / no-path (not in the graph, an SBC no
+  table places, a queue no building staffs a fifth of) /
   unknown (no graph, or unreadable - which costs that incident its
   candidates, never the view). Graph rebuilds write the INDEX first.
   The board computes causes ONCE and hands the same ones to the brief. The
