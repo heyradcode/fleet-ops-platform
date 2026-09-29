@@ -12,7 +12,7 @@ import { setClock, fixedClock, now } from '../src/platform/clock.ts';
 import { boardSnapshot, commsSnapshot, type CommsSnapshot } from '../src/api/board-api.ts';
 import { HHS_ADMIN, pollHhsAndBuildGraph } from '../src/graph/test-world.ts';
 import {
-  judgeAgent, judgeAudit, judgeBoard, judgeComms, judgeGatewayCall, judgeGatewayList,
+  judgeAgent, judgeAudit, judgeBoard, judgeComms, judgeGatewayCall, judgeGatewayList, judgeGraphPaths,
   parseEnvFile, tokenSummary,
 } from './smoke-checks.ts';
 
@@ -63,6 +63,34 @@ test('comms: Houston\'s candidate passes; no causes field, or an unbuilt graph, 
   assert.match(judgeComms(200, wire(unbuilt)).fix ?? '', /seed:aws/, 'the graph is not in DynamoDB');
   assert.equal(judgeComms(200, null).status, 'skip');
   assert.match(judgeComms(401, undefined).fix ?? '', /sign in/, 'a 401 is the token, not the deploy');
+});
+
+test('the graph\'s other paths and CUCM: each passes on today\'s snapshot, and each old half names its own fix', () => {
+  const now = judgeGraphPaths(200, wire(comms));
+  assert.deepEqual(now.map((c) => c.status), ['pass', 'pass', 'pass'], JSON.stringify(now));
+  assert.match(now[0].detail, /sbc2: top candidate acc-adc01-05/);
+  assert.match(now[1].detail, /"Eligibility - English": top candidate wan-hou01-02/);
+  assert.match(now[2].detail, /LC=2031/);
+
+  const withCause = (kind: string, cause: unknown) => {
+    const snap = wire(comms) as CommsSnapshot;
+    const id = snap.incidents.find((i) => i.subject.kind === kind)!.incidentId;
+    return { ...snap, causes: { ...snap.causes, [id]: cause } };
+  };
+  // The Lambda from before each path, and a table from before each path.
+  const oldTrunk = judgeGraphPaths(200, withCause('trunk', { status: 'no-path', reason: 'no source says which network device sbc2 sits behind' }));
+  assert.match(oldTrunk[0].fix ?? '', /build:lambda.*seed:aws/, 'either half may be old - both named');
+  assert.match(judgeGraphPaths(200, withCause('queue', { status: 'no-path', reason: 'a contact-centre queue is not a place on the network' }))[1].fix ?? '',
+    /^pnpm build:lambda/, 'the Lambda predates queue staffing');
+  assert.match(judgeGraphPaths(200, withCause('queue', { status: 'no-path', reason: 'no staffing is recorded for the "X" queue' }))[1].fix ?? '',
+    /seed:aws/, 'the table predates it');
+  assert.equal(judgeGraphPaths(200, withCause('queue', { status: 'no-path', reason: 'no building staffs a fifth of the "X" queue' }))[1].status,
+    'pass', 'too thin to be a candidate is an answer');
+
+  const noCucm = { ...(wire(comms) as CommsSnapshot), incidents: comms.incidents.filter((i) => !i.kinds.includes('desk-phone-registration')) };
+  noCucm.health = { ...noCucm.health!, sources: noCucm.health!.sources.filter((s) => s.source !== 'cucm') };
+  assert.match(judgeGraphPaths(200, noCucm)[2].fix ?? '', /seed:aws/, 'a poll from before CUCM');
+  assert.deepEqual(judgeGraphPaths(200, null), [], 'no comms view: judgeComms already said why');
 });
 
 test('audit: 404 is an undeployed route, null is "not an admin", rows are counted by who recorded them', () => {

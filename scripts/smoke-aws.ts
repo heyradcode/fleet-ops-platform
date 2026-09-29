@@ -32,7 +32,7 @@ import { readFileSync } from 'node:fs';
 import { createMcpToolProvider, McpError } from '../src/ai/mcp/client.ts';
 import { gatewayTargetUrl, runtimeInvocationUrl } from '../src/aws/agentcore-url.ts';
 import {
-  judgeAgent, judgeAudit, judgeBoard, judgeComms, judgeGatewayCall, judgeGatewayList,
+  judgeAgent, judgeAudit, judgeBoard, judgeComms, judgeGatewayCall, judgeGatewayList, judgeGraphPaths,
   parseEnvFile, tokenSummary, type Check,
 } from './smoke-checks.ts';
 
@@ -132,6 +132,7 @@ if (!boardApi) {
     checks.push(judgeBoard(board.status, board.body, me.tenant));
     const comms = await get('/comms');
     checks.push(judgeComms(comms.status, comms.body));
+    checks.push(...judgeGraphPaths(comms.status, comms.body));
   } catch (err) {
     checks.push({ name: 'board API', status: 'fail', detail: 'no answer: ' + describe(err), fix: 'check the network, and VITE_BOARD_API_URL' });
   }

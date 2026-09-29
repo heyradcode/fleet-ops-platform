@@ -20,6 +20,7 @@ const FIX = {
   boardApi: 'pnpm build:lambda, then terraform apply in infra/terraform/auth',
   seed: 'TABLE_NAME=$(terraform -chdir=infra/terraform/auth output -raw main_table_name) pnpm seed:aws',
   agentcore: 'pnpm build:agent, then terraform apply in infra/terraform/agentcore',
+  both: 'pnpm build:lambda, terraform apply in infra/terraform/auth, then pnpm seed:aws',
 };
 
 /**
@@ -88,6 +89,63 @@ export function judgeComms(status: number, body: unknown): Check {
   if (c?.status === 'found') return pass(name, 'Houston: top candidate ' + (c.causes?.[0]?.device ?? '?'));
   if (c?.status === 'unknown') return fail(name, 'Houston: "' + (c.reason ?? 'unknown') + '"', FIX.seed);
   return fail(name, 'Houston: status ' + String(c?.status) + ' - expected the WAN edge as a candidate', FIX.boardApi);
+}
+
+type SnapshotShape = {
+  incidents?: Array<{ incidentId: string; kinds?: string[]; subject: { kind: string; id: string; name?: string } }>;
+  causes?: Record<string, { status: string; causes?: Array<{ device: string; path?: string }>; reason?: string }>;
+  health?: { sources?: Array<{ source: string; status: string }> };
+};
+
+/**
+ * The graph's other two paths, and the source nobody else can see. Each one
+ * has its own "not deployed yet" signature, and they differ in WHICH half is
+ * old - the Lambda (code that does not know the path) or the table (a graph
+ * or a poll from before it) - so each FAIL names the right fix.
+ *
+ * Returns nothing when there is no comms view: judgeComms already said why.
+ */
+export function judgeGraphPaths(status: number, body: unknown): Check[] {
+  if (status !== 200 || !body) return [];
+  const snap = body as SnapshotShape;
+  if (!snap.causes) return [];
+  const causeOf = (kind: string) => {
+    const i = snap.incidents?.find((x) => x.subject.kind === kind);
+    return i ? { incident: i, cause: snap.causes![i.incidentId] } : undefined;
+  };
+  const checks: Check[] = [];
+
+  const trunk = causeOf('trunk');
+  const t = 'graph: a failing trunk follows its SBC\'s path';
+  if (!trunk) checks.push(skip(t, 'no trunk incident open to check'));
+  else if (trunk.cause?.status === 'found' && trunk.cause.causes?.[0]?.path?.includes('RUNS_ON')) {
+    checks.push(pass(t, trunk.incident.subject.id.split('.')[0] + ': top candidate ' + trunk.cause.causes[0].device));
+  } else if (trunk.cause?.status === 'unknown') checks.push(fail(t, '"' + (trunk.cause.reason ?? 'unknown') + '"', FIX.seed));
+  // The Lambda before the SBC link gave this very reason for EVERY trunk;
+  // the new one gives it only when the stored graph has no RUNS_ON edge.
+  else checks.push(fail(t, (trunk.cause?.status ?? 'no answer') + ': "' + (trunk.cause?.reason ?? '') +
+    '" - the Lambda or the stored graph predates the SBC link', FIX.both));
+
+  const queue = causeOf('queue');
+  const q = 'graph: an overwhelmed queue follows its staffing';
+  const qr = queue?.cause?.reason ?? '';
+  if (!queue) checks.push(skip(q, 'no queue incident open to check'));
+  else if (queue.cause?.status === 'found' && queue.cause.causes?.[0]?.path?.includes('STAFFED_FROM')) {
+    checks.push(pass(q, '"' + (queue.incident.subject.name ?? queue.incident.subject.id) + '": top candidate ' + queue.cause.causes[0].device));
+  } else if (/not a place on the network/.test(qr)) checks.push(fail(q, 'the Lambda predates queue staffing', FIX.boardApi));
+  else if (/no staffing is recorded/.test(qr)) checks.push(fail(q, 'no staffing in the table - no poll has stored it', FIX.seed));
+  // Too thin to be a candidate is an ANSWER, not a deploy problem.
+  else if (/no building staffs a fifth/.test(qr)) checks.push(pass(q, 'looked: ' + qr));
+  else if (queue.cause?.status === 'unknown') checks.push(fail(q, '"' + qr + '"', FIX.seed));
+  else checks.push(fail(q, String(queue.cause?.status) + ': "' + qr + '"', FIX.both));
+
+  const d = 'comms: desk-phone registration (CUCM)';
+  const phones = snap.incidents?.find((i) => i.kinds?.includes('desk-phone-registration'));
+  const cucm = snap.health?.sources?.find((s) => s.source === 'cucm');
+  if (phones) checks.push(pass(d, 'desk phones dropping at LC=' + phones.subject.id + ', from the call control alone'));
+  else if (cucm && cucm.status !== 'not-configured') checks.push(pass(d, 'CUCM ' + cucm.status + '; no building\'s phones dropping'));
+  else checks.push(fail(d, 'no CUCM row in the stored health - the last poll predates it', FIX.seed));
+  return checks;
 }
 
 /**

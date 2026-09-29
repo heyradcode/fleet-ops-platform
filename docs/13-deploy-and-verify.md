@@ -1,11 +1,11 @@
 # Deploy and verify: the order, and how to know each step worked
 
-Several changes are built and committed but not yet on AWS: the Gateway in
-front of the MCP server, the graph tools, the audit route, the HHS estate,
-candidate causes, and the knowledge graph in DynamoDB. They have to be applied
-in order, and each one can fail in a way that looks like success somewhere
-else. This page is the order, plus `pnpm smoke:aws`, which checks the
-deployed path **as you**, using your own token.
+What is built reaches AWS in a fixed order, and each step can fail in a way
+that looks like success somewhere else: a new Lambda over an old table, or a
+new table behind an old Lambda. This page is the order, plus
+`pnpm smoke:aws`, which checks the deployed path **as you**, using your own
+token - and, when something is behind, says WHICH half and the command that
+fixes it.
 
 ## Before you start
 
@@ -21,7 +21,7 @@ deployed path **as you**, using your own token.
 | 1 | The deploy policy gets the Gateway actions | see below | the `agentcore` apply succeeding |
 | 2 | Build what ships | `pnpm build:lambda && pnpm build:agent` | nothing yet: this only writes `.build/` |
 | 3 | The board API: `GET /audit`, the HHS estate, candidate causes; and the table's TTL | `terraform -chdir=infra/terraform/auth apply` | `board API: GET /board`, `GET /audit` |
-| 4 | The knowledge graph in DynamoDB, and the comms poll's backup in S3 | `TABLE_NAME=$(terraform -chdir=infra/terraform/auth output -raw main_table_name) COMMS_ARCHIVE_BUCKET=$(terraform -chdir=infra/terraform/auth output -raw comms_archive_bucket) pnpm seed:aws` | `GET /comms + candidate causes` (Houston's top candidate is `wan-hou01-02`); the seed prints `comms archive: 5 objects … -> s3://…` |
+| 4 | The knowledge graph in DynamoDB, the queue staffing and CUCM readings it is built from, and the comms poll's backup in S3 | `TABLE_NAME=$(terraform -chdir=infra/terraform/auth output -raw main_table_name) COMMS_ARCHIVE_BUCKET=$(terraform -chdir=infra/terraform/auth output -raw comms_archive_bucket) pnpm seed:aws` | `GET /comms + candidate causes` (Houston's top candidate is `wan-hou01-02`); `graph: a failing trunk …`, `graph: an overwhelmed queue …`, `comms: desk-phone registration (CUCM)`; the seed prints `comms archive: 5 objects … -> s3://…` |
 | 5 | The Gateway, the MCP server's graph tools, and the agent pointed at the Gateway | `terraform -chdir=infra/terraform/agentcore apply` | `MCP via Gateway` ×2, `Agent on AgentCore` |
 | 6 | Everything, as you | `pnpm smoke:aws` | all PASS |
 
@@ -69,9 +69,15 @@ Example output once everything is deployed:
 Token: tenant hhs-demo, groups [admin], access token, 52 min left
 
 PASS  board API: GET /board
-      6 sites: dal-01, aus-01, hou-01, aus-02, elp-01, lbb-01
+      7 sites: dal-01, aus-01, hou-01, aus-02, elp-01, lbb-01, adc-01
 PASS  board API: GET /comms + candidate causes
       Houston: top candidate wan-hou01-02
+PASS  graph: a failing trunk follows its SBC's path
+      sbc2: top candidate acc-adc01-05
+PASS  graph: an overwhelmed queue follows its staffing
+      "Eligibility - English": top candidate wan-hou01-02
+PASS  comms: desk-phone registration (CUCM)
+      desk phones dropping at LC=2031, from the call control alone
 PASS  board API: GET /audit
       40 recent calls, 40 recorded by the MCP server
 PASS  MCP via Gateway: tools/list
