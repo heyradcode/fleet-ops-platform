@@ -24,7 +24,7 @@ pnpm install
 pnpm start                      # the backend demo, narrated, all sections
 pnpm start --only=scenarios     # the six scenarios — the best 30 seconds here
 pnpm dev                        # the same, restarting on every save (nodemon)
-pnpm test                       # 431 tests, no network. Picks up web/ tests too.
+pnpm test                       # 440 tests, no network. Picks up web/ tests too.
 pnpm typecheck                  # backend
 pnpm web                        # operations board, http://localhost:5180 - real Cognito sign-in
 pnpm web:env                    # write web/.env.cognito.local from the Terraform outputs
@@ -204,7 +204,12 @@ one, change the test deliberately rather than making it pass.
   sees what Teams structurally cannot: a dead SBC's inbound calls fail AT the
   carrier and never reach Teams, so the Direct Routing report has no row for
   them. Peers map to SBC FQDNs by PEER ID; an unmapped peer keeps its own name
-  and still pages. The call-outcomes read (`fetchPeerOutcomes`) is a
+  and still pages. An SBC's FQDN is a KEY: every place one comes in - Graph's
+  `trunkFullyQualifiedDomainName`, `peerTrunk`, `ciTrunk`, `sbcSwitch` -
+  goes through `fqdnKey` (lower-case, no trailing dot), and switch hostnames
+  match case-insensitively. `SBC2.voice...` from Graph and `sbc2.voice...`
+  in a table were TWO subjects: the two ends never corroborated, no leg was
+  named, and the graph never found the switch. The call-outcomes read (`fetchPeerOutcomes`) is a
   PLACEHOLDER shape until the Insights reference is in hand - change it there
   and in the mock, nowhere else. The CDR API is daily and not for detection.
 - **Helix is CONTEXT, never evidence - and read-only.** Like Splunk: a
@@ -349,7 +354,11 @@ one, change the test deliberately rather than making it pass.
   every member - placed or not - on the queue node, because a share of the
   placed is not a share of the queue (contractors are in no directory).
   Membership, not who is joined; refreshed HOURLY; never from a poll whose
-  Genesys user list failed. Stored ONE ITEM PER QUEUE with the header (the
+  Genesys user list failed, nor while the directory's first sync is
+  unfinished (`directory-sync-incomplete`) - either way every member would
+  come back unplaced and that "answer" would stand an hour. The reverse walk
+  is IMPACT, not cause (`graph/impact.ts`): a facility incident lists the
+  queues its building staffs a fifth of. Stored ONE ITEM PER QUEUE with the header (the
   freshness watermark) written after them - one snapshot item fails at
   DynamoDB's 400 KB on a real contact centre. Read one queue at a time: the
   token's rate limit is shared, so parallel buys 429s. Rebuilt after the poll by `buildGraph`:
@@ -457,7 +466,12 @@ network. Nothing real belongs in this repo.
   Ext counts a phone that failed over is undocumented). The
   ~15 requests a minute are the CLUSTER'S, shared with the customer's tools:
   paced to `cucm.requestsPerMinute`, a per-poll budget, and a building the
-  budget missed is not measured - never a partial rate. A 500 is NOT
+  budget missed is not measured - never a partial rate - and where the budget
+  STARTS rotates one building per poll (`ROTATE_EVERY_MS`), or the same tail
+  is never measured; the lifecycle then says "not asked this poll (request
+  budget)", not "too few samples". NOT ASKED (no Kurmi) is neither success
+  nor failure in health: `lastSuccessAt` and the failure count carry over,
+  so a day of not asking goes STALE. A 500 is NOT
   retried (it is usually that limit). A node not responding fails the read.
   Compare case-insensitively (`Ok`/`OK`, `UnRegistered`). Only network
   reasons count (6, 13); switched off/wiped/logged out is a decision, over a

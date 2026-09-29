@@ -31,11 +31,11 @@ import { sha256 } from '../../platform/crypto.ts';
 import type { Severity, TenantId } from '../../platform/types.ts';
 import type { CommsClient } from './client.ts';
 import { drainGenesys, drainGraph, drainWebex } from './client.ts';
-import { errorLine, type CommsTenantConfig, type SignalSource } from './types.ts';
+import { errorLine, fqdnKey, type CommsTenantConfig, type SignalSource } from './types.ts';
 import { pullBandwidthTrunks } from './bandwidth.ts';
 import { drainTelemetry, siteWan } from './starlink.ts';
 import {
-  describeRegistration, deskPhoneSeverity, readRegistrations, summariseRegistrations,
+  describeRegistration, deskPhoneSeverity, readRegistrations, ROTATE_EVERY_MS, summariseRegistrations,
   type DeskPhone, type RegistrationReport,
 } from './cucm.ts';
 import type { WorkforceMember, WorkforceReport } from './workforce.ts';
@@ -150,8 +150,9 @@ async function teamsTrunkSignals(client: CommsClient, w: Window): Promise<CommsS
 
   const byTrunk = new Map<string, DirectRoutingRow[]>();
   for (const r of rows) {
-    const list = byTrunk.get(r.trunkFullyQualifiedDomainName);
-    if (list) list.push(r); else byTrunk.set(r.trunkFullyQualifiedDomainName, [r]);
+    const key = fqdnKey(r.trunkFullyQualifiedDomainName);
+    const list = byTrunk.get(key);
+    if (list) list.push(r); else byTrunk.set(key, [r]);
   }
 
   const t = COMMS_THRESHOLDS.trunkFailure;
@@ -480,7 +481,8 @@ export async function collectSignals(
     } else {
       const share = config.cucm.requestsPerMinute;
       await attempt('cucm', async () => {
-        deskPhones = summariseRegistrations(phones, await readRegistrations(client, phones, share), at);
+        const read = await readRegistrations(client, phones, share, Math.floor(at / ROTATE_EVERY_MS));
+        deskPhones = summariseRegistrations(phones, read, at);
         signals.push(...deskPhoneSignals(client.tenantId, deskPhones, isoWindow(w)));
       });
     }

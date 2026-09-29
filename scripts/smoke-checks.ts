@@ -93,8 +93,8 @@ export function judgeComms(status: number, body: unknown): Check {
 
 type SnapshotShape = {
   incidents?: Array<{ incidentId: string; kinds?: string[]; subject: { kind: string; id: string; name?: string } }>;
-  causes?: Record<string, { status: string; causes?: Array<{ device: string; path?: string }>; reason?: string }>;
-  health?: { sources?: Array<{ source: string; status: string }> };
+  causes?: Record<string, { status: string; causes?: Array<{ device: string; path?: string }>; reason?: string; searched?: string }>;
+  health?: { sources?: Array<{ source: string; status: string; lastError?: string }> };
 };
 
 /**
@@ -120,6 +120,9 @@ export function judgeGraphPaths(status: number, body: unknown): Check[] {
   if (!trunk) checks.push(skip(t, 'no trunk incident open to check'));
   else if (trunk.cause?.status === 'found' && trunk.cause.causes?.[0]?.path?.includes('RUNS_ON')) {
     checks.push(pass(t, trunk.incident.subject.id.split('.')[0] + ': top candidate ' + trunk.cause.causes[0].device));
+  } else if (trunk.cause?.status === 'none') {
+    // The path was found and searched; nothing was raised on it. An answer.
+    checks.push(pass(t, 'looked: ' + (trunk.cause.searched ?? 'the SBC\'s path')));
   } else if (trunk.cause?.status === 'unknown') checks.push(fail(t, '"' + (trunk.cause.reason ?? 'unknown') + '"', FIX.seed));
   // The Lambda before the SBC link gave this very reason for EVERY trunk;
   // the new one gives it only when the stored graph has no RUNS_ON edge.
@@ -136,6 +139,7 @@ export function judgeGraphPaths(status: number, body: unknown): Check[] {
   else if (/no staffing is recorded/.test(qr)) checks.push(fail(q, 'no staffing in the table - no poll has stored it', FIX.seed));
   // Too thin to be a candidate is an ANSWER, not a deploy problem.
   else if (/no building staffs a fifth/.test(qr)) checks.push(pass(q, 'looked: ' + qr));
+  else if (queue.cause?.status === 'none') checks.push(pass(q, 'looked: ' + (queue.cause.searched ?? 'its staffing buildings')));
   else if (queue.cause?.status === 'unknown') checks.push(fail(q, '"' + qr + '"', FIX.seed));
   else checks.push(fail(q, String(queue.cause?.status) + ': "' + qr + '"', FIX.both));
 
@@ -143,6 +147,8 @@ export function judgeGraphPaths(status: number, body: unknown): Check[] {
   const phones = snap.incidents?.find((i) => i.kinds?.includes('desk-phone-registration'));
   const cucm = snap.health?.sources?.find((s) => s.source === 'cucm');
   if (phones) checks.push(pass(d, 'desk phones dropping at LC=' + phones.subject.id + ', from the call control alone'));
+  // Down is not "no phones dropping": nobody could ask.
+  else if (cucm?.status === 'down') checks.push(fail(d, 'CUCM was down at the last poll: ' + (cucm.lastError ?? 'no reason recorded'), FIX.seed));
   else if (cucm && cucm.status !== 'not-configured') checks.push(pass(d, 'CUCM ' + cucm.status + '; no building\'s phones dropping'));
   else checks.push(fail(d, 'no CUCM row in the stored health - the last poll predates it', FIX.seed));
   return checks;

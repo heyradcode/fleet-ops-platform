@@ -42,6 +42,7 @@ import { changesAroundDevice } from '../integrations/comms/helix-network.ts';
 import { COMMS_SOURCES } from '../integrations/comms/types.ts';
 import { latestAnomalies, type CommsAnomaly } from '../integrations/comms/anomalies.ts';
 import type { CandidateCauses } from '../graph/correlate.ts';
+import { describeImpact, type FacilityImpact } from '../graph/impact.ts';
 
 export type BriefStatus = 'red' | 'amber' | 'green';
 
@@ -66,6 +67,8 @@ export type BriefItem = {
    * THIS brief already uses for it.
    */
   alsoOpen?: string;
+  /** A building's problem, felt in the contact centre: the queues it staffs. */
+  queuesHere?: string;
   /** Already on the service desk's radar. */
   ticket?: string;
   /** What this subject normally looks like at this hour of the week, when there is history. */
@@ -264,6 +267,8 @@ export async function buildDailyBrief(
      * Absent: the brief names no network candidate, rather than guessing.
      */
     causes?: Record<string, CandidateCauses>;
+    /** The queues each facility incident's building staffs - the same ones the board shows. */
+    impact?: Record<string, FacilityImpact>;
   } = {},
 ): Promise<Brief> {
   requireTenantScope(principal);
@@ -311,6 +316,8 @@ export async function buildDailyBrief(
     const related = c && (c.status === 'found' || c.status === 'none') ? c.related ?? [] : [];
     const titles = related.map((r) => commsOpen.find((o) => o.id === r.incidentId)?.title).filter((t): t is string => !!t);
     if (titles.length) item.alsoOpen = 'Also open where its agents sit: ' + titles.map((t) => t.charAt(0).toLowerCase() + t.slice(1)).join('; ');
+    const reach = opts.impact?.[item.id];
+    if (reach?.queues.length) item.queuesHere = 'Contact-centre queues staffed from here: ' + describeImpact(reach);
   }
   const openSubjects = new Set(openComms.map((i) => subjectKey(i.subject)));
   const unusual = anomalies
@@ -412,6 +419,7 @@ export function renderBrief(b: Brief, format: 'text' | 'markdown'): string {
     if (i.candidate) lines.push(sub(i.candidate + ' - a candidate, not a confirmed cause'));
     if (i.networkCandidate) lines.push(sub(i.networkCandidate + ' - a candidate, not a confirmed cause'));
     if (i.alsoOpen) lines.push(sub(i.alsoOpen));
+    if (i.queuesHere) lines.push(sub(i.queuesHere));
     if (i.ticket) lines.push(sub(i.ticket));
     if (i.normally) lines.push(sub(i.normally));
   };

@@ -69,6 +69,14 @@ export const RIS_BATCH = 500;
 export const RIS_MAX_RETURNED = 2000;
 /** Requests one poll may make, whatever the share: 10,000 phones at RIS_BATCH. */
 export const MAX_RIS_REQUESTS_PER_POLL = 20;
+/**
+ * Where the budget STARTS moves on by one building per poll interval. Cut in
+ * a fixed order, an estate past the budget would leave the same buildings
+ * unmeasured on EVERY poll - their incidents could never open or resolve.
+ * Rotated, each building is measured on its share of polls, and an unmeasured
+ * poll is "unknown" to the lifecycle: it neither counts nor resets.
+ */
+export const ROTATE_EVERY_MS = 5 * 60 * 1000;
 /** Unregistered longer than this is a dormant desk, not an outage. */
 export const DORMANT_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -193,9 +201,14 @@ export type RegistrationRead = {
  * unmeasured rather than every building partly measured.
  */
 export async function readRegistrations(
-  client: CommsClient, phones: DeskPhone[], requestsPerMinute: number,
+  client: CommsClient, phones: DeskPhone[], requestsPerMinute: number, rotation = 0,
 ): Promise<RegistrationRead> {
-  const ordered = [...phones].sort((a, b) => a.facility.localeCompare(b.facility) || a.name.localeCompare(b.name));
+  const sorted = [...phones].sort((a, b) => a.facility.localeCompare(b.facility) || a.name.localeCompare(b.name));
+  // Whole buildings, rotated: see ROTATE_EVERY_MS.
+  const buildings = [...new Set(sorted.map((p) => p.facility))];
+  const start = buildings.length ? ((rotation % buildings.length) + buildings.length) % buildings.length : 0;
+  const order = new Map([...buildings.slice(start), ...buildings.slice(0, start)].map((f, i) => [f, i]));
+  const ordered = sorted.sort((a, b) => order.get(a.facility)! - order.get(b.facility)! || a.name.localeCompare(b.name));
   const devices = new Map<string, RisDevice>();
   const gapMs = Math.ceil(60_000 / Math.max(1, requestsPerMinute));
   let requests = 0;

@@ -289,3 +289,31 @@ test('recovered phones are a MEASUREMENT: El Paso resolves after three healthy r
   const third = await poll();
   assert.ok(third.resolved.some((i) => i.subject.id === EL_PASO));
 });
+
+test('a day of NOT ASKING is not a day of answers: lastSuccessAt stands still, and it goes stale', async () => {
+  const { poll } = setup('cucm-not-asked-stale');
+  const first = (await poll()).health.sources.find((s) => s.source === 'cucm')!;
+  injectFault('kurmi', 503, 10_000);
+  clock.advance(5 * 60_000);
+  const second = (await poll()).health.sources.find((s) => s.source === 'cucm')!;
+  assert.equal(second.status, 'degraded');
+  assert.equal(second.lastSuccessAt, first.lastSuccessAt, 'not asked is not a success');
+  assert.equal(second.stale, false);
+  clock.advance(20 * 60_000);
+  const later = (await poll()).health.sources.find((s) => s.source === 'cucm')!;
+  assert.equal(later.stale, true, 'twenty-five minutes without asking is stale');
+  assert.equal(later.consecutiveFailures, 0, 'and not a failure of CUCM\'s either');
+});
+
+test('past the budget, the start rotates: every building is measured on some poll', async () => {
+  const { client: c } = countingClient();
+  const many = Array.from({ length: 30 }, (_, f) => phones('F' + String(f).padStart(2, '0'), 500)).flat();   // 15,000 phones
+  const measured = new Set<string>();
+  for (let rotation = 0; rotation < 30; rotation++) {
+    const read = await readRegistrations(c, many, 60, rotation);
+    const report = summariseRegistrations(many, read, now());
+    if (rotation === 0) assert.ok(report.unmeasuredFacilities.length > 0, 'the budget does cut');
+    for (const f of report.byFacility) measured.add(f.facility);
+  }
+  assert.equal(measured.size, 30, 'no building is left out on every poll');
+});

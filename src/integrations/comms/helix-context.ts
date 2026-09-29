@@ -28,7 +28,7 @@ import { redactPii } from '../../ai/guardrails.ts';
 import type { CommsClient } from './client.ts';
 import type { CommsIncident } from './incidents.ts';
 import { SIGNAL_WINDOW_MS } from './signals.ts';
-import { errorLine, type CommsTenantConfig } from './types.ts';
+import { errorLine, fqdnKey, type CommsTenantConfig } from './types.ts';
 import { pullOpenTickets, pullRecentChanges, type HelixChange, type HelixTicket } from './helix.ts';
 
 /** How long before the signal window a finished change still counts. */
@@ -68,7 +68,7 @@ export function contextFor(
     changeMatches = (c) => atFacility(c.site);
     ticketMatches = (t) => atFacility(t.site);
   } else if (subject.kind === 'trunk') {
-    changeMatches = (c) => !!c.ci && helix.ciTrunk[c.ci] === subject.id;
+    changeMatches = (c) => !!c.ci && !!helix.ciTrunk[c.ci] && fqdnKey(helix.ciTrunk[c.ci]) === fqdnKey(subject.id);
     // Tickets carry no CI here, and the SBC's site is a data centre that
     // every ticket about anything in it would match. No guess.
     ticketMatches = () => false;

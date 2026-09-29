@@ -113,3 +113,11 @@ test('a big contact centre is one item per queue, each far under DynamoDB\'s 400
   await putQueueStaffing(principal, { ...big, queues: big.queues.slice(0, 2) });
   assert.deepEqual((await commsQueueStaffing(principal))!.queues.map((q) => q.queueId), ['q-0000', 'q-0001']);
 });
+
+test('never refreshed while the directory\'s first sync is unfinished - agents are not placed YET', async () => {
+  const { principal, poll } = setup('staff-no-directory');
+  injectFault('teams', 503, 1000);   // the Entra sync cannot run: the directory has never synced
+  const r = await poll();
+  assert.equal(await commsQueueStaffing(principal), undefined, 'no snapshot of "nobody can be placed"');
+  assert.match(r.health.sources.find((s) => s.source === 'genesys')!.gaps.join(), /first sync is not finished/);
+});

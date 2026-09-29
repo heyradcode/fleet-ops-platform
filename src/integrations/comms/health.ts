@@ -81,7 +81,16 @@ export type IntegrationHealth = { asOf: string; sources: SourceHealth[]; dataQua
 export const STALE_AFTER_MS = 15 * 60 * 1000;
 
 /** What one poll observed about one source. Built by the poll, turned into health here. */
-export type SourceRun = { source: HealthSource; configured: boolean; error?: string; gaps: string[]; caveats: string[] };
+export type SourceRun = {
+  source: HealthSource; configured: boolean; error?: string; gaps: string[]; caveats: string[];
+  /**
+   * The source was NOT ASKED this poll (CUCM with no phone list), and why.
+   * Neither a success nor a failure: `lastSuccessAt` and the failure count
+   * carry over untouched, so a day of not asking goes STALE rather than
+   * reading as a day of answers.
+   */
+  notAsked?: string;
+};
 
 const CAVEATS: Partial<Record<HealthSource, string[]>> = {
   bandwidth: ['call-outcomes API shape is a PLACEHOLDER until the Insights reference is verified'],
@@ -136,12 +145,13 @@ export function observeRun(args: {
     run('starlink', !!config.starlink, args.signalErrors.starlink, []),
     run('kurmi', !!config.kurmi, args.kurmiError,
       args.phones?.truncated ? ['a MAC-prefix slice was still truncated at the depth limit - phone counts are LOW'] : []),
-    run('cucm', !!config.cucm, args.signalErrors.cucm, [
-      ...(args.signalNotAsked?.cucm ? [args.signalNotAsked.cucm] : []),
-      ...(args.deskPhones?.unmeasuredFacilities.length
-        ? ['request budget reached - not measured this poll: ' + args.deskPhones.unmeasuredFacilities.map((f) => 'LC=' + f).join(', ')]
-        : []),
-    ]),
+    {
+      ...run('cucm', !!config.cucm, args.signalErrors.cucm,
+        args.deskPhones?.unmeasuredFacilities.length
+          ? ['request budget reached - not measured this poll: ' + args.deskPhones.unmeasuredFacilities.map((f) => 'LC=' + f).join(', ')]
+          : []),
+      ...(args.signalNotAsked?.cucm ? { notAsked: args.signalNotAsked.cucm } : {}),
+    },
   ];
 }
 
@@ -317,6 +327,16 @@ export async function recordHealth(
     const prev = previous[n] as unknown as SourceHealth | undefined;
     if (!r.configured) {
       return { source: r.source, status: 'not-configured', stale: false, lastAttemptAt: nowIso, consecutiveFailures: 0, gaps: [], caveats: [] };
+    }
+    if (r.notAsked && !r.error) {
+      const lastSuccessAt = prev?.lastSuccessAt;
+      return {
+        source: r.source, status: 'degraded',
+        stale: !lastSuccessAt || at - Date.parse(lastSuccessAt) > STALE_AFTER_MS,
+        lastAttemptAt: nowIso, lastSuccessAt,
+        consecutiveFailures: prev?.consecutiveFailures ?? 0,
+        gaps: [r.notAsked, ...r.gaps], caveats: r.caveats,
+      };
     }
     if (r.error) {
       const lastSuccessAt = prev?.lastSuccessAt;

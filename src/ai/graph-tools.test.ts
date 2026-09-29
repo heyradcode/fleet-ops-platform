@@ -61,6 +61,7 @@ test('explainIncident: candidates are called candidates, and a wrong id teaches 
   assert.match(out, /INCIDENT Queue "Eligibility - English" is overwhelmed\n  CANDIDATE \(not evidence\) wan-hou01-02 \(wan-edge\)/);
   assert.match(out, /path: Queue "Eligibility - English" -> STAFFED_FROM \(\d+ of \d+ agents\) -> Houston Regional/);
   assert.match(out, /ALSO OPEN where it reaches \(context, not evidence\): Call quality degraded at LC=1120, critical/);
+  assert.match(out, /INCIDENT Call quality degraded at LC=1120\n  REACHES the contact centre \(impact, not cause\): Eligibility - English/);
 
   // Asked about the queue ALONE, it still sees the other incidents - they are the peers, not the question.
   const queueId = out.match(/INCIDENT Queue "Eligibility - English" is overwhelmed/) &&

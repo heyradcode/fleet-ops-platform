@@ -163,3 +163,19 @@ test('a rebuild that fails half-way leaves nothing the next rebuild cannot clean
     resetTableStore();
   }
 });
+
+test('an FQDN or a hostname in another CASE is the same box: one Sbc node, and its RUNS_ON edge still found', () => {
+  const estate = generateEstate(HHS_DEMO_TENANT);
+  const config = COMMS_CONFIG[HHS_DEMO_TENANT];
+  const g = deriveGraph({
+    sites: estate.sites, devices: estate.devices,
+    config: {
+      ...config,
+      bandwidth: { ...config.bandwidth!, peerTrunk: { '540102': 'SBC2.Voice.HHS.Texas.Example.' } },
+      sbcSwitch: { 'SBC2.VOICE.HHS.TEXAS.EXAMPLE': 'ACC-ADC01-05' },
+    },
+  });
+  assert.deepEqual(g.nodes.filter((n) => n.type === 'Sbc').map((n) => n.id).filter((id) => id.startsWith('sbc2')), ['sbc2.voice.hhs.texas.example']);
+  assert.ok(g.edges.some((e) => e.rel === 'RUNS_ON' && e.from.id === 'sbc2.voice.hhs.texas.example' && e.to.id === 'dev-acc-adc01-05'));
+  assert.ok(g.edges.some((e) => e.rel === 'TERMINATES_ON' && e.from.id === '540102' && e.to.id === 'sbc2.voice.hhs.texas.example'));
+});

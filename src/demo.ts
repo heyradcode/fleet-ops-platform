@@ -80,6 +80,7 @@ import { commsConfigFor, HHS_DEMO_TENANT } from './integrations/comms/config.ts'
 import { buildGraph, neighbours } from './graph/store.ts';
 import { commsSnapshot } from './api/board-api.ts';
 import { commsQueueStaffing } from './integrations/comms/store.ts';
+import { describeImpact } from './graph/impact.ts';
 import { COMMS_SOURCES } from './integrations/comms/types.ts';
 import { evaluateSignals } from './integrations/comms/incidents.ts';
 import { loadRunbooksFromDisk } from './platform/runbook-loader.node.ts';
@@ -1145,6 +1146,8 @@ async function sectionGraph() {
   for (const i of snap.incidents) {
     const c = snap.causes[i.incidentId];
     write('   ' + i.title + '\n');
+    const reach = snap.impact[i.incidentId];
+    if (reach?.queues.length) write('     ' + dim('reaches the contact centre: ' + describeImpact(reach)) + '\n');
     if (c.status === 'found') {
       for (const x of c.causes) {
         write('     \x1b[36m=>\x1b[0m ' + x.device + ' (' + x.role + '): ' + x.what.toLowerCase() + ', ' + x.severity +

@@ -102,6 +102,10 @@ test('the overwhelmed queue: Houston staffs a fifth of it, so Houston\'s WAN edg
   assert.match(c.related![0].path, /^Queue "Eligibility - English" -> STAFFED_FROM \(\d+ of \d+ agents\) -> Houston Regional \(1120\)$/);
   assert.equal(snap.brief.open.find((i) => i.id === queue.incidentId)?.alsoOpen,
     'Also open where its agents sit: poor call quality at Houston Regional (LC=1120)', 'in the words the brief already uses for it');
+  // Houston's own incident says what it REACHES: the queues it staffs a fifth of.
+  assert.match(snap.brief.open.find((i) => i.id === houston.incidentId)?.queuesHere ?? '',
+    /^Contact-centre queues staffed from here: Eligibility - English \(\d+ of its \d+ agents\)/);
+  assert.equal(snap.impact[queue.incidentId], undefined, 'a queue is not a building: no impact line');
   // A facility's own incident has nothing "related" through a building it IS.
   const h = snap.causes[houston.incidentId];
   assert.ok(h.status !== 'found' || !h.related, 'no related list for a facility');

@@ -87,8 +87,14 @@ test('the graph\'s other paths and CUCM: each passes on today\'s snapshot, and e
   assert.equal(judgeGraphPaths(200, withCause('queue', { status: 'no-path', reason: 'no building staffs a fifth of the "X" queue' }))[1].status,
     'pass', 'too thin to be a candidate is an answer');
 
+  // "none" is an answer: the path was found and searched, nothing raised.
+  assert.equal(judgeGraphPaths(200, withCause('trunk', { status: 'none', searched: '4 network devices on the path of sbc2' }))[0].status, 'pass');
+  assert.equal(judgeGraphPaths(200, withCause('queue', { status: 'none', searched: '11 network devices in the buildings that staff it' }))[1].status, 'pass');
+
   const noCucm = { ...(wire(comms) as CommsSnapshot), incidents: comms.incidents.filter((i) => !i.kinds.includes('desk-phone-registration')) };
   noCucm.health = { ...noCucm.health!, sources: noCucm.health!.sources.filter((s) => s.source !== 'cucm') };
+  const downCucm = { ...noCucm, health: { ...noCucm.health!, sources: [...noCucm.health!.sources, { ...comms.health!.sources[0], source: 'cucm' as const, status: 'down' as const, lastError: '[cucm] 401' }] } };
+  assert.equal(judgeGraphPaths(200, downCucm)[2].status, 'fail', 'down is not "no phones dropping" - nobody could ask');
   assert.match(judgeGraphPaths(200, noCucm)[2].fix ?? '', /seed:aws/, 'a poll from before CUCM');
   assert.deepEqual(judgeGraphPaths(200, null), [], 'no comms view: judgeComms already said why');
 });

@@ -42,6 +42,7 @@ import type { Alarm, Incident, Principal, Severity } from '../platform/types.ts'
 import type { CommsIncident } from '../integrations/comms/incidents.ts';
 import { graphBuilt, graphNode, neighbours } from './store.ts';
 import type { NodeRef } from './model.ts';
+import { fqdnKey } from '../integrations/comms/types.ts';
 
 export const CAUSE_WINDOW_BEFORE_MS = 15 * 60_000;
 /** More than this is a list nobody reads; the ranking decides who is on it. */
@@ -172,7 +173,8 @@ async function queueReach(principal: Principal, queueId: string, name: string): 
 }
 
 async function trunkReach(principal: Principal, fqdn: string): Promise<Reach | NotReached> {
-  const sbc: NodeRef = { type: 'Sbc', id: fqdn };
+  // The graph's key; an incident stored before FQDNs were normalised may not be.
+  const sbc: NodeRef = { type: 'Sbc', id: fqdnKey(fqdn) };
   if (!(await graphNode(principal, sbc))) {
     if (!(await graphBuilt(principal))) {
       return { status: 'unknown', reason: 'the knowledge graph has not been built for this tenant' };

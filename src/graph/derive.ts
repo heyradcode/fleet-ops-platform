@@ -19,7 +19,7 @@
  *   - Device CIs in Helix. Those arrive with each change and are joined at
  *     query time through the inventory aliases (itsm-tools.ts), as now.
  */
-import type { CommsTenantConfig } from '../integrations/comms/types.ts';
+import { fqdnKey, type CommsTenantConfig } from '../integrations/comms/types.ts';
 import type { QueueStaffing } from '../integrations/comms/staffing.ts';
 import type { Device, Site } from '../platform/types.ts';
 import { refKey, type Graph, type GraphEdge, type GraphNode, type NodeRef } from './model.ts';
@@ -73,7 +73,7 @@ export function deriveGraph(src: GraphSources): Graph {
   // --- The comms side's tables ------------------------------------------------
   const config = src.config;
   if (config) {
-    const sbc = (fqdn: string): NodeRef => node({ type: 'Sbc', id: fqdn, label: fqdn, props: {} });
+    const sbc = (fqdn: string): NodeRef => node({ type: 'Sbc', id: fqdnKey(fqdn), label: fqdnKey(fqdn), props: {} });
 
     for (const [peer, fqdn] of Object.entries(config.bandwidth?.peerTrunk ?? {})) {
       const trunk = node({ type: 'Trunk', id: peer, label: 'Bandwidth peer ' + peer, props: { carrier: 'bandwidth' } });
@@ -90,9 +90,10 @@ export function deriveGraph(src: GraphSources): Graph {
     }
     // By HOSTNAME - what a CMDB or a network team calls the switch - joined
     // to the device that carries it. No such device, no edge.
-    const byName = new Map(src.devices.map((d) => [d.name, d.deviceId]));
+    // Hostnames are case-insensitive too: a CMDB's `ACC-ADC01-04` is the box.
+    const byName = new Map(src.devices.map((d) => [d.name.toLowerCase(), d.deviceId]));
     for (const [fqdn, host] of Object.entries(config.sbcSwitch ?? {})) {
-      const deviceId = byName.get(host);
+      const deviceId = byName.get(host.trim().toLowerCase());
       if (deviceId) edge(sbc(fqdn), 'RUNS_ON', { type: 'Device', id: deviceId });
     }
   }

@@ -63,6 +63,7 @@ import {
   recentAudit, summariseAudit, AUDIT_RETENTION_DAYS, type AuditEntry, type AuditSummary,
 } from '../ai/audit.ts';
 import { causesForIncidents, type CandidateCauses } from '../graph/correlate.ts';
+import { impactForIncidents, type FacilityImpact } from '../graph/impact.ts';
 
 // ---------------------------------------------------------------------------
 // The snapshots - the contract the board renders
@@ -105,6 +106,11 @@ export type CommsSnapshot = {
    * CANDIDATES, attached after both sets of rules decided; see correlate.ts.
    */
   causes: Record<string, CandidateCauses>;
+  /**
+   * Per open FACILITY incident: the contact-centre queues that building
+   * staffs a fifth or more of (graph/impact.ts). Impact, not cause.
+   */
+  impact: Record<string, FacilityImpact>;
 };
 
 // ---------------------------------------------------------------------------
@@ -247,9 +253,10 @@ export async function commsSnapshot(caller: Principal): Promise<CommsSnapshot | 
   // The candidates BEFORE the brief, and handed to it: the board and the
   // brief show the same ones because they are the same call.
   const causes = await causesForIncidents(caller, incidents, network, new Date(at).toISOString());
+  const impact = await impactForIncidents(caller, incidents);
   // The network incidents the board's network view shows, so the brief and
   // the board cannot disagree about what is open either.
-  const brief = await buildDailyBrief(caller, at, { networkIncidents: network.incidents, causes });
+  const brief = await buildDailyBrief(caller, at, { networkIncidents: network.incidents, causes, impact });
   return {
     workforce,
     incidents,
@@ -260,6 +267,7 @@ export async function commsSnapshot(caller: Principal): Promise<CommsSnapshot | 
     brief,
     anomalies: anomalies?.anomalies ?? [],
     causes,
+    impact,
   };
 }
 

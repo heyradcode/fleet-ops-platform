@@ -32,6 +32,7 @@ import { commsIncidents, commsVisibleTo } from '../integrations/comms/store.ts';
 import { tenantScenarios } from '../api/board-api.ts';
 import { graphNode, neighbours, type Neighbour } from '../graph/store.ts';
 import { causesForIncidents, type CandidateCauses } from '../graph/correlate.ts';
+import { describeImpact, impactForIncidents, type FacilityImpact } from '../graph/impact.ts';
 import { refKey, type NodeRef, type NodeType, type Relation } from '../graph/model.ts';
 
 const NODE_TYPES: NodeType[] = ['Facility', 'Device', 'Sbc', 'Trunk', 'SatelliteTerminal', 'HelixCi', 'HelixSite', 'Queue'];
@@ -88,8 +89,13 @@ function describeRelated(c: CandidateCauses): string {
     '\n    path: ' + r.path).join('\n');
 }
 
-function describeCauses(title: string, c: CandidateCauses): string {
-  const head = 'INCIDENT ' + title;
+function describeImpactLine(impact: FacilityImpact | undefined): string {
+  if (!impact?.queues.length) return '';
+  return '\n  REACHES the contact centre (impact, not cause): ' + describeImpact(impact);
+}
+
+function describeCauses(title: string, c: CandidateCauses, impact?: FacilityImpact): string {
+  const head = 'INCIDENT ' + title + describeImpactLine(impact);
   if (c.status === 'none') return head + '\n  looked, found nothing: nothing raised on ' + c.searched + describeRelated(c);
   if (c.status !== 'found') return head + '\n  no candidates: ' + c.reason;
   return head + '\n' + c.causes.map((x) =>
@@ -177,7 +183,8 @@ export const GRAPH_TOOLS: Tool[] = [
       // What the network rules decided - the same function the board serves.
       const network = tenantScenarios(principal);
       const causes = await causesForIncidents(principal, chosen, network, at, open);
-      return chosen.map((i) => describeCauses(i.title, causes[i.incidentId])).join('\n\n');
+      const impact = await impactForIncidents(principal, chosen);
+      return chosen.map((i) => describeCauses(i.title, causes[i.incidentId], impact[i.incidentId])).join('\n\n');
     },
   },
 

@@ -28,7 +28,7 @@
 import { childText, childrenNamed, descendants, parseXml } from '../../platform/xml.ts';
 import type { TenantId } from '../../platform/types.ts';
 import type { CommsClient } from './client.ts';
-import type { CommsTenantConfig } from './types.ts';
+import { fqdnKey, type CommsTenantConfig } from './types.ts';
 
 export type SipPeer = { peerId: string; name: string; siteId: string; hosts: string[] };
 
@@ -122,7 +122,7 @@ export function trunkOutcomes(
   const unmapped = new Set<string>();
 
   for (const o of outcomes) {
-    const fqdn = table[o.peerId];
+    const fqdn = table[o.peerId] ? fqdnKey(table[o.peerId]) : undefined;
     const peer = byPeer.get(o.peerId);
     if (!fqdn) unmapped.add((peer?.name ?? o.peerId) + ' (' + o.peerId + ')');
     const subjectId = fqdn ?? 'bandwidth-peer:' + o.peerId;

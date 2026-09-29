@@ -62,7 +62,9 @@ function read(item: Record<string, unknown> | undefined): CommsIncident | undefi
 type Verdict = { state: 'firing' | 'clear' | 'unknown'; why: string };
 
 /** What this poll says about an open incident that the rules did NOT raise again. */
-function verdictFor(incident: CommsIncident, signals: CommsSignal[], unavailable: SignalSource[]): Verdict {
+function verdictFor(
+  incident: CommsIncident, signals: CommsSignal[], unavailable: SignalSource[], notMeasured: ReadonlySet<string>,
+): Verdict {
   const on = signals.filter((s) => subjectKey(s.subject) === subjectKey(incident.subject));
   const missing: string[] = [];
   for (const kind of incident.kinds) {
@@ -73,7 +75,9 @@ function verdictFor(incident: CommsIncident, signals: CommsSignal[], unavailable
     }
     if (!mine.some((s) => s.severity === 'ok')) {
       const down = WITNESSES[kind].filter((w) => unavailable.includes(w));
-      missing.push(kind + (down.length ? ' - ' + down.join(', ') + ' unavailable' : ' - too few samples to measure'));
+      missing.push(kind + (down.length ? ' - ' + down.join(', ') + ' unavailable'
+        : notMeasured.has(subjectKey(incident.subject) + '|' + kind) ? ' - not asked this poll (request budget)'
+          : ' - too few samples to measure'));
     }
   }
   if (missing.length > 0) return { state: 'unknown', why: 'not re-verified: ' + missing.join('; ') };
@@ -95,6 +99,8 @@ export type Reconciled = {
  */
 export async function reconcileIncidents(
   principal: Principal, at: number, fresh: CommsIncident[], signals: CommsSignal[], unavailable: SignalSource[],
+  /** `subjectKey|kind` pairs a source deliberately did not ask about this poll. */
+  notMeasured: ReadonlySet<string> = new Set(),
 ): Promise<Reconciled> {
   const nowIso = new Date(at).toISOString();
   const stored = (await mainTable.query({ pk: incPk(principal), skBeginsWith: 'OPEN#' }))
@@ -147,7 +153,7 @@ export async function reconcileIncidents(
   // --- Not raised this poll: count toward resolution only if measured clear -
   for (const prev of stored) {
     if (freshSubjects.has(subjectKey(prev.subject))) continue;
-    const v = verdictFor(prev, signals, unavailable);
+    const v = verdictFor(prev, signals, unavailable, notMeasured);
     const clearPolls = v.state === 'clear' ? (prev.clearPolls ?? 0) + 1 : v.state === 'firing' ? 0 : (prev.clearPolls ?? 0);
 
     if (clearPolls >= RESOLVE_AFTER_CLEAR_POLLS) {

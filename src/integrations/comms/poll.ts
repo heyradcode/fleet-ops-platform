@@ -125,8 +125,16 @@ export async function runCommsPoll(
   if (config.sources.includes('genesys')) {
     const stored = await commsQueueStaffing(principal);
     staffing = stored;
-    if (report.errors.genesys) {
-      if (!staffingIsFresh(stored, at)) staffingError = 'queue staffing not refreshed: the Genesys user list failed this poll';
+    // Nor while the directory's first sync is unfinished: employees are then
+    // not placed YET, and a snapshot of "nobody can be placed" would stand
+    // for an hour as if it were an answer.
+    const placementPending = report.unplaced.some((u) => u.reason === 'directory-sync-incomplete');
+    if (report.errors.genesys || placementPending) {
+      if (!staffingIsFresh(stored, at)) {
+        staffingError = 'queue staffing not refreshed: ' + (report.errors.genesys
+          ? 'the Genesys user list failed this poll'
+          : 'the directory\'s first sync is not finished, so agents cannot be placed yet');
+      }
     } else if (!staffingIsFresh(stored, at)) {
       let fresh: StaffingSnapshot | undefined;
       try {
@@ -149,7 +157,9 @@ export async function runCommsPoll(
   // Continuity: this window's incidents folded into the open set. Resolution
   // needs a HEALTHY MEASUREMENT - see lifecycle.ts - so the signals and the
   // unavailable sources go in, not just the incidents.
-  const lifecycle = await reconcileIncidents(principal, at, helix.incidents, collected.signals, unavailable);
+  // A building the CUCM budget did not reach this poll: not asked, said so.
+  const notMeasured = new Set((collected.deskPhones?.unmeasuredFacilities ?? []).map((f) => 'facility:' + f + '|desk-phone-registration'));
+  const lifecycle = await reconcileIncidents(principal, at, helix.incidents, collected.signals, unavailable, notMeasured);
   const incidents = lifecycle.open;
 
   // Anomalies AFTER the lifecycle, so the "never learn an outage" rule sees

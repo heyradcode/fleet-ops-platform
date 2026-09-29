@@ -167,3 +167,13 @@ test('flapping reopens the SAME incident inside the window, and a new one outsid
   assert.notEqual(fresh.incidentId, trunkId, 'outside the window it is a new problem');
   assert.equal(fresh.reopenCount, 0);
 });
+
+test('a building the budget did not reach is "not asked", not "too few samples" - and still unknown', async () => {
+  const { principal, poll } = setup('l-not-asked');
+  const r = await poll();
+  const elPaso = r.incidents.find((i) => i.subject.id === '2031')!;
+  const next = await reconcileIncidents(principal, now() + 5 * 60_000, [], [], [], new Set(['facility:2031|desk-phone-registration']));
+  const again = next.open.find((i) => i.incidentId === elPaso.incidentId)!;
+  assert.match(again.lifecycleNote!, /desk-phone-registration - not asked this poll \(request budget\)/);
+  assert.equal(again.clearPolls, 0, 'unknown neither counts nor resets');
+});

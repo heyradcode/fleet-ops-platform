@@ -28,6 +28,16 @@ export function errorLine(err: unknown): string {
   return text.replace(/\s+/g, ' ').slice(0, 160);
 }
 
+/**
+ * An SBC's FQDN as a KEY: lower-case, no trailing dot. DNS names are
+ * case-insensitive, and nothing makes Teams, the Bandwidth table, Helix and
+ * the SBC table spell one alike - `SBC2.voice...` from Graph and
+ * `sbc2.voice...` in a table would be two subjects, so the two ends of one
+ * SBC never corroborate and the graph never finds its switch. Every place a
+ * trunk FQDN comes in goes through this.
+ */
+export const fqdnKey = (fqdn: string): string => fqdn.trim().replace(/\.$/, '').toLowerCase();
+
 /** The platforms people have accounts on - the workforce's columns. */
 export type CommsSource = 'teams' | 'genesys' | 'webex';
 

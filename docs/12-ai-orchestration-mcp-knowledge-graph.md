@@ -796,6 +796,15 @@ quality at Houston Regional"), so one problem is not called two things on
 one page. `explainIncident` is given every open incident as peers, so it
 finds them even when asked about the queue alone.
 
+**Impact, the reverse walk.** A facility incident also says which
+contact-centre queues its building staffs a fifth or more of
+(`src/graph/impact.ts`): Houston's call-quality incident "reaches the contact
+centre: Eligibility - English (12 of its 50 agents); Child Abuse Intake (8 of
+its 40 agents); and 4 more with fewer agents here". The people calling IN
+wait longer when the building's agents cannot hear them, and "up to 29
+people who make calls there" did not say so. It is impact, not cause, and
+the same rules hold: a share of ALL a queue's members, counts only.
+
 It gives **four answers**, because "found nothing" must never look like
 "couldn't look":
 - `found`: the candidates, each with its path;

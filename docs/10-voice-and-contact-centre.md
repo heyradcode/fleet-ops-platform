@@ -204,6 +204,15 @@ values never were.
 - **The same answer names people.** RisPort70 returns the logged-in user,
   a description that is usually someone's name, and the extension. The
   connector reads name, status, reason and time, and nothing else.
+- **One SBC, two spellings, two subjects.** Graph returns the trunk FQDN as
+  the gateway was typed; the tenant tables say it however their author did.
+  `SBC2.voice...` and `sbc2.voice...` were two subjects, so the carrier's
+  end and Teams's end of one SBC never met. Every FQDN is a key now
+  (`fqdnKey`: lower-case, no trailing dot).
+- **"Not asked" is its own state.** A source nobody asked (CUCM with no phone
+  list) is neither healthy nor down - but stamping it "succeeded" every poll
+  meant it could never go stale. A snapshot built while the directory was
+  still syncing would have said "nobody can be placed" for an hour.
 - **Inverted thresholds fail silently.** Reachability was `[1, 1]` for a
   release — every reachable device critical, invisible to the alarm rules,
   visible only on the map and in the agent's evidence.

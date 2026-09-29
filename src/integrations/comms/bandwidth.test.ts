@@ -11,7 +11,7 @@ import {
   directory, mockFetch, resetMockState, TEAMS_PLANTED,
 } from './mock/index.ts';
 import { CommsHttpError, createCommsClient, type CommsCredentials } from './client.ts';
-import { fetchPeerOutcomes, pullBandwidthTrunks, pullSipPeers } from './bandwidth.ts';
+import { fetchPeerOutcomes, pullBandwidthTrunks, pullSipPeers, trunkOutcomes } from './bandwidth.ts';
 import { COMMS_CONFIG, HHS_DEMO_TENANT } from './config.ts';
 import { evaluateSignals, localise } from './incidents.ts';
 import type { CommsSignal } from './signals.ts';
@@ -117,4 +117,11 @@ test('a healthy carrier end LOCALISES a trunk alarm - it does not hold it back',
   assert.equal(alarm.corroborated, true, 'a trunk failing Teams calls is failing them');
   assert.deepEqual(alarm.dissent, ['bandwidth']);
   assert.match(alarm.localisation!, /Carrier leg healthy/);
+});
+
+test('the carrier\'s end and Teams\'s end land on ONE subject whatever case the table used', () => {
+  const config = { ...COMMS_CONFIG[HHS_DEMO_TENANT], bandwidth: { accountId: 'x', peerTrunk: { p1: 'SBC2.Voice.HHS.Texas.Example.' } } };
+  const { trunks } = trunkOutcomes([{ peerId: 'p1', name: 'SBC2', siteId: 's', hosts: [] }],
+    [{ peerId: 'p1', direction: 'inbound', attempts: 10, failed: 5, sipCodes: {} }], config);
+  assert.equal(trunks[0].subjectId, 'sbc2.voice.hhs.texas.example', 'the spelling Teams\'s signals are keyed by');
 });
